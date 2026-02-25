@@ -87,8 +87,13 @@ def print_summary(results_dir: Path):
         merged["speedup_pct"] = (
             merged["median_tpot_ms_fmms"] / merged["median_tpot_ms_base"] - 1
         ) * 100
-        median_speedup = merged.groupby("max_concurrency")["speedup_pct"].median()
-        result[f"{display_name} Speedup"] = median_speedup.map(lambda x: f"{x:+.1f}%")
+        speedup_stats = merged.groupby("max_concurrency")["speedup_pct"].agg(["median", "std"])
+        result[f"{display_name} Speedup"] = speedup_stats.apply(
+            lambda r: f"{r['median']:+.1f}% ± {r['std']:.1f}"
+            if pd.notna(r["std"])
+            else f"{r['median']:+.1f}%",
+            axis=1,
+        )
     result.index.name = "Concurrency"
 
     print(tabulate(result, headers="keys", tablefmt="grid", floatfmt=".2f"))
