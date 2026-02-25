@@ -157,7 +157,7 @@ def _plot_scatter_line(
 # ---------------------------------------------------------------------------
 
 
-def plot_tpots(df: pd.DataFrame, results_dir: Path, imgs_dir: Path):
+def plot_tpots(df: pd.DataFrame, results_dir: Path, imgs_dir: Path, fmt: str = "png"):
     tpots_dir = imgs_dir / "tpots"
     tpots_dir.mkdir(parents=True, exist_ok=True)
 
@@ -179,7 +179,7 @@ def plot_tpots(df: pd.DataFrame, results_dir: Path, imgs_dir: Path):
         ax.legend(title="Method")
 
         fig.tight_layout()
-        out = tpots_dir / f"{model}.png"
+        out = tpots_dir / f"{model}.{fmt}"
         fig.savefig(out, dpi=150, bbox_inches="tight")
         plt.close(fig)
         print(f"Saved to {out}")
@@ -190,7 +190,7 @@ def plot_tpots(df: pd.DataFrame, results_dir: Path, imgs_dir: Path):
 # ---------------------------------------------------------------------------
 
 
-def plot_speedups(results_dir: Path, imgs_dir: Path, max_concurrency: int):
+def plot_speedups(results_dir: Path, imgs_dir: Path, max_concurrency: int, fmt: str = "png"):
     speedups_dir = imgs_dir / "speedups"
     speedups_dir.mkdir(parents=True, exist_ok=True)
 
@@ -214,7 +214,7 @@ def plot_speedups(results_dir: Path, imgs_dir: Path, max_concurrency: int):
         ax.set_title(model)
 
         fig.tight_layout()
-        out = speedups_dir / f"{model}.png"
+        out = speedups_dir / f"{model}.{fmt}"
         fig.savefig(out, dpi=150, bbox_inches="tight")
         plt.close(fig)
         print(f"Saved to {out}")
@@ -225,7 +225,7 @@ def plot_speedups(results_dir: Path, imgs_dir: Path, max_concurrency: int):
 # ---------------------------------------------------------------------------
 
 
-def plot_strips(df: pd.DataFrame, imgs_dir: Path):
+def plot_strips(df: pd.DataFrame, imgs_dir: Path, fmt: str = "png"):
     strips_dir = imgs_dir / "strips"
     strips_dir.mkdir(parents=True, exist_ok=True)
 
@@ -324,7 +324,7 @@ def plot_strips(df: pd.DataFrame, imgs_dir: Path):
             )
 
         fig.tight_layout()
-        out = strips_dir / f"{model}.png"
+        out = strips_dir / f"{model}.{fmt}"
         fig.savefig(out, dpi=150, bbox_inches="tight")
         plt.close(fig)
         print(f"Saved to {out}")
@@ -338,6 +338,11 @@ def main():
         default=Path(__file__).parent,
         help="Directory containing model subdirectories (default: benchmarking/vllm/)",
     )
+    parser.add_argument(
+        "--fmt",
+        default="png",
+        help="Output image format (default: png)",
+    )
     args = parser.parse_args()
 
     results_dir = args.results_dir
@@ -348,9 +353,9 @@ def main():
     df = load_all_data(results_dir)
     df = df.query("max_concurrency <= @MAX_CONCURRENCY")
 
-    plot_tpots(df, results_dir, imgs_dir)
-    plot_speedups(results_dir, imgs_dir, MAX_CONCURRENCY)
-    plot_strips(df, imgs_dir)
+    plot_tpots(df, results_dir, imgs_dir, fmt=args.fmt)
+    plot_speedups(results_dir, imgs_dir, MAX_CONCURRENCY, fmt=args.fmt)
+    plot_strips(df, imgs_dir, fmt=args.fmt)
 
 
 if __name__ == "__main__":

@@ -147,6 +147,7 @@ MODAL_RESULTS_DIR := $(RESULTS_DIR)/../modal-results/vllm-bench-$(MODAL_GPU)
 
 plot-modal:
 	$(PYTHON) "$(RESULTS_DIR)/plot_tpot.py" --results-dir "$(MODAL_RESULTS_DIR)"
+	$(PYTHON) "$(RESULTS_DIR)/plot_tpot.py" --results-dir "$(MODAL_RESULTS_DIR)" --fmt pdf
 
 .PHONY: all quick baseline fmms-triton fmms-flashinfer quick-baseline quick-fmms-triton quick-fmms-flashinfer eval-baseline eval-baseline-fmms-params eval-fmms-triton judge nsys-baseline nsys-fmms-triton nsys-fmms-flashinfer nsys-all nsys-compare-qwen3-8b nsys-compare-qwen3-8b-baseline nsys-compare-qwen3-8b-fmms-triton nsys-compare-qwen3-32b nsys-compare-qwen3-32b-baseline nsys-compare-qwen3-32b-fmms-triton engine-stats plot-modal
 

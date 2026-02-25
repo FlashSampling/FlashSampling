@@ -403,6 +403,7 @@ def plot_relative_performance_from_wide(
     case: str,
     plot_folder: Path,
     csv_folder: Path,
+    fmt: str = "png",
 ):
     """Compute relative performance vs ref_method and save plot + CSV."""
     methods = [c for c in bdf.columns if c != ref_method and c != "n_hidden_states"]
@@ -417,12 +418,14 @@ def plot_relative_performance_from_wide(
     )
     ax = plot_relative_performance(bdf_rel_long, ref_method, show_providers)
     ax.figure.savefig(
-        plot_folder / f"relative-performance-vs-{ref_slug}-{case}.png", dpi=300, bbox_inches="tight"
+        plot_folder / f"relative-performance-vs-{ref_slug}-{case}.{fmt}",
+        dpi=300,
+        bbox_inches="tight",
     )
     return ax
 
 
-def create_and_triton_bench_plots(folder: Path):
+def create_and_triton_bench_plots(folder: Path, fmt: str = "png"):
     tgt_folder = folder / "custom-plots"
     tgt_folder.mkdir(parents=True, exist_ok=True)
 
@@ -446,7 +449,7 @@ def create_and_triton_bench_plots(folder: Path):
         bdf_long = assign_col_samples_per_ms(bdf_long)
 
         ax = plot_batch_scaling(bdf_long)
-        ax.figure.savefig(tgt_folder / f"batch-scaling-{case}.png", dpi=300, bbox_inches="tight")
+        ax.figure.savefig(tgt_folder / f"batch-scaling-{case}.{fmt}", dpi=300, bbox_inches="tight")
         plt.close(ax.figure)
 
         # Memory throughput plot
@@ -457,7 +460,7 @@ def create_and_triton_bench_plots(folder: Path):
             )
             ax = plot_memory_throughput(bdf_mem, peak_bw_gbs=peak_bw_gbs)
             ax.figure.savefig(
-                tgt_folder / f"memory-throughput-{case}.png", dpi=300, bbox_inches="tight"
+                tgt_folder / f"memory-throughput-{case}.{fmt}", dpi=300, bbox_inches="tight"
             )
             plt.close(ax.figure)
 
@@ -469,7 +472,9 @@ def create_and_triton_bench_plots(folder: Path):
                     peak_bw_gbs,
                     peak_compute_tflops,
                 )
-                ax.figure.savefig(tgt_folder / f"roofline-{case}.png", dpi=300, bbox_inches="tight")
+                ax.figure.savefig(
+                    tgt_folder / f"roofline-{case}.{fmt}", dpi=300, bbox_inches="tight"
+                )
                 plt.close(ax.figure)
 
         FMMS = "FMMS (Triton)"  # noqa: N806
@@ -488,15 +493,16 @@ def create_and_triton_bench_plots(folder: Path):
                 continue
             show = [p for p in rp["show"] if p in bdf.columns]
             ax = plot_relative_performance_from_wide(
-                bdf, rp["ref"], rp["slug"], show, case, tgt_folder, folder
+                bdf, rp["ref"], rp["slug"], show, case, tgt_folder, folder, fmt=fmt
             )
             plt.close(ax.figure)
 
 
 class Args(BaseSettings, cli_parse_args=True):
     tgt_dir: Path = Path(__file__).parent / "profiles/triton-bench/"
+    fmt: str = "png"
 
 
 if __name__ == "__main__":
     args = Args()
-    create_and_triton_bench_plots(args.tgt_dir)
+    create_and_triton_bench_plots(args.tgt_dir, fmt=args.fmt)

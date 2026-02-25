@@ -133,6 +133,7 @@ triton-benchmark:
 	mkdir -p profiles/triton-bench
 	PYTHONUNBUFFERED=1 $(PYTHON) triton_benchmark.py --tgt_dir profiles/triton-bench/ --case $(CASE) 2>&1 | tee profiles/triton-bench/logs.txt
 	$(PYTHON) plot-triton-bench.py
+	$(PYTHON) plot-triton-bench.py --fmt pdf
 
 clean-triton-autotunes:
 	rm -rf ~/.triton/cache

@@ -21,6 +21,7 @@ modal-create-results-triton-bench:
 
 modal-plot-triton-bench:
 	python benchmarking/plot-triton-bench.py --tgt_dir $(TRITON_BENCH_DIR)
+	python benchmarking/plot-triton-bench.py --tgt_dir $(TRITON_BENCH_DIR) --fmt pdf
 
 TRITON_BENCH_GPUS := b300 b200 h200 h100!
 
@@ -30,18 +31,23 @@ modal-triton-benchmark-all-gpus:
 
 DIAGRAM_SRC := imgs/baseline-vs-fmms-diagram.drawio
 DIAGRAM_PNG := imgs/baseline-vs-fmms-diagram.png
+DIAGRAM_PDF := imgs/baseline-vs-fmms-diagram.pdf
 
 diagram:
 	xvfb-run drawio --export --format png --scale 2 --border 10 \
 		--output $(DIAGRAM_PNG) $(DIAGRAM_SRC)
+	xvfb-run -a drawio --export --format pdf --border 10 \
+		--output $(DIAGRAM_PDF) $(DIAGRAM_SRC)
 
 plot-all:
 	$(foreach gpu,$(TRITON_BENCH_GPUS),\
-		python benchmarking/plot-triton-bench.py --tgt_dir benchmarking/modal-results/triton-bench-$(gpu) &&) true
+		python benchmarking/plot-triton-bench.py --tgt_dir benchmarking/modal-results/triton-bench-$(gpu) && \
+		python benchmarking/plot-triton-bench.py --tgt_dir benchmarking/modal-results/triton-bench-$(gpu) --fmt pdf &&) true
 	$(MAKE) plot-vllm-bench
 
 plot-vllm-bench:
 	python benchmarking/vllm/plot_tpot.py --results-dir $(VLLM_BENCH_DIR)
+	python benchmarking/vllm/plot_tpot.py --results-dir $(VLLM_BENCH_DIR) --fmt pdf
 
 modal-example:
 	modal run -m src.fused_mm_sampling.modal_lib.modal_example
