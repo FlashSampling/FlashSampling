@@ -151,10 +151,13 @@ ncu-comparison:
 	make ncu-profile-flashinfer N_HIDDEN_STATES=1 NCU_RESULTS_DIR=profiles/ncu-bsz1
 
 PROTON_NAME=fused-triton
+# CUPTI 13.1 libs matching the driver. Triton bundles CUPTI 2025.1.1 which segfaults
+# with the CUDA 13+ driver. Point TRITON_CUPTI_LIB_PATH to the system CUPTI dir.
+CUPTI_LIB_DIR=/usr/local/cuda-13.1/targets/x86_64-linux/lib
 
 proton-profile:
 	mkdir -p $(PROTON_RESULTS_DIR)/$(PROTON_NAME)
-	$(PYTHON) ./speed_test.py --n_hidden_states=$(N_HIDDEN_STATES) --use_proton=True --name=$(PROTON_NAME) --n_runs_benchmark=10 --n_runs_warmup=0 2>&1 | tee $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/speed-test.txt
+	TRITON_CUPTI_LIB_PATH=$(CUPTI_LIB_DIR) $(PYTHON) ./speed_test.py --n_hidden_states=$(N_HIDDEN_STATES) --use_proton=True --name=$(PROTON_NAME) --n_runs_benchmark=10 --n_runs_warmup=0 --bench_fn=own 2>&1 | tee $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/speed-test.txt
 	proton-viewer -m num_samples/%,time/s kernel.hatchet -i timing > $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/kernel-by-line.txt
 	mv kernel.hatchet $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/kernel.hatchet
 

@@ -263,6 +263,10 @@ Documentation: https://github.com/triton-lang/triton/tree/main/third_party/proto
 
 **Known issue**: `mode="pcsampling"` segfaults when non-Triton CUDA kernels (e.g. `torch.gather`) are launched during profiling. This affects the Helion barrier kernel which calls `torch.gather` in stage 2. Workaround: use `--name fused-triton` to profile only the hand-written Triton kernel, or omit `mode="pcsampling"` (loses per-line granularity).
 
+**CUDA 13+ CUPTI compatibility**: Triton 3.6.0 bundles CUPTI 2025.1.1 which segfaults in `cuptiPCSamplingEnable` → `NVPW_CUDA_LoadDriver` on CUDA 13+ drivers. Fix: set `TRITON_CUPTI_LIB_PATH` to a directory containing a driver-compatible `libcupti.so` (e.g. `/usr/local/cuda-13.1/targets/x86_64-linux/lib`). This env var tells Proton where to `dlopen` CUPTI from. Note: this is a **directory** path, not a file path. The Makefile's `proton-profile` target sets this automatically.
+
+**`--bench_fn=own` required for Proton**: The default `fi-cupti` benchmark path (FlashInfer's `bench_gpu_time`) does not call `setup_proton()` / `proton.finalize()`, so no `.hatchet` file is produced. The `own` benchmark function is the one wired to Proton.
+
 **Pitfall: Proton inflates per-launch overhead.** Proton adds fixed instrumentation cost per kernel launch. When comparing approaches with different numbers of launches (e.g. 1 vs 4), the wall-clock difference under Proton is misleading. For example, the barrier vs two-stage comparison showed a ~5ms gap under Proton that doesn't exist in uninstrumented runs (~0.01ms real overhead). Always cross-reference Proton wall-clock with `speed_test.py --use_proton=False`.
 
 ## Nsight Systems (nsys) profiling

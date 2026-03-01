@@ -99,7 +99,9 @@ all_providers = [
 
 
 def setup_proton() -> None:
-    # Start proton BEFORE kernel compilation so hook="triton" can instrument the JIT
+    # Start proton BEFORE kernel compilation so hook="triton" can instrument the JIT.
+    # On CUDA 13+ drivers, set TRITON_CUPTI_LIB_PATH to the system CUPTI dir
+    # (e.g. /usr/local/cuda-13.1/.../lib) so Proton uses a compatible CUPTI.
     print("⚙️ Proton profiling enabled")
     proton.start(name="kernel", hook="triton", backend="cupti", mode="pcsampling")
 
