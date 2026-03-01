@@ -38,6 +38,7 @@ dev = [
     "flashinfer-python",
     "modal",
     "cuda-bench",
+    "cupti-python",
 ]
 gen_inputs = [
     "transformers",

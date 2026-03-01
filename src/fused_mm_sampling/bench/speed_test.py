@@ -1,6 +1,7 @@
 import timeit
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import cuda.bench as nvbench
 import pandas as pd
@@ -25,7 +26,7 @@ class Args(BaseSettings):
     tgt_dir: Path | None = None
     use_proton: bool = False
     case: str = "large"
-    nvbench: bool = False
+    bench_fn: Literal["own", "nvbench", "fi-cupti"] = "fi-cupti"
 
     def as_case(self, name: str | None = None) -> "Case":
         if name is None:
@@ -221,7 +222,7 @@ def run_nvbench(args: Args) -> None:
 
     if args.tgt_dir is not None:
         df = pd.read_csv(csv_path)
-        df = assign_col_time_ms(df)
+        df = assign_col_time_ms(df).sort_values("GPU Time (sec)")
         df.to_csv(csv_path, index=False)
         print("Saved results to", csv_path)
 
@@ -235,6 +236,51 @@ def _as_torch_stream(cs: "nvbench.CudaStream") -> torch.cuda.ExternalStream:
     return torch.cuda.ExternalStream(cs.addressof())
 
 
+def run_cupti(args: Args) -> None:
+    """Run benchmarks using FlashInfer's CUPTI-based bench_gpu_time."""
+    from flashinfer.testing import bench_gpu_time
+
+    providers = [args.name] if args.name is not None else list(all_providers)
+
+    rows = []
+    for provider in providers:
+        case = args.as_case(name=provider)
+        kwargs = case.make_fn_kwargs()
+        sampler = get_sampler(provider, weights=kwargs["weights"])
+        sampler.prepare()
+
+        # Warmup (compile, autotune, etc.)
+        sampler.sample(**kwargs)
+        torch.cuda.synchronize()
+
+        print(f"Benchmarking {provider}...")
+        times_ms = bench_gpu_time(
+            fn=lambda s=sampler: s.sample(**kwargs),
+            cold_l2_cache=True,
+            enable_cupti=True,
+        )
+        times_md = pd.Series(times_ms)
+        rows.append(
+            {
+                "Provider": provider,
+                "median_ms": times_md.median(),
+                "min_ms": times_md.min(),
+                "max_ms": times_md.max(),
+                "iters": len(times_ms),
+            }
+        )
+
+    df = pd.DataFrame(rows).sort_values("median_ms")
+    print()
+    print(df.round(3))
+
+    if args.tgt_dir is not None:
+        args.tgt_dir.mkdir(parents=True, exist_ok=True)
+        out = args.tgt_dir / "fi-cupti.csv"
+        df.round(3).to_csv(out, index=False)
+        print("Saved results to", out)
+
+
 def run_own_benchmark(args: Args) -> None:
     if args.name is not None:
         cases = [args.as_case()]
@@ -246,8 +292,8 @@ def run_own_benchmark(args: Args) -> None:
     total_runtimes = df.groupby(["name", "total[s]"], as_index=False).size()
     print(total_runtimes.sort_values("total[s]").round(2))
 
-    time_distribution = df.groupby("name")["time[ms]"].describe()
-    print(time_distribution.sort_values("min").round(2))
+    time_distribution = df.groupby("name")["time[ms]"].describe().sort_values("50%")
+    print(time_distribution.round(2))
 
     if args.tgt_dir is not None:
         args.tgt_dir.mkdir(parents=True, exist_ok=True)
@@ -268,7 +314,12 @@ def run_speed_test(args: Args) -> None:
     print(f"  n_samples: {args.n_samples}")
     print()
 
-    if args.nvbench:
-        return run_nvbench(args)
-    else:
-        return run_own_benchmark(args)
+    match args.bench_fn:
+        case "nvbench":
+            return run_nvbench(args)
+        case "fi-cupti":
+            return run_cupti(args)
+        case "own":
+            return run_own_benchmark(args)
+        case _:
+            raise ValueError("Unknown bench_fn: {args.bench_fn!r}")
