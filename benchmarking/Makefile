@@ -160,6 +160,8 @@ proton-profile:
 	TRITON_CUPTI_LIB_PATH=$(CUPTI_LIB_DIR) $(PYTHON) ./speed_test.py --n_hidden_states=$(N_HIDDEN_STATES) --use_proton=True --name=$(PROTON_NAME) --n_runs_benchmark=10 --n_runs_warmup=0 --bench_fn=own 2>&1 | tee $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/speed-test.txt
 	proton-viewer -m num_samples/%,time/s kernel.hatchet -i timing > $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/kernel-by-line.txt
 	mv kernel.hatchet $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/kernel.hatchet
+	TRITON_ALWAYS_COMPILE=1 TRITON_KERNEL_DUMP=1 TRITON_DUMP_DIR=$(PROTON_RESULTS_DIR)/$(PROTON_NAME)/ttgir_dump $(PYTHON) ./speed_test.py --n_hidden_states=$(N_HIDDEN_STATES) --use_proton=True --proton_mode=trace --name=$(PROTON_NAME) --n_runs_benchmark=1 --n_runs_warmup=0 --bench_fn=own 2>&1 | tee $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/trace-speed-test.txt
+	mv kernel.chrome_trace $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/kernel.chrome_trace
 
 COMPARISON_DIR=profiles/barrier-comparison
 

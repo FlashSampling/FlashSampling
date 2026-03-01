@@ -2,6 +2,7 @@
 
 # os.environ["TRITON_INTERPRET"] = "1"
 import math
+import os
 from dataclasses import dataclass
 from typing import Callable, NamedTuple, Protocol
 
@@ -10,6 +11,7 @@ import nvtx
 import torch
 import triton
 import triton.language as tl
+import triton.profiler.language as pl
 
 from .tl_matmul import matmul
 
@@ -132,6 +134,7 @@ def fused_mm_sample_triton(
         temperature_ptr=temperature,
         seed=seed,
         GUMBEL=GUMBEL,
+        USE_PROTON_SCOPES=os.environ.get("USE_PROTON_SCOPES", "0") == "1",
     )
 
     # 2nd stage: reduction
@@ -240,7 +243,10 @@ def fused_mm_sample_triton_kernel(
     BLOCK_SIZE_NSAMPLES: tl.constexpr,  # noqa: N803
     GROUP_SIZE_V: tl.constexpr,  # noqa: N803
     GUMBEL: tl.constexpr,  # noqa: N803
+    USE_PROTON_SCOPES: tl.constexpr,  # noqa: N803
 ):
+    if USE_PROTON_SCOPES:
+        pl.enter_scope("setup")
     temperature = tl.load(temperature_ptr)
 
     # Compute a different program ordering to exploit L2 cache, as suggested in
@@ -263,8 +269,12 @@ def fused_mm_sample_triton_kernel(
     offsets_h = h_start + tl.arange(0, BLOCK_SIZE_H)
     mask_h = offsets_h < n_hidden_states
     logits_blk = tl.zeros((BLOCK_SIZE_V, BLOCK_SIZE_H), dtype=tl.float32)
+    if USE_PROTON_SCOPES:
+        pl.exit_scope("setup")
 
     # Compute a block of logits logits_blk
+    if USE_PROTON_SCOPES:
+        pl.enter_scope("matmul-tile")
     for d_start in range(0, hidden_size, BLOCK_SIZE_D):
         offsets_d = d_start + tl.arange(0, BLOCK_SIZE_D)
         mask_d = offsets_d < hidden_size
@@ -281,6 +291,8 @@ def fused_mm_sample_triton_kernel(
             mask=mask_h[:, None] & mask_d[None, :],
         )
         logits_blk = tl.dot(w_blk, hidden_states_blk.T, acc=logits_blk)
+    if USE_PROTON_SCOPES:
+        pl.exit_scope("matmul-tile")
 
     # Later we will take max over logits + noise, but rows outside the mask
     # should not be considered. Setting them to -inf achieves this.
@@ -290,6 +302,8 @@ def fused_mm_sample_triton_kernel(
     # Process samples in batches to limit memory usage
     samples_n_batches: tl.constexpr = triton.cdiv(num_samples, BLOCK_SIZE_NSAMPLES)
     for batch_idx in range(samples_n_batches):
+        if USE_PROTON_SCOPES:
+            pl.enter_scope("sample")
         # Calculate how many samples in this batch
         batch_start = batch_idx * BLOCK_SIZE_NSAMPLES
         batch_end = min(batch_start + BLOCK_SIZE_NSAMPLES, num_samples)
@@ -318,7 +332,11 @@ def fused_mm_sample_triton_kernel(
 
         gumbel_max, gumbel_max_idx_local = tl.max(logits_plus_noise, axis=1, return_indices=True)
         gumbel_max_idx_global = gumbel_max_idx_local + v_start
+        if USE_PROTON_SCOPES:
+            pl.exit_scope("sample")
 
+        if USE_PROTON_SCOPES:
+            pl.enter_scope("store")
         # Output offset for this batch
         out_blk_start = pid_v * n_hidden_states * num_samples + batch_start
 
@@ -340,6 +358,8 @@ def fused_mm_sample_triton_kernel(
             gumbel_max_idx_global,
             mask=out_mask,
         )
+        if USE_PROTON_SCOPES:
+            pl.exit_scope("store")
 
 
 class Sampler(Protocol):
