@@ -2,6 +2,7 @@ import timeit
 from dataclasses import dataclass
 from pathlib import Path
 
+import cuda.bench as nvbench
 import pandas as pd
 import torch
 import triton
@@ -24,6 +25,7 @@ class Args(BaseSettings):
     tgt_dir: Path | None = None
     use_proton: bool = False
     case: str = "large"
+    nvbench: bool = False
 
     def as_case(self, name: str | None = None) -> "Case":
         if name is None:
@@ -183,6 +185,77 @@ def benchmark_all(cases: list[Case]) -> pd.DataFrame:
     return pd.concat(dfs, ignore_index=True)
 
 
+def run_nvbench(args: Args) -> None:
+    """Run benchmarks using NVBench."""
+
+    def nvbench_kernel(state: "nvbench.State"):
+        provider = state.get_string("Provider")
+        case = args.as_case(name=provider)
+        kwargs = case.make_fn_kwargs()
+        sampler = get_sampler(provider, weights=kwargs["weights"])
+        sampler.prepare()
+
+        # Warmup (compile, autotune, etc.)
+        sampler.sample(**kwargs)
+        torch.cuda.synchronize()
+
+        def launcher(launch: "nvbench.Launch"):
+            stream = _as_torch_stream(launch.get_stream())
+            with torch.cuda.stream(stream):
+                sampler.sample(**kwargs)
+
+        state.exec(launcher, batched=False)
+
+    providers = [args.name] if args.name is not None else list(all_providers)
+
+    csv_args = []
+    if args.tgt_dir is not None:
+        args.tgt_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = args.tgt_dir / "nvbench.csv"
+        csv_args = ["--csv", str(csv_path)]
+
+    b = nvbench.register(nvbench_kernel)
+    b.add_string_axis("Provider", providers)
+    b.add_string_axis("Case", [args.case])
+    nvbench.run_all_benchmarks(["speed_test"] + csv_args)
+
+    if args.tgt_dir is not None:
+        df = pd.read_csv(csv_path)
+        df = assign_col_time_ms(df)
+        df.to_csv(csv_path, index=False)
+        print("Saved results to", csv_path)
+
+
+def assign_col_time_ms(df: pd.DataFrame) -> pd.DataFrame:
+    df["GPU Time (ms)"] = (df["GPU Time (sec)"] * 1e3).round(3)
+    return df
+
+
+def _as_torch_stream(cs: "nvbench.CudaStream") -> torch.cuda.ExternalStream:
+    return torch.cuda.ExternalStream(cs.addressof())
+
+
+def run_own_benchmark(args: Args) -> None:
+    if args.name is not None:
+        cases = [args.as_case()]
+    else:
+        cases = args.all_cases()
+    df = benchmark_all(cases)
+    print(f"{args.n_samples=}")
+
+    total_runtimes = df.groupby(["name", "total[s]"], as_index=False).size()
+    print(total_runtimes.sort_values("total[s]").round(2))
+
+    time_distribution = df.groupby("name")["time[ms]"].describe()
+    print(time_distribution.sort_values("min").round(2))
+
+    if args.tgt_dir is not None:
+        args.tgt_dir.mkdir(parents=True, exist_ok=True)
+        total_runtimes.to_csv(args.tgt_dir / "total-runtimes.csv")
+        time_distribution.to_csv(args.tgt_dir / "time-distribution.csv")
+        print("Saved results to ", args.tgt_dir)
+
+
 def run_speed_test(args: Args) -> None:
     """Run a speed test for a given set of arguments."""
     print("GPU:", get_gpu_name())
@@ -194,21 +267,8 @@ def run_speed_test(args: Args) -> None:
     print(f"  n_hidden_states: {args.n_hidden_states}")
     print(f"  n_samples: {args.n_samples}")
     print()
-    if args.name is not None:
-        cases = [args.as_case()]
+
+    if args.nvbench:
+        return run_nvbench(args)
     else:
-        cases = args.all_cases()
-    df = benchmark_all(cases)
-    print(f"{args.n_samples=}")
-
-    total_runtimes = df.groupby(["name", "total[s]"], as_index=False).size()
-    print(total_runtimes.sort_values("total[s]").round(2))
-
-    time_distribution = df.groupby("name")[["time[ms]"]].describe()
-    print(time_distribution.sort_values(("time[ms]", "min")).round(2))
-
-    if args.tgt_dir is not None:
-        args.tgt_dir.mkdir(parents=True, exist_ok=True)
-        total_runtimes.to_csv(args.tgt_dir / "total-runtimes.csv")
-        time_distribution.to_csv(args.tgt_dir / "time-distribution.csv")
-        print("Saved results to ", args.tgt_dir)
+        return run_own_benchmark(args)

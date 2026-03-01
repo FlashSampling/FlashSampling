@@ -37,6 +37,7 @@ dev = [
     "pytest",
     "flashinfer-python",
     "modal",
+    "cuda-bench",
 ]
 gen_inputs = [
     "transformers",

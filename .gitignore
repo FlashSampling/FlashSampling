@@ -6,6 +6,7 @@ benchmarking/data/*.png
 benchmarking/vllm/Qwen3-1.7B/
 benchmarking/vllm/eval/
 benchmarking/vllm/imgs/
+benchmarking/speed_test/
 tests/qwen3-0.6b/hidden_states.pt
 tests/qwen3-0.6b/weights.pt
 helion-cache/
