@@ -249,6 +249,7 @@ def run_nvbench(args: Args) -> None:
 
 def assign_col_time_ms(df: pd.DataFrame) -> pd.DataFrame:
     df["GPU Time (ms)"] = (df["GPU Time (sec)"] * 1e3).round(3)
+    df["CPU Time (ms)"] = (df["CPU Time (sec)"] * 1e3).round(3)
     return df
 
 
