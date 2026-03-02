@@ -38,9 +38,9 @@ All baselines share the same cuBLAS matmul. FMMS uses its own fused Triton matmu
 
 ## Three sources of speedup (and one source of slowdown)
 
-### 1. Eliminating post-matmul kernels entirely
+### 1. Fusing post-matmul work into the matmul kernel
 
-FMMS has zero post-matmul cost. The baselines pay:
+FMMS fuses sampling into the matmul kernel itself, where it adds only ~2% overhead (see Proton data below). The baselines instead pay for separate kernel launches:
 
 - **Naive compiled** (19 post-matmul kernels): 6 softmax + 13 multinomial. Of the 13 multinomial kernels, 10 are input validation (MinNan, MaxNan, Sum + assert_async). Only 3 do actual sampling (RNG, normalize, argmax). Post-matmul cost: 95 us (N=1) → 2132 us (N=256).
 
@@ -54,7 +54,7 @@ At N=1, cuBLAS uses `gemv2T_kernel_val` (1410 us). At N≥4 it switches to `ampe
 
 ### 3. Eliminating HBM round-trips for logits
 
-In all baselines, the matmul writes the N×V logit tensor to HBM, then post-matmul kernels read it back. FMMS keeps logits in SRAM and never writes them. The HBM traffic model (`hbm-access.py`) predicts this saves 0–7% of total traffic at N=1..64. This effect is small at low N but grows with batch size.
+In all baselines, the matmul writes the N×V logit tensor to HBM, then post-matmul kernels read it back. FMMS keeps logits in on-chip (SRAM/registers) and never writes them. The HBM traffic model (`hbm-access.py`) predicts this saves 0–7% of total traffic at N=1..64. This effect is small at low N but grows with batch size.
 
 ### Slowdown: Triton matmul efficiency at large N
 
@@ -124,16 +124,31 @@ The baselines' sampling cost scales with N; FMMS's does not.
 
 ## For the paper
 
-The NCU + Proton data supports three claims about where the speedup comes from, plus one honest limitation.
+The NCU + Proton data supports two claims about where the speedup comes from, plus one honest limitation. Note: the GEMV→GEMM transition (source #2 in the analysis above) is omitted from the paper — it's a cuBLAS implementation detail that complicates the narrative without adding insight.
 
-**Speedup source 1: Eliminating post-matmul kernels.** The standard pipeline launches 5–19 kernels after the matmul (softmax, input validation, RNG, argmax). FMMS fuses all of this into the matmul kernel itself, reducing the total kernel count to 1. The post-matmul cost ranges from 80 us (FI-sample, N=1) to 2132 us (Naive, N=256). This is the dominant source of speedup at low batch sizes and the reason FMMS wins even when the HBM traffic model predicts ~0% savings.
+**Speedup source 1: Fusing post-matmul work into the matmul.**
+The standard pipeline launches many separate kernels after the matmul (softmax, input validation, RNG, argmax).
+FMMS fuses sampling into the matmul kernel itself, where Proton shows it adds only ~2% overhead.
+Eliminating kernel launch overhead and the separate post-matmul computation accelerates sampling.
+This speeds up FMMS even when the HBM traffic model predicts ~0% improvement.
 
-**Speedup source 2: Eliminating HBM round-trips for logits.** In all baselines, the matmul writes the full N×V logit tensor to HBM, and then the sampling kernels read it back. FMMS keeps logits in SRAM — they are never materialized. The `hbm-access.py` traffic model predicts 0–7% savings at N=1..64 for this config. This effect is small at typical decode batch sizes but grows with N.
+**Speedup source 2: Eliminating HBM round-trips for logits.**
+In all baselines, the matmul writes the full N×V logit tensor to HBM, and then the sampling kernels read it back. 
+FMMS keeps logits in on-chip (SRAM/registers), so they are never materialized.
+The `hbm-access.py` traffic model predicts speedups that grow with N, up to 24% at N=256.
 
-**Key finding: sampling adds negligible overhead to the fused kernel.** Proton profiling shows the sampling phase (Gumbel noise + argmax + store) accounts for <2% of kernel time at N≤16 and ~6% at N=256. The matmul completely dominates (93–98%). This means fusion is essentially free: the sampling computation is hidden behind the memory-bound matmul, confirming that fusing sampling into the matmul does not degrade matmul performance.
+**Key finding: sampling adds negligible overhead to the fused kernel.**
+Proton profiling shows the sampling phase (Gumbel noise + argmax + store) accounts for <2% of kernel time at N≤16 and ~6% at N=256.
+The matmul completely dominates (93–98%).
+This means fusion is almost free:
+the sampling computation is hidden behind the memory-bound matmul.
 
-**Limitation: cuBLAS matmul scales better than the Triton matmul at large N.** At N≥64, the fused Triton kernel's DRAM throughput drops (76% at N=64, 22% at N=256) while cuBLAS maintains higher utilization. The matmul overhead grows to +260 us (N=64) and +1200 us (N=256), which exceeds the post-matmul savings of leaner baselines like FI-sample. As a result, FMMS loses to FI-sample by 3–6% at N≥64, while still beating Naive and FI-topkp at all tested sizes. Improving the Triton matmul efficiency at large N (e.g. tiling over the batch dimension) is future work.
+**Limitation: cuBLAS matmul scales better than the Triton matmul at large N.**
+At N≥64, the fused Triton kernel's DRAM throughput drops (76% at N=64, 22% at N=256) while cuBLAS maintains higher memory throughput.
+The sampling spedups and the matmul inefficiency cancel out at N≥64.
+Improving the Triton matmul efficiency at large N is future work.
 
 Sources:
+
 - `benchmarking/profiles/sweeps/bsz/ncu-txt/case-small/`
 - `benchmarking/profiles/sweeps/bsz/proton/case-small/`
