@@ -8,13 +8,11 @@ def our_method(vocab_size: int, hidden_size: int, n_hidden_states: int):
     m = vocab_size
     n = n_hidden_states
     k = hidden_size
-    # first stage: matmul
-    reads1 = m * k + n * k
-    writes1 = m * n / 128
-    # second stage: reduction
-    reads2 = writes1
-    writes2 = n
-    return reads1 + reads2, writes1 + writes2
+    # theory: fused matmul + reduction
+    # we write only bsz results back to HBM
+    reads = m * k + n * k
+    writes = n
+    return reads, writes
 
 
 def naive_method(vocab_size: int, hidden_size: int, n_hidden_states: int):
