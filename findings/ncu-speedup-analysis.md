@@ -54,7 +54,7 @@ At N=1, cuBLAS uses `gemv2T_kernel_val` (1410 us). At N≥4 it switches to `ampe
 
 ### 3. Eliminating HBM round-trips for logits
 
-In all baselines, the matmul writes the N×V logit tensor to HBM, then post-matmul kernels read it back. FMMS keeps logits in on-chip (SRAM/registers) and never writes them. The HBM traffic model (`hbm-access.py`) predicts this saves 0–7% of total traffic at N=1..64. This effect is small at low N but grows with batch size.
+In all baselines, the matmul writes the N×V logit tensor to HBM, then post-matmul kernels read it back. FMMS keeps logits in on-chip (SRAM/registers) and never writes them. The corrected HBM traffic model (`hbm-access.py`) predicts this saves 0-3% of total traffic at N=1..64 (small config), growing to 11% at N=256. This effect is small at low N but grows with batch size.
 
 ### Slowdown: Triton matmul efficiency at large N
 
@@ -135,7 +135,7 @@ This speeds up FMMS even when the HBM traffic model predicts ~0% improvement.
 **Speedup source 2: Eliminating HBM round-trips for logits.**
 In all baselines, the matmul writes the full N×V logit tensor to HBM, and then the sampling kernels read it back. 
 FMMS keeps logits in on-chip (SRAM/registers), so they are never materialized.
-The `hbm-access.py` traffic model predicts speedups that grow with N, up to 24% at N=256.
+The corrected `hbm-access.py` traffic model (standard: reads Vd + Bd + BV, writes BV + B; FMMS: reads Vd + Bd, writes B) predicts savings that grow with N, up to 11% at N=256 (small config).
 
 **Key finding: sampling adds negligible overhead to the fused kernel.**
 Proton profiling shows the sampling phase (Gumbel noise + argmax + store) accounts for <2% of kernel time at N≤16 and ~6% at N=256.

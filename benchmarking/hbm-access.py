@@ -20,8 +20,8 @@ def naive_method(vocab_size: int, hidden_size: int, n_hidden_states: int):
     m = vocab_size
     k = hidden_size
     # first stage: matmul
-    reads1 = m * k + n * k + m * n
-    writes1 = 2 * m * n
+    reads1 = m * k + n * k
+    writes1 = m * n
     # second stage: sampling
     reads2 = writes1
     writes2 = n
