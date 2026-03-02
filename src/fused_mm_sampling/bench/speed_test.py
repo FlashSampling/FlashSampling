@@ -30,7 +30,7 @@ class Args(BaseSettings):
     #   On CUDA 13+ drivers, set TRITON_CUPTI_LIB_PATH to the system CUPTI dir.
     # "trace": chrome timeline (CUPTI) → kernel.chrome_trace (open in chrome://tracing)
     proton_mode: Literal["pcsampling", "trace"] = "pcsampling"
-    case: str = "large"
+    case: str = "small"
     bench_fn: Literal["own", "nvbench", "fi-cupti"] = "fi-cupti"
 
     def as_case(self, name: str | None = None) -> "Case":
