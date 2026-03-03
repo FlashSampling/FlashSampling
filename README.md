@@ -27,7 +27,7 @@ uv pip install -e ".[dev]"
 python examples/basic_usage.py
 ```
 
-## Usage
+## Usage (Standalone)
 
 For a complete working example, see [`examples/basic_usage.py`](examples/basic_usage.py).
 The basic usage pattern:
@@ -45,7 +45,7 @@ samples = fused_mm_sample_triton(
 # Returns: [n_hidden_states, num_samples]
 ```
 
-### Parameters
+**Parameters**:
 
 - **`weights`** (Tensor): Weight matrix of shape `[vocab_size, hidden_size]`
 - **`hidden_states`** (Tensor): Hidden states of shape `[n_hidden_states, hidden_size]`
@@ -53,11 +53,26 @@ samples = fused_mm_sample_triton(
 - **`temperature`** (Tensor): Scalar (0-d) CUDA tensor for temperature scaling (higher = more random)
 - **`seed`** (int, optional): Random seed for reproducibility
 
-### Returns
+**Returns**: Tensor of shape `[n_hidden_states, num_samples]` containing sampled indices
 
-- Tensor of shape `[n_hidden_states, num_samples]` containing sampled indices
+## Usage in vLLM
 
-### Algorithm
+Check out the branch `feature/fmms-sampler` from my vLLM fork and install vLLM from local sources. The [code diff](https://github.com/tomasruizt/vllm/pull/13/changes) is minimal.
+
+```shell
+git clone https://github.com/tomasruizt/vllm.git
+cd vllm
+git checkout feature/fmms-sampler
+VLLM_USE_PRECOMPILED=1 uv pip install -e .
+```
+
+Then launch any model. Use the flags below to activate the FMMS sampler:
+
+```shell
+VLLM_USE_FMMS_SAMPLER=1 VLLM_FMMS_PROVIDER=fused-triton vllm serve Qwen/Qwen3-1.7B
+```
+
+## Algorithm
 
 The FMMS kernel implements the Gumbel-max trick for categorical sampling:
 
