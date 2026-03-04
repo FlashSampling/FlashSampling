@@ -55,6 +55,7 @@ PROVIDER_COLORS: dict[str, str] = {
     "FMMS (Helion)": "#e45756",  # lighter red
     "FMMS (Triton NoNoise)": "#ff7f0e",  # orange
     "PyTorch Compiled Sampling": "#7f7f7f",  # gray
+    "Naive PyTorch Compiled": "#7f7f7f",  # gray (legacy CSV column name)
     "flashinfer:top_k_top_p_sampling_from_logits": "#1f77b4",  # muted blue
     "flashinfer:sampling_from_logits": "#aec7e8",  # light blue
 }
@@ -65,6 +66,7 @@ PROVIDER_MARKERS: dict[str, str] = {
     "FMMS (Helion)": "D",
     "FMMS (Triton NoNoise)": "^",
     "PyTorch Compiled Sampling": "s",
+    "Naive PyTorch Compiled": "s",
     "flashinfer:top_k_top_p_sampling_from_logits": "X",
     "flashinfer:sampling_from_logits": "v",
 }
@@ -75,9 +77,26 @@ PROVIDER_HATCHES: dict[str, str] = {
     "FMMS (Helion)": "//",
     "FMMS (Triton NoNoise)": "\\\\",
     "PyTorch Compiled Sampling": "///",
+    "Naive PyTorch Compiled": "///",
     "flashinfer:top_k_top_p_sampling_from_logits": "xxx",
     "flashinfer:sampling_from_logits": "...",
 }
+
+FLASHSAMPLING_RENAMES = {
+    "FMMS (Triton)": "FlashSampling",
+    "FMMS (Helion)": "FlashSampling (Helion)",
+    "FMMS (Triton NoNoise)": "FlashSampling (NoNoise)",
+}
+
+mappings = [
+    PROVIDER_COLORS,
+    PROVIDER_MARKERS,
+    PROVIDER_HATCHES,
+]
+# Make the FlashSampling names point to the same colors, markers, and hatches as the FMMS names.
+for mapping in mappings:
+    for old_key, new_key in FLASHSAMPLING_RENAMES.items():
+        mapping[new_key] = mapping[old_key]
 
 
 def _provider_palette(providers: pd.Series | list[str]) -> dict[str, str]:
@@ -425,7 +444,9 @@ def plot_relative_performance_from_wide(
     return ax
 
 
-def create_and_triton_bench_plots(folder: Path, fmt: str = "png"):
+def create_and_triton_bench_plots(
+    folder: Path, fmt: str = "png", use_name_flashsampling: bool = False
+):
     tgt_folder = folder / "custom-plots"
     tgt_folder.mkdir(parents=True, exist_ok=True)
 
@@ -445,6 +466,8 @@ def create_and_triton_bench_plots(folder: Path, fmt: str = "png"):
         print(f"Plotting case: {case}")
 
         bdf = read_triton_bench_csv(csv_path)
+        if use_name_flashsampling:
+            bdf = apply_flashsampling_rename(bdf)
         bdf_long = bdf.melt(id_vars=["n_hidden_states"], var_name="provider", value_name="time[ms]")
         bdf_long = assign_col_samples_per_ms(bdf_long)
 
@@ -478,6 +501,8 @@ def create_and_triton_bench_plots(folder: Path, fmt: str = "png"):
                 plt.close(ax.figure)
 
         FMMS = "FMMS (Triton)"  # noqa: N806
+        if use_name_flashsampling:
+            FMMS = FLASHSAMPLING_RENAMES[FMMS]  # noqa: N806
         NAIVE = "PyTorch Compiled Sampling"  # noqa: N806
         FI_SAMPLE = "flashinfer:sampling_from_logits"  # noqa: N806
         FI_TOPK = "flashinfer:top_k_top_p_sampling_from_logits"  # noqa: N806
@@ -498,11 +523,19 @@ def create_and_triton_bench_plots(folder: Path, fmt: str = "png"):
             plt.close(ax.figure)
 
 
+def apply_flashsampling_rename(df: pd.DataFrame) -> pd.DataFrame:
+    """Rename FMMS columns/values to FlashSampling equivalents."""
+    return df.rename(columns=FLASHSAMPLING_RENAMES)
+
+
 class Args(BaseSettings, cli_parse_args=True):
     tgt_dir: Path = Path(__file__).parent / "profiles/triton-bench/"
     fmt: str = "png"
+    use_name_flashsampling: bool = False
 
 
 if __name__ == "__main__":
     args = Args()
-    create_and_triton_bench_plots(args.tgt_dir, fmt=args.fmt)
+    create_and_triton_bench_plots(
+        args.tgt_dir, fmt=args.fmt, use_name_flashsampling=args.use_name_flashsampling
+    )

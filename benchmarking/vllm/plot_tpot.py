@@ -20,6 +20,13 @@ FMMS_DIR = "fmms-triton"
 VARIANT_COLORS = {BASELINE_NAME: "#7f7f7f", FMMS_NAME: "#d62728"}
 VARIANT_MARKERS = {BASELINE_NAME: "s", FMMS_NAME: "o"}
 
+# Make the FlashSampling name point to the same color and marker as the FMMS name.
+FLASHSAMPLING_RENAMES = {"vLLM + FMMS": "vLLM + FlashSampling"}
+mappings = [VARIANT_COLORS, VARIANT_MARKERS]
+for mapping in mappings:
+    for old_key, new_key in FLASHSAMPLING_RENAMES.items():
+        mapping[new_key] = mapping[old_key]
+
 MODELS = [
     "Qwen3-1.7B",
     "Qwen3-8B",
@@ -52,7 +59,7 @@ def load_variant(model_dir: Path, variant_key: str) -> pd.DataFrame | None:
     return pd.read_csv(run_dir / "summary.csv")
 
 
-def load_all_data(results_dir: Path) -> pd.DataFrame:
+def load_all_data(results_dir: Path, fmms_name: str) -> pd.DataFrame:
     frames = []
     for model in MODELS:
         model_dirs = resolve_model_dirs(results_dir, model)
@@ -60,7 +67,7 @@ def load_all_data(results_dir: Path) -> pd.DataFrame:
             print(f"Warning: no directory matching {model} in {results_dir}, skipping")
             continue
         for model_dir in model_dirs:
-            for variant_key, display_name in [("baseline", BASELINE_NAME), (FMMS_DIR, FMMS_NAME)]:
+            for variant_key, display_name in [("baseline", BASELINE_NAME), (FMMS_DIR, fmms_name)]:
                 df = load_variant(model_dir, variant_key)
                 if df is None:
                     continue
@@ -157,7 +164,9 @@ def _plot_scatter_line(
 # ---------------------------------------------------------------------------
 
 
-def plot_tpots(df: pd.DataFrame, results_dir: Path, imgs_dir: Path, fmt: str = "png"):
+def plot_tpots(
+    df: pd.DataFrame, results_dir: Path, imgs_dir: Path, fmms_name: str, fmt: str = "png"
+):
     tpots_dir = imgs_dir / "tpots"
     tpots_dir.mkdir(parents=True, exist_ok=True)
 
@@ -168,7 +177,7 @@ def plot_tpots(df: pd.DataFrame, results_dir: Path, imgs_dir: Path, fmt: str = "
 
         fig, ax = plt.subplots(figsize=FIGSIZE)
         series = []
-        for variant in [BASELINE_NAME, FMMS_NAME]:
+        for variant in [BASELINE_NAME, fmms_name]:
             vdf = mdf.query("variant == @variant")
             if not vdf.empty:
                 series.append((variant, vdf.rename(columns={"median_tpot_ms": "y"})))
@@ -190,7 +199,9 @@ def plot_tpots(df: pd.DataFrame, results_dir: Path, imgs_dir: Path, fmt: str = "
 # ---------------------------------------------------------------------------
 
 
-def plot_speedups(results_dir: Path, imgs_dir: Path, max_concurrency: int, fmt: str = "png"):
+def plot_speedups(
+    results_dir: Path, imgs_dir: Path, max_concurrency: int, fmms_name: str, fmt: str = "png"
+):
     speedups_dir = imgs_dir / "speedups"
     speedups_dir.mkdir(parents=True, exist_ok=True)
 
@@ -205,7 +216,7 @@ def plot_speedups(results_dir: Path, imgs_dir: Path, max_concurrency: int, fmt: 
         fig, ax = plt.subplots(figsize=FIGSIZE)
         _plot_scatter_line(
             ax,
-            series=[(FMMS_NAME, sdf)],
+            series=[(fmms_name, sdf)],
             x_col="max_concurrency",
             y_col="speedup_pct",
             ylabel="Speedup (%)",
@@ -225,11 +236,11 @@ def plot_speedups(results_dir: Path, imgs_dir: Path, max_concurrency: int, fmt: 
 # ---------------------------------------------------------------------------
 
 
-def plot_strips(df: pd.DataFrame, imgs_dir: Path, fmt: str = "png"):
+def plot_strips(df: pd.DataFrame, imgs_dir: Path, fmms_name: str, fmt: str = "png"):
     strips_dir = imgs_dir / "strips"
     strips_dir.mkdir(parents=True, exist_ok=True)
 
-    variants = [BASELINE_NAME, FMMS_NAME]
+    variants = [BASELINE_NAME, fmms_name]
 
     for model in MODELS:
         mdf = df.query("model == @model and max_concurrency <= @MAX_CONCURRENCY")
@@ -284,9 +295,9 @@ def plot_strips(df: pd.DataFrame, imgs_dir: Path, fmt: str = "png"):
                     zorder=4,
                 )
 
-            if BASELINE_NAME in medians_at_conc and FMMS_NAME in medians_at_conc:
+            if BASELINE_NAME in medians_at_conc and fmms_name in medians_at_conc:
                 b_med = medians_at_conc[BASELINE_NAME]
-                f_med = medians_at_conc[FMMS_NAME]
+                f_med = medians_at_conc[fmms_name]
                 tpot_change = (f_med / b_med - 1) * 100
                 ann_color = "#2ca02c" if tpot_change < 0 else "#b22222"
                 higher = max(b_med, f_med)
@@ -343,19 +354,27 @@ def main():
         default="png",
         help="Output image format (default: png)",
     )
+    parser.add_argument(
+        "--use-name-flashsampling",
+        type=int,
+        default=0,
+        help="Use 'FlashSampling' instead of 'FMMS' in plot labels",
+    )
     args = parser.parse_args()
+
+    fmms_name = FLASHSAMPLING_RENAMES[FMMS_NAME] if args.use_name_flashsampling else FMMS_NAME
 
     results_dir = args.results_dir
     imgs_dir = results_dir / "imgs"
     imgs_dir.mkdir(parents=True, exist_ok=True)
 
     sns.set_context("talk")
-    df = load_all_data(results_dir)
+    df = load_all_data(results_dir, fmms_name)
     df = df.query("max_concurrency <= @MAX_CONCURRENCY")
 
-    plot_tpots(df, results_dir, imgs_dir, fmt=args.fmt)
-    plot_speedups(results_dir, imgs_dir, MAX_CONCURRENCY, fmt=args.fmt)
-    plot_strips(df, imgs_dir, fmt=args.fmt)
+    plot_tpots(df, results_dir, imgs_dir, fmms_name, fmt=args.fmt)
+    plot_speedups(results_dir, imgs_dir, MAX_CONCURRENCY, fmms_name, fmt=args.fmt)
+    plot_strips(df, imgs_dir, fmms_name, fmt=args.fmt)
 
 
 if __name__ == "__main__":
