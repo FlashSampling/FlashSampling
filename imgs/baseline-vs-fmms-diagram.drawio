@@ -13,9 +13,9 @@
           </mxGeometry>
         </mxCell>
 
-        <!-- ===== LEFT: PyTorch Sampling ===== -->
+        <!-- ===== LEFT: Multinomial Sampling ===== -->
 
-        <mxCell id="L_title" value="&lt;b&gt;PyTorch Sampling&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=18;fontColor=#555555;" vertex="1" parent="1">
+        <mxCell id="L_title" value="&lt;b&gt;Multinomial Sampling&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=18;fontColor=#555555;" vertex="1" parent="1">
           <mxGeometry x="95" y="10" width="200" height="40" as="geometry"/>
         </mxCell>
 
