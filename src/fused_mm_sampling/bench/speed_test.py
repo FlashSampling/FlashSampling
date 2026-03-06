@@ -32,6 +32,8 @@ class Args(BaseSettings):
     proton_mode: Literal["pcsampling", "trace"] = "pcsampling"
     case: str = "small"
     bench_fn: Literal["own", "nvbench", "fi-cupti"] = "fi-cupti"
+    top_k: int | None = None
+    top_p: float | None = None
 
     def as_case(self, name: str | None = None) -> "Case":
         if name is None:
@@ -53,6 +55,8 @@ class Args(BaseSettings):
             proton_mode=self.proton_mode,
             vocab_size=case_config["vocab_size"],
             hidden_size=case_config["hidden_size"],
+            top_k=self.top_k,
+            top_p=self.top_p,
         )
 
     def all_cases(self) -> list["Case"]:
@@ -77,10 +81,12 @@ class Case:
     proton_mode: str
     vocab_size: int
     hidden_size: int
+    top_k: int | None = None
+    top_p: float | None = None
 
     def make_fn_kwargs(self) -> dict:
         """This function can be slow because it allocates tensors."""
-        return dict(
+        kwargs = dict(
             hidden_states=torch.randn(
                 (self.n_hidden_states, self.hidden_size), dtype=torch.bfloat16, device=device
             ),
@@ -90,6 +96,11 @@ class Case:
             num_samples=self.n_samples,
             temperature=torch.tensor(1.0, device=device),
         )
+        if self.top_k is not None:
+            kwargs["top_k"] = self.top_k
+        if self.top_p is not None:
+            kwargs["top_p"] = self.top_p
+        return kwargs
 
 
 all_providers = [

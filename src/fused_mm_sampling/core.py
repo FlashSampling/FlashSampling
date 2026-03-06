@@ -53,26 +53,19 @@ def apply_top_k_top_p(
     if top_k is None and top_p is None:
         return logits.softmax(dim=-1)
 
-    logits_sort, logits_idx = logits.sort(dim=-1, descending=False)
-
-    if top_k is not None:
-        cutoff_idx = logits_sort.size(1) - top_k
-        top_k_threshold = logits_sort[:, cutoff_idx].unsqueeze(1)
-        logits_sort.masked_fill_(logits_sort < top_k_threshold, -float("inf"))
-
-    probs_sort = logits_sort.softmax(dim=-1)
+    k = top_k if top_k is not None else logits.shape[-1]
+    topk_vals, topk_idx = logits.topk(k, dim=-1)
+    probs = topk_vals.softmax(dim=-1)
 
     if top_p is not None:
-        probs_cumsum = torch.cumsum(probs_sort, dim=-1)
-        top_p_mask = probs_cumsum <= (1.0 - top_p)
-        top_p_mask[:, -1] = False  # always keep the largest token
-        probs_sort.masked_fill_(top_p_mask, 0.0)
-        # Renormalize so probabilities sum to 1
-        probs_sort.div_(probs_sort.sum(dim=-1, keepdim=True))
+        cumsum = torch.cumsum(probs, dim=-1)
+        top_p_mask = (cumsum - probs) >= top_p
+        top_p_mask[:, 0] = False  # always keep the most probable token
+        probs.masked_fill_(top_p_mask, 0.0)
+        probs.div_(probs.sum(dim=-1, keepdim=True))
 
-    # Scatter back to original positions
-    probs = torch.zeros_like(probs_sort)
-    return probs.scatter_(dim=-1, index=logits_idx, src=probs_sort)
+    out = torch.zeros_like(logits)
+    return out.scatter_(dim=-1, index=topk_idx, src=probs)
 
 
 sample_compiled = torch.compile(sample)

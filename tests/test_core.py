@@ -111,18 +111,19 @@ def test_sampling_distribution(provider, vocab_size, n_hidden_states):
 
 
 @pytest.mark.parametrize("n_hidden_states", [1, 2])
-@pytest.mark.parametrize("vocab_size", [100, 200, 256])
-def test_top_k_top_p(vocab_size, n_hidden_states):
+@pytest.mark.parametrize("vocab_size", [100, 200, 256, 151_936])
+@pytest.mark.parametrize("provider", ["naive-pt", "naive-compiled"])
+def test_top_k_top_p(provider, vocab_size, n_hidden_states):
     """Verify that top-k and top-p filtering restricts samples to the expected tokens."""
-    from fused_mm_sampling.core import sample
-
     inputs = make_synthetic_inputs(vocab_size=vocab_size, n_hidden_states=n_hidden_states)
     temperature = torch.tensor(1.0, device=device)
     top_k = 10
     top_p = 0.9
     num_samples = 5_000
 
-    samples = sample(
+    sampler = get_sampler(provider, weights=inputs.weights)
+    sampler.prepare()
+    samples = sampler.sample(
         weights=inputs.weights,
         hidden_states=inputs.hidden_states,
         num_samples=num_samples,
@@ -131,9 +132,11 @@ def test_top_k_top_p(vocab_size, n_hidden_states):
         top_p=top_p,
     )
 
+    # Use the same bf16 matmul logits the sampler sees, not the exact float32 logits.
+    bf16_logits = inputs.hidden_states @ inputs.weights.T
     for seq_idx in range(n_hidden_states):
         allowed_tokens = reference_top_k_top_p(
-            logits=inputs.logits[seq_idx], temperature=temperature, top_k=top_k, top_p=top_p
+            logits=bf16_logits[seq_idx], temperature=temperature, top_k=top_k, top_p=top_p
         )
         unique_sampled = torch.unique(samples[seq_idx])
         allowed_set = set(allowed_tokens.cpu().tolist())
