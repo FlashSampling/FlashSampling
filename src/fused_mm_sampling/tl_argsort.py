@@ -34,14 +34,17 @@ def argsort(
         _dim == len(x.shape) - 1,
         "only minor dimension is currently supported",
     )
+    log_n: core.constexpr = _log2(x.shape[_dim])
     n_dims: core.constexpr = _log2(x.numel)
 
     # Reshape to hypercube of shape [2, 2, ..., 2]
     hx = core.reshape(x, [2] * n_dims if n_dims else [1])
     hi = core.reshape(ids, [2] * n_dims if n_dims else [1])
 
-    for stage in core.static_range(1, n_dims + 1):
-        hx, hi = _bitonic_merge(hx, hi, stage, 2 if stage < n_dims else descending, n_dims)
+    # Run only log_n stages (sort-axis size), not n_dims (total).
+    # The alternating flip pattern creates independent sorting networks per row.
+    for stage in core.static_range(1, log_n + 1):
+        hx, hi = _bitonic_merge(hx, hi, stage, 2 if stage < log_n else descending, n_dims)
 
     x = core.reshape(hx, x.shape)
     ids = core.reshape(hi, ids.shape)
@@ -73,10 +76,14 @@ def _compare_and_swap(x, ids, flip, i: core.constexpr, n_dims: core.constexpr):
     # Are we in the right (vs left) position along axis i?
     is_right = _indicator(n_dims, i)
 
-    # Conditional swap: swap both values and indices together
+    # Conditional swap: swap both values and indices together.
+    # When values are tied (x == y), swapping values is a no-op, but swapping
+    # ids would duplicate one id and lose the other. Only swap ids when values
+    # actually differ.
     cond = (x > y) != (flip ^ is_right)
     ret = core.where(cond, y, x)
-    ret_ids = core.where(cond, iids, ids)
+    swap_ids = cond & (x != y)
+    ret_ids = core.where(swap_ids, iids, ids)
     return ret, ret_ids
 
 

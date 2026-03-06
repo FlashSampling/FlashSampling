@@ -522,13 +522,14 @@ def get_sampler(provider: str, weights: torch.Tensor) -> Sampler:
             return SimpleSampler(lambda **kwargs: sample(**kwargs, tl_matmul=True))
         case "jl-compiled":
             return JLSampler.from_weights(weights)
+        case "fused-topk":
+            from .tl_fused_mm_topk import fused_mm_topk_and_sample
+
+            return SimpleSampler(fused_mm_topk_and_sample)
         case "flashinfer:top_k_top_p_sampling_from_logits":
             return SimpleSampler(
                 lambda **kwargs: flashinfer_top_k_top_p_sampling_from_logits(
-                    **kwargs,
-                    # these params effectively disable top-p and top-k filtering
-                    top_p=1.0,
-                    top_k=-1,
+                    **_default_top_k_top_p(kwargs),
                 )
             )
         case "fused-cuda":
@@ -543,6 +544,15 @@ def get_sampler(provider: str, weights: torch.Tensor) -> Sampler:
             return SimpleSampler(flashinfer_sampling_from_logits)
         case _:
             raise NotImplementedError()
+
+
+def _default_top_k_top_p(kwargs: dict) -> dict:
+    """Set flashinfer defaults for top_k/top_p when not provided by the caller."""
+    if "top_k" not in kwargs:
+        kwargs["top_k"] = -1
+    if "top_p" not in kwargs:
+        kwargs["top_p"] = 1.0
+    return kwargs
 
 
 def flashinfer_top_k_top_p_sampling_from_logits(

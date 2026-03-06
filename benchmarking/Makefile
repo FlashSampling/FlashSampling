@@ -22,6 +22,9 @@ NCU_TXT_DIR=profiles/ncu-txt
 CASE=small
 PROTON_RESULTS_DIR=profiles/proton
 
+speed-test-topp-topk:
+	python speed_test.py --n_hidden_states=$(N_HIDDEN_STATES) --top_k=20 --top_p=0.9
+
 # NCU profiling targets:
 # --import-source yes: Embeds source code into the .ncu-rep file, allowing it to be
 #   viewed on a different machine without path remapping. The source is embedded
