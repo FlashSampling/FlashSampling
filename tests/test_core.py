@@ -110,6 +110,58 @@ def test_sampling_distribution(provider, vocab_size, n_hidden_states):
         )
 
 
+@pytest.mark.parametrize("n_hidden_states", [1, 2])
+@pytest.mark.parametrize("vocab_size", [100, 200, 256])
+def test_top_k_top_p(vocab_size, n_hidden_states):
+    """Verify that top-k and top-p filtering restricts samples to the expected tokens."""
+    from fused_mm_sampling.core import sample
+
+    inputs = make_synthetic_inputs(vocab_size=vocab_size, n_hidden_states=n_hidden_states)
+    temperature = torch.tensor(1.0, device=device)
+    top_k = 10
+    top_p = 0.9
+    num_samples = 5_000
+
+    samples = sample(
+        weights=inputs.weights,
+        hidden_states=inputs.hidden_states,
+        num_samples=num_samples,
+        temperature=temperature,
+        top_k=top_k,
+        top_p=top_p,
+    )
+
+    for seq_idx in range(n_hidden_states):
+        allowed_tokens = reference_top_k_top_p(
+            logits=inputs.logits[seq_idx], temperature=temperature, top_k=top_k, top_p=top_p
+        )
+        unique_sampled = torch.unique(samples[seq_idx])
+        allowed_set = set(allowed_tokens.cpu().tolist())
+        sampled_set = set(unique_sampled.cpu().tolist())
+        assert sampled_set <= allowed_set, (
+            f"seq {seq_idx}: sampled tokens not in allowed set. Extra: {sampled_set - allowed_set}"
+        )
+        assert sampled_set == allowed_set, (
+            f"seq {seq_idx}: not all allowed tokens sampled. Missing: {allowed_set - sampled_set}"
+        )
+
+
+def reference_top_k_top_p(
+    logits: torch.Tensor,  # [V], float32
+    temperature: torch.Tensor,
+    top_k: int,
+    top_p: float,
+) -> torch.Tensor:
+    """Return the set of token indices allowed after top-k then top-p filtering."""
+    scaled = logits.float() / temperature
+    topk_values, topk_indices = scaled.topk(top_k)
+    probs_topk = topk_values.softmax(dim=-1)
+    sorted_probs, sorted_order = probs_topk.sort(descending=True)
+    cumsum = sorted_probs.cumsum(dim=0)
+    mask = cumsum - sorted_probs < top_p
+    return topk_indices[sorted_order[mask]]
+
+
 def test_speed_test_smoke():
     # name=None means all providers are tested
     args = Args(name=None, n_runs_warmup=1, n_runs_benchmark=1, case="small")

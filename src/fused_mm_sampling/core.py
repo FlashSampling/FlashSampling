@@ -25,6 +25,8 @@ def sample(
     return_probs: bool = False,
     seed: int = None,
     tl_matmul: bool = False,
+    top_k: int | None = None,
+    top_p: float | None = None,
 ):
     if seed is not None:
         torch.manual_seed(seed)
@@ -34,11 +36,43 @@ def sample(
         logits = hidden_states @ weights.T  # [n_hidden_states, V]
     # Upcast to float32: torch.multinomial produces incorrect distributions with bfloat16.
     # If we remove the cast, the correctness test fails (a chi-squared test).
-    probs = (logits.float() / temperature).softmax(dim=1)
+    logits = logits.float() / temperature
+    probs = apply_top_k_top_p(logits, top_k, top_p)
     samples = torch.multinomial(probs, num_samples=num_samples, replacement=True)
     if return_probs:
         return samples, probs
     return samples
+
+
+def apply_top_k_top_p(
+    logits: torch.Tensor,  # [batch, V], float32
+    top_k: int | None,
+    top_p: float | None,
+) -> torch.Tensor:
+    """Apply top-k and top-p filtering and return probabilities. Single softmax."""
+    if top_k is None and top_p is None:
+        return logits.softmax(dim=-1)
+
+    logits_sort, logits_idx = logits.sort(dim=-1, descending=False)
+
+    if top_k is not None:
+        cutoff_idx = logits_sort.size(1) - top_k
+        top_k_threshold = logits_sort[:, cutoff_idx].unsqueeze(1)
+        logits_sort.masked_fill_(logits_sort < top_k_threshold, -float("inf"))
+
+    probs_sort = logits_sort.softmax(dim=-1)
+
+    if top_p is not None:
+        probs_cumsum = torch.cumsum(probs_sort, dim=-1)
+        top_p_mask = probs_cumsum <= (1.0 - top_p)
+        top_p_mask[:, -1] = False  # always keep the largest token
+        probs_sort.masked_fill_(top_p_mask, 0.0)
+        # Renormalize so probabilities sum to 1
+        probs_sort.div_(probs_sort.sum(dim=-1, keepdim=True))
+
+    # Scatter back to original positions
+    probs = torch.zeros_like(probs_sort)
+    return probs.scatter_(dim=-1, index=logits_idx, src=probs_sort)
 
 
 sample_compiled = torch.compile(sample)
