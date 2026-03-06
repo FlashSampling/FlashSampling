@@ -34,6 +34,15 @@ much useful work as possible — matmul, top-k selection, top-p filtering, and
 sampling — in a single pass. Any extra kernel launch that re-reads data from
 HBM wastes bandwidth on what is already the bottleneck.
 
+## Sequential top-k-then-top-p in practice
+
+vLLM, FlashInfer, and Qrita all default to sequential top-k-then-top-p (top-k first, then top-p on survivors). Key code locations:
+
+- **vLLM v0.16.0** PyTorch path: [`topk_topp_sampler.py#L264`](https://github.com/vllm-project/vllm/blob/v0.16.0/vllm/v1/sample/ops/topk_topp_sampler.py#L264) (sort once, mask by k, then softmax+cumsum for top-p)
+- **vLLM v0.16.1rc0** Triton kernel: [`topk_topp_triton.py`](https://github.com/vllm-project/vllm/blob/v0.16.1rc0/vllm/v1/sample/ops/topk_topp_triton.py) (PR [#33538](https://github.com/vllm-project/vllm/pull/33538)); this is the code `qitra.py` in this repo is based on.
+- **FlashInfer v0.6.3**: [`sampling.py#L1127`](https://github.com/flashinfer-ai/flashinfer/blob/v0.6.3/flashinfer/sampling.py#L1127) (`"top_k_first"` branch, the default)
+- **SGLang** uses FlashInfer's `"joint"` mode instead (both constraints checked simultaneously).
+
 ## FlashInfer's rejection sampling
 
 FlashInfer ([blog post](https://flashinfer.ai/2025/03/10/sampling.html))

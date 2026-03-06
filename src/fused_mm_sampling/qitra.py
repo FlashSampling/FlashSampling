@@ -1,5 +1,6 @@
 # Vendored from vLLM (https://github.com/vllm-project/vllm)
 # Source: vllm/v1/sample/ops/topk_topp_triton.py
+# Source: https://docs.vllm.ai/en/latest/api/vllm/v1/sample/ops/topk_topp_triton/
 #
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
