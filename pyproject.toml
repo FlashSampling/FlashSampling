@@ -70,4 +70,5 @@ ignore = ["E501"]  # Line too long (handled by formatter)
 
 [tool.ruff.lint.per-file-ignores]
 "src/fused_mm_sampling/persistent_matmul.py" = ["N803", "N806", "E731"]  # Uppercase variable names are conventional in Triton kernels
+"src/fused_mm_sampling/qitra.py" = ["N803", "N806"]  # Vendored from vLLM, uppercase names are conventional in Triton kernels
 

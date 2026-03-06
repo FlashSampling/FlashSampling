@@ -27,6 +27,7 @@ def sample(
     tl_matmul: bool = False,
     top_k: int | None = None,
     top_p: float | None = None,
+    use_qitra: bool = False,
 ):
     if seed is not None:
         torch.manual_seed(seed)
@@ -37,7 +38,10 @@ def sample(
     # Upcast to float32: torch.multinomial produces incorrect distributions with bfloat16.
     # If we remove the cast, the correctness test fails (a chi-squared test).
     logits = logits.float() / temperature
-    probs = apply_top_k_top_p(logits, top_k, top_p)
+    if use_qitra:
+        probs = apply_top_k_top_p_qitra(logits, top_k, top_p)
+    else:
+        probs = apply_top_k_top_p(logits, top_k, top_p)
     samples = torch.multinomial(probs, num_samples=num_samples, replacement=True)
     if return_probs:
         return samples, probs
@@ -66,6 +70,29 @@ def apply_top_k_top_p(
 
     out = torch.zeros_like(logits)
     return out.scatter_(dim=-1, index=topk_idx, src=probs)
+
+
+def apply_top_k_top_p_qitra(
+    logits: torch.Tensor,  # [batch, V], float32
+    top_k: int | None,
+    top_p: float | None,
+) -> torch.Tensor:
+    """Apply top-k and top-p filtering using vLLM's Qitra Triton kernel and return probabilities."""
+    from .qitra import apply_top_k_top_p_triton
+
+    batch_size = logits.shape[0]
+    k = (
+        torch.full((batch_size,), top_k, dtype=torch.int32, device=logits.device)
+        if top_k is not None
+        else None
+    )
+    p = (
+        torch.full((batch_size,), top_p, dtype=torch.float32, device=logits.device)
+        if top_p is not None
+        else None
+    )
+    logits = apply_top_k_top_p_triton(logits, k, p)
+    return logits.softmax(dim=-1)
 
 
 sample_compiled = torch.compile(sample)
@@ -487,6 +514,8 @@ def get_sampler(provider: str, weights: torch.Tensor) -> Sampler:
             return SimpleSampler(sample)
         case "naive-compiled":
             return SimpleSampler(sample_compiled)
+        case "pt-qitra":
+            return SimpleSampler(lambda **kwargs: sample(**kwargs, use_qitra=True))
         case "sequential-compiled":
             return SimpleSampler(sequential_sample_pt)
         case "naive-tl-matmul":

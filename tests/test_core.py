@@ -59,6 +59,7 @@ def test_bsz_h(args):
         "fused-cuda",
         "naive-pt",
         "naive-compiled",
+        "pt-qitra",
         "sequential-compiled",
         "helion",
         "flashinfer:sampling_from_logits",

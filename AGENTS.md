@@ -153,6 +153,7 @@ The `findings/` directory contains detailed write-ups of bugs, workarounds, and 
 - The Helion kernel internally uses `hidden_states` as `[D, H]` (transposed) for matmul efficiency. The wrapper handles the transpose.
 - All sampler variants are registered in `get_sampler()` in `core.py` via a match/case. New samplers only need a case there.
 - The `Sampler` Protocol requires `prepare()` and `sample(**kwargs)`. Wrap simple callables with `SimpleSampler`.
+- **Qitra** (`src/fused_mm_sampling/qitra.py`): Vendored from vLLM. Sort-free top-k/top-p Triton kernel based pivots (it does not sample tough). Used via the `pt-qitra` provider.
 
 ## Helion kernel pitfalls
 
