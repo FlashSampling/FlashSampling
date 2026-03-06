@@ -35,9 +35,7 @@ class Args(BaseSettings):
     top_k: int | None = None
     top_p: float | None = None
 
-    def as_case(self, name: str | None = None) -> "Case":
-        if name is None:
-            name = self.name
+    def as_case(self, name: str) -> "Case":
         assert self.n_runs_warmup is not None
         assert self.n_runs_benchmark is not None
         if self.case not in BENCHMARK_CASES:
@@ -59,8 +57,11 @@ class Args(BaseSettings):
             top_p=self.top_p,
         )
 
+    def providers(self) -> list[str]:
+        return self.name.split(",") if self.name is not None else list(all_providers)
+
     def all_cases(self) -> list["Case"]:
-        return [self.as_case(name=provider) for provider in all_providers]
+        return [self.as_case(name=provider) for provider in self.providers()]
 
 
 class CliArgs(Args, cli_parse_args=True):
@@ -238,8 +239,6 @@ def run_nvbench(args: Args) -> None:
 
         state.exec(launcher, batched=False)
 
-    providers = [args.name] if args.name is not None else list(all_providers)
-
     csv_args = []
     if args.tgt_dir is not None:
         args.tgt_dir.mkdir(parents=True, exist_ok=True)
@@ -247,7 +246,7 @@ def run_nvbench(args: Args) -> None:
         csv_args = ["--csv", str(csv_path)]
 
     b = nvbench.register(nvbench_kernel)
-    b.add_string_axis("Provider", providers)
+    b.add_string_axis("Provider", args.providers())
     b.add_string_axis("Case", [args.case])
     nvbench.run_all_benchmarks(["speed_test"] + csv_args)
 
@@ -272,10 +271,8 @@ def run_cupti(args: Args) -> None:
     """Run benchmarks using FlashInfer's CUPTI-based bench_gpu_time."""
     from flashinfer.testing import bench_gpu_time
 
-    providers = [args.name] if args.name is not None else list(all_providers)
-
     rows = []
-    for provider in providers:
+    for provider in args.providers():
         case = args.as_case(name=provider)
         kwargs = case.make_fn_kwargs()
         sampler = get_sampler(provider, weights=kwargs["weights"])
@@ -314,10 +311,7 @@ def run_cupti(args: Args) -> None:
 
 
 def run_own_benchmark(args: Args) -> None:
-    if args.name is not None:
-        cases = [args.as_case()]
-    else:
-        cases = args.all_cases()
+    cases: list[Case] = args.all_cases()
     df = benchmark_all(cases)
     print(f"{args.n_samples=}")
 

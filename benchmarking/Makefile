@@ -23,7 +23,7 @@ CASE=small
 PROTON_RESULTS_DIR=profiles/proton
 
 speed-test-topp-topk:
-	python speed_test.py --n_hidden_states=$(N_HIDDEN_STATES) --top_k=20 --top_p=0.9
+	python speed_test.py --n_hidden_states=$(N_HIDDEN_STATES) --top_k=20 --top_p=0.9 --name=fused-topk,naive-compiled,flashinfer:top_k_top_p_sampling_from_logits
 
 # NCU profiling targets:
 # --import-source yes: Embeds source code into the .ncu-rep file, allowing it to be
