@@ -173,6 +173,7 @@ triton-benchmark:
 	PYTHONUNBUFFERED=1 $(PYTHON) triton_benchmark.py --tgt_dir profiles/triton-bench/ --case $(CASE) 2>&1 | tee profiles/triton-bench/logs.txt
 	$(PYTHON) plot-triton-bench.py
 	$(PYTHON) plot-triton-bench.py --fmt pdf
+	$(PYTHON) plot_bsz_sweep_runtime.py --fmt pdf
 
 clean-triton-autotunes:
 	rm -rf ~/.triton/cache
@@ -196,10 +197,10 @@ CUPTI_LIB_DIR=/usr/local/cuda-13.1/targets/x86_64-linux/lib
 
 proton-profile:
 	mkdir -p $(PROTON_RESULTS_DIR)/$(PROTON_NAME)
-	TRITON_CUPTI_LIB_PATH=$(CUPTI_LIB_DIR) $(PYTHON) ./speed_test.py --n_hidden_states=$(N_HIDDEN_STATES) --use_proton=True --name=fused-triton --n_runs_benchmark=10 --n_runs_warmup=0 --bench_fn=own --case=$(CASE) 2>&1 | tee $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/speed-test.txt
-	proton-viewer -m num_samples/%,time/s kernel.hatchet -i timing > $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/kernel-by-line.txt
-	mv kernel.hatchet $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/kernel.hatchet
-	TRITON_ALWAYS_COMPILE=1 TRITON_KERNEL_DUMP=1 TRITON_DUMP_DIR=$(PROTON_RESULTS_DIR)/$(PROTON_NAME)/ttgir_dump $(PYTHON) ./speed_test.py --n_hidden_states=$(N_HIDDEN_STATES) --use_proton=True --proton_mode=trace --name=fused-triton --n_runs_benchmark=1 --n_runs_warmup=0 --bench_fn=own --case=$(CASE) 2>&1 | tee $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/trace-speed-test.txt
+	#TRITON_CUPTI_LIB_PATH=$(CUPTI_LIB_DIR) $(PYTHON) ./speed_test.py --n_hidden_states=$(N_HIDDEN_STATES) --use_proton=True --name=fused-triton --n_runs_benchmark=10 --n_runs_warmup=0 --bench_fn=own --case=$(CASE) 2>&1 | tee $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/speed-test.txt
+	#proton-viewer -m num_samples/%,time/s kernel.hatchet -i timing > $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/kernel-by-line.txt
+	#mv kernel.hatchet $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/kernel.hatchet
+	TRITON_CUPTI_LIB_PATH=$(CUPTI_LIB_DIR) TRITON_ALWAYS_COMPILE=1 TRITON_KERNEL_DUMP=1 TRITON_DUMP_DIR=$(PROTON_RESULTS_DIR)/$(PROTON_NAME)/ttgir_dump $(PYTHON) ./speed_test.py --n_hidden_states=$(N_HIDDEN_STATES) --use_proton=True --proton_mode=trace --name=fused-triton --n_runs_benchmark=1 --n_runs_warmup=0 --bench_fn=own --case=$(CASE) 2>&1 | tee $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/speed-test.txt
 	mv kernel.chrome_trace $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/kernel.chrome_trace
 
 PROTON_SWEEP_DIR=$(SWEEPS_DIR)/proton/case-$(CASE)

@@ -94,7 +94,7 @@ NCU treats FMMS as a single opaque kernel. Triton Proton provides two complement
 | 128 | 93.2%  | 6.5%     | 0.4%  |
 | 256 | 93.2%  | 6.5%     | 0.4%  |
 
-Sampling = sample scope + store scope. At N≤16, sampling is <2% of kernel time. At N≥64, it rises to ~6% because each tile processes more rows (the grid stays fixed at V/BLOCK_SIZE_V blocks, so larger N means more work per tile in the sampling phase). Even at N=256, the matmul still dominates at 93%.
+Sampling = sample scope + store scope. At N≤16, sampling is ~2.3% of kernel time. At N≥64, it rises to ~6% because each tile processes more rows (the grid stays fixed at V/BLOCK_SIZE_V blocks, so larger N means more work per tile in the sampling phase). Even at N=256, the matmul still dominates at 93%.
 
 ### Per-warp timing
 
@@ -133,12 +133,12 @@ Eliminating kernel launch overhead and the separate post-matmul computation acce
 This speeds up FMMS even when the HBM traffic model predicts ~0% improvement.
 
 **Speedup source 2: Eliminating HBM round-trips for logits.**
-In all baselines, the matmul writes the full N×V logit tensor to HBM, and then the sampling kernels read it back. 
+In all baselines, the matmul writes the full N×V logit tensor to HBM, and then the sampling kernels read it back.
 FMMS keeps logits in on-chip (SRAM/registers), so they are never materialized.
 The corrected `hbm-access.py` traffic model (standard: reads Vd + Bd + BV, writes BV + B; FMMS: reads Vd + Bd, writes B) predicts savings that grow with N, up to 11% at N=256 (small config).
 
 **Key finding: sampling adds negligible overhead to the fused kernel.**
-Proton profiling shows the sampling phase (Gumbel noise + argmax + store) accounts for <2% of kernel time at N≤16 and ~6% at N=256.
+Proton profiling shows the sampling phase (Gumbel noise + argmax + store) accounts for ~2.3% of kernel time at N≤16 and ~6% at N=256.
 The matmul completely dominates (93–98%).
 This means fusion is almost free:
 the sampling computation is hidden behind the memory-bound matmul.
