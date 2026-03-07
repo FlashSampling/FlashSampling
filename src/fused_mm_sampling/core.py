@@ -4,6 +4,8 @@
 import math
 import os
 from dataclasses import dataclass
+from functools import lru_cache
+from logging import getLogger
 from typing import Callable, NamedTuple, Protocol
 
 import flashinfer
@@ -14,6 +16,8 @@ import triton.language as tl
 import triton.profiler.language as pl
 
 from .tl_matmul import matmul
+
+logger = getLogger(__name__)
 
 
 @nvtx.annotate()
@@ -72,6 +76,11 @@ def apply_top_k_top_p(
     return out.scatter_(dim=-1, index=topk_idx, src=probs)
 
 
+@lru_cache
+def print_once(msg: str):
+    print(msg)
+
+
 def apply_top_k_top_p_qitra(
     logits: torch.Tensor,  # [batch, V], float32
     top_k: int | None,
@@ -79,6 +88,8 @@ def apply_top_k_top_p_qitra(
 ) -> torch.Tensor:
     """Apply top-k and top-p filtering using vLLM's Qitra Triton kernel and return probabilities."""
     from .qitra import apply_top_k_top_p_triton
+
+    print_once(msg="Using Qitra for top-k/top-p filtering")
 
     batch_size = logits.shape[0]
     k = (
@@ -519,7 +530,7 @@ def get_sampler(provider: str, weights: torch.Tensor) -> Sampler:
         case "sequential-compiled":
             return SimpleSampler(sequential_sample_pt)
         case "naive-tl-matmul":
-            return SimpleSampler(lambda **kwargs: sample(**kwargs, tl_matmul=True))
+            return SimpleSampler(lambda **kwargs: sample_compiled(**kwargs, tl_matmul=True))
         case "jl-compiled":
             return JLSampler.from_weights(weights)
         case "fused-topk":
