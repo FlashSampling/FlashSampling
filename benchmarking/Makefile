@@ -82,42 +82,29 @@ nsight-profile-naive-pt:
 		--force-overwrite true \
 		-o $(NSIGHT_RESULTS_DIR)/naive-pt $(PYTHON) ./speed_test.py --name naive-pt --n_hidden_states $(N_HIDDEN_STATES) --n_runs_benchmark $(N_RUNS_BENCHMARK)
 
-ncu-export-fused-triton:
+NAME :=
+ncu-export:
+	@test -n "$(NAME)" || (echo "Usage: make ncu-export NAME=fused-cutlass-evt"; exit 1)
 	mkdir -p $(NCU_TXT_DIR)
 	$(SUDO) $(NCU) --set full \
 		--nvtx \
 		--nvtx-include "kernel/" \
-		--kernel-name fused_mm_sample_triton_kernel \
-		$(PYTHON) ./speed_test.py --name fused-triton --n_hidden_states $(N_HIDDEN_STATES) --n_runs_benchmark $(N_RUNS_BENCHMARK) --bench_fn=own --case=$(CASE) > $(NCU_TXT_DIR)/fused-triton.txt
+		$(PYTHON) ./speed_test.py --name $(NAME) --n_hidden_states $(N_HIDDEN_STATES) --n_runs_benchmark $(N_RUNS_BENCHMARK) --bench_fn=own --case=$(CASE) > $(NCU_TXT_DIR)/$(NAME).txt
+
+ncu-export-fused-triton:
+	$(MAKE) ncu-export NAME=fused-triton
 
 ncu-export-naive-tl-matmul:
-	mkdir -p $(NCU_TXT_DIR)
-	$(SUDO) $(NCU) --set full \
-		--nvtx \
-		--nvtx-include "kernel/" \
-		--kernel-name matmul_kernel \
-		$(PYTHON) ./speed_test.py --name naive-tl-matmul --n_hidden_states $(N_HIDDEN_STATES) --n_runs_benchmark $(N_RUNS_BENCHMARK) --bench_fn=own --case=$(CASE) > $(NCU_TXT_DIR)/naive-tl-matmul.txt
+	$(MAKE) ncu-export NAME=naive-tl-matmul
 
 ncu-export-naive-compiled:
-	mkdir -p $(NCU_TXT_DIR)
-	$(SUDO) $(NCU) --set full \
-		--nvtx \
-		--nvtx-include "kernel/" \
-		$(PYTHON) ./speed_test.py --name naive-compiled --n_hidden_states $(N_HIDDEN_STATES) --n_runs_benchmark $(N_RUNS_BENCHMARK) --bench_fn=own --case=$(CASE) > $(NCU_TXT_DIR)/naive-compiled.txt
+	$(MAKE) ncu-export NAME=naive-compiled
 
 ncu-export-flashinfer:
-	mkdir -p $(NCU_TXT_DIR)
-	$(SUDO) env "PATH=$$PATH:$(VENV_BIN)" $(NCU) --set full \
-		--nvtx \
-		--nvtx-include "kernel/" \
-		$(PYTHON) ./speed_test.py --name flashinfer:sampling_from_logits --n_hidden_states $(N_HIDDEN_STATES) --n_runs_benchmark $(N_RUNS_BENCHMARK) --bench_fn=own --case=$(CASE) > $(NCU_TXT_DIR)/flashinfer-sampling.txt
+	$(MAKE) ncu-export NAME="flashinfer:sampling_from_logits"
 
 ncu-export-flashinfer-top-k-top-p:
-	mkdir -p $(NCU_TXT_DIR)
-	$(SUDO) env "PATH=$$PATH:$(VENV_BIN)" $(NCU) --set full \
-		--nvtx \
-		--nvtx-include "kernel/" \
-		$(PYTHON) ./speed_test.py --name flashinfer:top_k_top_p_sampling_from_logits --n_hidden_states $(N_HIDDEN_STATES) --n_runs_benchmark $(N_RUNS_BENCHMARK) --bench_fn=own --case=$(CASE) > $(NCU_TXT_DIR)/flashinfer-top-k-top-p.txt
+	$(MAKE) ncu-export NAME="flashinfer:top_k_top_p_sampling_from_logits"
 
 ncu-profile-helion:
 	mkdir -p $(NCU_RESULTS_DIR)
@@ -129,12 +116,7 @@ ncu-profile-helion:
 		-fo $(NCU_RESULTS_DIR)/helion $(PYTHON) ./speed_test.py --name helion --n_hidden_states $(N_HIDDEN_STATES) --n_runs_benchmark $(N_RUNS_BENCHMARK) --bench_fn=own
 
 ncu-export-helion:
-	mkdir -p $(NCU_TXT_DIR)
-	$(SUDO) $(NCU) --set full \
-		--nvtx \
-		--nvtx-include "kernel/" \
-		--kernel-name _helion_fused_sample_helion_kernel \
-		$(PYTHON) ./speed_test.py --name helion --n_hidden_states $(N_HIDDEN_STATES) --n_runs_benchmark $(N_RUNS_BENCHMARK) --bench_fn=own --case=$(CASE) > $(NCU_TXT_DIR)/helion.txt
+	$(MAKE) ncu-export NAME=helion
 
 ncu-export-all: ncu-export-fused-triton ncu-export-naive-compiled ncu-export-flashinfer ncu-export-naive-tl-matmul
 	@echo "NCU reports exported to profiles/ncu-txt/"
