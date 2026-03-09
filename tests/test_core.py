@@ -1,4 +1,5 @@
 import os
+import socket
 from pathlib import Path
 
 os.environ.setdefault("HELION_AUTOTUNE_EFFORT", "none")
@@ -6,11 +7,13 @@ os.environ.setdefault("HELION_AUTOTUNE_EFFORT", "none")
 import numpy as np
 import pytest
 import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
 from scipy.stats import chisquare
 
 from fused_mm_sampling.bench.speed_test import Args, run_speed_test
-from fused_mm_sampling.core import JLSampler, bsz_h, get_sampler
-from fused_mm_sampling.testing import make_synthetic_inputs
+from fused_mm_sampling.core import JLSampler, TPInfo, bsz_h, get_sampler
+from fused_mm_sampling.testing import assert_sampling_distribution, make_synthetic_inputs
 
 device = torch.device("cuda")
 
@@ -109,6 +112,37 @@ def test_sampling_distribution(provider, vocab_size, n_hidden_states):
             f"Sampling distribution mismatch for seq {seq_idx}: p={p_value:.6f}. "
             f"{provider} does not match the expected softmax distribution."
         )
+
+
+@pytest.mark.skipif(
+    not os.environ.get("FMMS_TEST_DISTRIBUTED"), reason="Set FMMS_TEST_DISTRIBUTED=1 to run"
+)
+def test_sampling_distribution_tp2() -> None:
+    mp.spawn(
+        _tp_assert_sampling_distribution,
+        args=(2, _find_free_port()),
+        nprocs=2,
+        join=True,
+    )
+
+
+def _tp_assert_sampling_distribution(rank: int, world_size: int, port: int) -> None:
+    dist.init_process_group(
+        backend="gloo", init_method=f"tcp://localhost:{port}", rank=rank, world_size=world_size
+    )
+    tp = TPInfo.from_group(dist.group.WORLD)
+    for vocab_size in [100, 200, 256]:
+        for n_hidden_states in [1, 2]:
+            assert_sampling_distribution("fused-triton", vocab_size, n_hidden_states, tp=tp)
+            if tp.rank == 0:
+                print(f"✅ Passed: vocab_size={vocab_size} and n_hidden_states={n_hidden_states}")
+    dist.destroy_process_group()
+
+
+def _find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
 
 
 @pytest.mark.parametrize("n_hidden_states", [1, 2])

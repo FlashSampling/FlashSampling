@@ -155,12 +155,13 @@ MIN_BLOCK_SIZE_V = 128
 # @torch.compile(fullgraph=True)
 @nvtx.annotate()
 def fused_mm_sample_triton(
-    weights: torch.Tensor,  # [V, D]
+    weights: torch.Tensor,  # [V_local, D] (may be a TP shard)
     hidden_states: torch.Tensor,  # [n_hidden_states, D]
     num_samples: int,
     temperature: torch.Tensor,  # scalar (0-d)
     seed: int,
     GUMBEL: bool = True,  # noqa: N803
+    tp: "TPInfo | None" = None,
 ):
     V, D = weights.shape  # noqa: N806
     H, D2 = hidden_states.shape  # noqa: N806
@@ -202,11 +203,64 @@ def fused_mm_sample_triton(
         USE_PROTON_SCOPES=os.environ.get("USE_PROTON_SCOPES", "0") == "1",
     )
 
-    # 2nd stage: reduction
     assert grid_size["v"] is not None
-    idxs = maxs[: grid_size["v"], :, :].max(axis=0).indices
-    samples = maxs_idx.gather(dim=0, index=idxs[None, :])
-    return samples.squeeze(0)  # [n_hidden_states, num_samples]
+
+    # Stage 2: local reduction across V-tiles on this rank.
+    vocab_start_index = tp.rank * V if tp else 0
+    samples, max_values = _local_reduce(maxs, maxs_idx, vocab_start_index)
+
+    # Stage 3: cross-rank reduction via Gumbel-max decomposition
+    if tp is not None:
+        samples = _tensor_parallel_reduce(samples, max_values, tp.group)
+
+    return samples  # [n_hidden_states, num_samples]
+
+
+@torch.compile(fullgraph=True)
+def _local_reduce(
+    maxs: torch.Tensor,  # [n_tiles, H, num_samples]
+    maxs_idx: torch.Tensor,  # [n_tiles, H, num_samples]
+    vocab_start_index: int,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Reduce across V-tiles on this rank and adjust to global vocab indices."""
+    idxs = maxs.max(dim=0).indices
+    samples = maxs_idx.gather(0, idxs[None, :]).squeeze(0)
+    max_values = maxs.gather(0, idxs[None, :]).squeeze(0)
+    samples += vocab_start_index
+    return samples, max_values
+
+
+def _tensor_parallel_reduce(
+    samples: torch.Tensor,  # [H, num_samples]
+    max_values: torch.Tensor,  # [H, num_samples]
+    tp_group: torch.distributed.ProcessGroup,
+) -> torch.Tensor:
+    """All-gather local Gumbel maxes across TP ranks and pick the global winner."""
+    world_size = tp_group.size()
+    all_max_values = [torch.empty_like(max_values) for _ in range(world_size)]
+    all_samples = [torch.empty_like(samples) for _ in range(world_size)]
+    torch.distributed.all_gather(all_max_values, max_values, group=tp_group)
+    torch.distributed.all_gather(all_samples, samples, group=tp_group)
+
+    stacked_values = torch.stack(all_max_values)  # [world_size, H, num_samples]
+    stacked_samples = torch.stack(all_samples)  # [world_size, H, num_samples]
+    winner_rank = stacked_values.argmax(dim=0)  # [H, num_samples]
+    return stacked_samples.gather(0, winner_rank.unsqueeze(0)).squeeze(0)
+
+
+@dataclass
+class TPInfo:
+    """Tensor parallel context."""
+
+    rank: int
+    size: int
+    group: torch.distributed.ProcessGroup
+
+    @classmethod
+    def from_group(cls, group: torch.distributed.ProcessGroup) -> "TPInfo":
+        import torch.distributed as dist
+
+        return cls(rank=dist.get_rank(group), size=dist.get_world_size(group), group=group)
 
 
 def clip(low, high, x):
@@ -516,10 +570,10 @@ def optimal_k(n: int, epsilon: float) -> int:
 def get_sampler(provider: str, weights: torch.Tensor) -> Sampler:
     match provider:
         case "fused-triton":
-            return SimpleSampler(lambda **kwargs: fused_mm_sample_triton(**kwargs, seed=0))
+            return SimpleSampler(lambda **kwargs: fused_mm_sample_triton(**{"seed": 0, **kwargs}))
         case "fused-triton-no-gumbel":
             return SimpleSampler(
-                lambda **kwargs: fused_mm_sample_triton(**kwargs, seed=0, GUMBEL=False)
+                lambda **kwargs: fused_mm_sample_triton(**{"seed": 0, "GUMBEL": False, **kwargs})
             )
         case "naive-pt":
             return SimpleSampler(sample)
