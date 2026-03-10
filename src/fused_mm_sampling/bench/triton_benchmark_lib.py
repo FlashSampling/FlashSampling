@@ -140,7 +140,7 @@ def _run_benchmark(
     def fn():
         return sampler.sample(**kwargs)
 
-    quantiles = [0.1, 0.5, 0.9]
+    quantiles = [0.5, 0.1, 0.9]  # perf_report unpacks as [center, min, max]
     if tp.size > 1:
         return _do_bench_fixed_iters(fn, quantiles=quantiles)
     return triton.testing.do_bench(fn, quantiles=quantiles)
