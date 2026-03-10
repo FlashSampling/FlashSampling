@@ -1,5 +1,6 @@
 import os
 import socket
+from itertools import product
 from pathlib import Path
 
 os.environ.setdefault("HELION_AUTOTUNE_EFFORT", "none")
@@ -131,11 +132,15 @@ def _tp_assert_sampling_distribution(rank: int, world_size: int, port: int) -> N
         backend="gloo", init_method=f"tcp://localhost:{port}", rank=rank, world_size=world_size
     )
     tp = TPInfo.from_group(dist.group.WORLD)
-    for vocab_size in [100, 200, 256]:
-        for n_hidden_states in [1, 2]:
-            assert_sampling_distribution("fused-triton", vocab_size, n_hidden_states, tp=tp)
-            if tp.rank == 0:
-                print(f"✅ Passed: vocab_size={vocab_size} and n_hidden_states={n_hidden_states}")
+    providers = ["fused-triton", "naive-pt"]
+    vocab_sizes = [100, 200, 256]
+    n_hidden_states_list = [1, 2]
+    combinations = product(providers, vocab_sizes, n_hidden_states_list)
+    for provider, vocab_size, n_hidden_states in combinations:
+        assert_sampling_distribution(provider, vocab_size, n_hidden_states, tp=tp)
+        if tp.rank == 0:
+            msg = f"✅ Passed: {provider} vocab_size={vocab_size} n_hidden_states={n_hidden_states}"
+            print(msg)
     dist.destroy_process_group()
 
 

@@ -22,7 +22,7 @@ logger = getLogger(__name__)
 
 @nvtx.annotate()
 def sample(
-    weights: torch.Tensor,  # [V, D]
+    weights: torch.Tensor,  # [V, D] (may be a TP shard over dim V)
     hidden_states: torch.Tensor,  # [n_hidden_states, D]
     num_samples: int,
     temperature: torch.Tensor,  # scalar (0-d)
@@ -32,6 +32,7 @@ def sample(
     top_k: int | None = None,
     top_p: float | None = None,
     use_qitra: bool = False,
+    tp: "TPInfo | None" = None,
 ):
     if seed is not None:
         torch.manual_seed(seed)
@@ -39,6 +40,8 @@ def sample(
         logits = matmul(hidden_states, weights)  # [n_hidden_states, V]
     else:
         logits = hidden_states @ weights.T  # [n_hidden_states, V]
+    if tp is not None:
+        logits = _allgather_logits(logits, tp)  # shape [H, V_local] -> [H, V]
     # Upcast to float32: torch.multinomial produces incorrect distributions with bfloat16.
     # If we remove the cast, the correctness test fails (a chi-squared test).
     logits = logits.float() / temperature
@@ -50,6 +53,16 @@ def sample(
     if return_probs:
         return samples, probs
     return samples
+
+
+def _allgather_logits(
+    logits: torch.Tensor,  # [H, V_local]
+    tp: "TPInfo",
+) -> torch.Tensor:
+    """All-gather local logits along the vocab dimension to reconstruct [H, V_global]."""
+    all_logits = [torch.empty_like(logits) for _ in range(tp.size)]
+    torch.distributed.all_gather(all_logits, logits, group=tp.group)
+    return torch.cat(all_logits, dim=1)  # [H, V_global]
 
 
 def apply_top_k_top_p(
