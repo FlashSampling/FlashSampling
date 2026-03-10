@@ -1,3 +1,4 @@
+import json
 import re
 from pathlib import Path
 
@@ -121,6 +122,14 @@ def read_gpu_name(folder: Path) -> str | None:
         if m:
             return m.group(1).strip()
     return None
+
+
+def read_bench_args(folder: Path) -> dict:
+    """Read args.json dumped by the benchmark runner. Falls back to parsing logs.txt."""
+    args_file = folder / "args.json"
+    if args_file.exists():
+        return json.loads(args_file.read_text())
+    return {}
 
 
 def plot_batch_scaling(bdf_long: pd.DataFrame):
@@ -451,11 +460,14 @@ def create_and_triton_bench_plots(
     tgt_folder.mkdir(parents=True, exist_ok=True)
 
     gpu_name = read_gpu_name(folder)
-    peak_bw_gbs = GPU_PEAK_BW_GBS.get(gpu_name) if gpu_name else None
-    peak_compute_tflops = GPU_PEAK_COMPUTE_TFLOPS.get(gpu_name) if gpu_name else None
+    bench_args: dict = read_bench_args(folder)
+    n_procs = bench_args.get("n_procs", 1)
+    peak_bw_gbs = GPU_PEAK_BW_GBS.get(gpu_name) * n_procs if gpu_name else None
+    peak_compute_tflops = GPU_PEAK_COMPUTE_TFLOPS.get(gpu_name) * n_procs if gpu_name else None
     if gpu_name:
+        tp_suffix = f" x {n_procs} GPUs" if n_procs > 1 else ""
         print(
-            f"GPU: {gpu_name} → peak HBM BW: {peak_bw_gbs} GB/s, peak compute: {peak_compute_tflops} TFLOP/s"
+            f"GPU: {gpu_name}{tp_suffix} → peak HBM BW: {peak_bw_gbs} GB/s, peak compute: {peak_compute_tflops} TFLOP/s"
         )
     else:
         print("Warning: could not detect GPU from logs.txt, skipping peak BW line")

@@ -1,6 +1,7 @@
 # AGENTS.md
 
 - the speed test runner is in `benchmarking/speed_test.py`, and the triton benchmark runner is in `benchmarking/triton_benchmark.py`. There are useful commands to run benchs in `benchmarking/Makefile`.
+- to plot all plots use `make plot-all`.
 - to test the distributed code works use `make pytest-distributed`.
 - when benchmarking many combinations, don't run the bench in parallel, since they will contend for the same resources. Instead launch them sequentially.
 

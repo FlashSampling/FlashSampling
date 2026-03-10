@@ -205,6 +205,9 @@ def _run_triton_benchmark_impl(args: Args):
     directory = args.tgt_dir
     os.makedirs(directory, exist_ok=True)
 
+    args_file = Path(directory) / "args.json"
+    args_file.write_text(args.model_dump_json(indent=2))
+
     for case in cases:
         case_config = BENCHMARK_CASES[case]
         tp.rank0_print("=" * 80)
