@@ -1,7 +1,7 @@
 import pandas as pd
 from pydantic_settings import BaseSettings
 
-from fused_mm_sampling.bench.triton_benchmark import BENCHMARK_CASES
+from fused_mm_sampling.bench.triton_benchmark_lib import BENCHMARK_CASES
 
 
 def our_method(vocab_size: int, hidden_size: int, n_hidden_states: int):

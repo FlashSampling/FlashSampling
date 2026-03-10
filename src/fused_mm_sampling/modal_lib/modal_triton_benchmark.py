@@ -1,6 +1,6 @@
 import os
 
-from ..bench.triton_benchmark import Args, run_triton_bechmark
+from ..bench.triton_benchmark_lib import Args, run_triton_bechmark
 from .utils import make_app, make_image, make_volumes
 
 app = make_app()

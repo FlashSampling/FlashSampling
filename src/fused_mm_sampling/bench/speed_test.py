@@ -1,5 +1,4 @@
 import os
-import socket
 import timeit
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,8 +7,6 @@ from typing import Literal
 import cuda.bench as nvbench
 import pandas as pd
 import torch
-import torch.distributed as dist
-import torch.multiprocessing as mp
 import triton
 import triton.profiler as proton
 from pydantic import model_validator
@@ -17,8 +14,8 @@ from pydantic_settings import BaseSettings
 
 from ..core import fused_mm_sample_triton_kernel, get_gpu_name, get_sampler, sample
 from ..testing import shard_weights
-from ..tp_info import TP1, TPInfo
-from .triton_benchmark import BENCHMARK_CASES
+from ..tp_info import TP1, TPInfo, run_maybe_distributed
+from .triton_benchmark_lib import BENCHMARK_CASES, provider_names
 
 device = torch.device("cuda")
 
@@ -82,7 +79,7 @@ class Args(BaseSettings):
         )
 
     def providers(self) -> list[str]:
-        return self.name.split(",") if self.name is not None else list(all_providers)
+        return self.name.split(",") if self.name is not None else list(provider_names)
 
     def all_cases(self) -> list["Case"]:
         return [self.as_case(name=provider) for provider in self.providers()]
@@ -130,19 +127,6 @@ class Case:
         if self.top_p is not None:
             kwargs["top_p"] = self.top_p
         return kwargs
-
-
-all_providers = [
-    "fused-triton",
-    # "fused-cuda",
-    # "helion",
-    "naive-compiled",
-    # "sequential-compiled",
-    # "naive-tl-matmul",
-    # "jl-compiled",
-    "flashinfer:top_k_top_p_sampling_from_logits",
-    "flashinfer:sampling_from_logits",
-]
 
 
 def setup_proton(mode: Literal["pcsampling", "trace"]) -> None:
@@ -378,15 +362,7 @@ def _print_and_dump_own_results(df: pd.DataFrame, args: Args) -> None:
 
 def run_speed_test(args: Args) -> None:
     """Run a speed test for a given set of arguments."""
-    if args.n_procs > 1:
-        mp.spawn(
-            _distributed_worker,
-            args=(args.n_procs, _find_free_port(), args),
-            nprocs=args.n_procs,
-            join=True,
-        )
-        return
-    _run_speed_test_impl(args)
+    run_maybe_distributed(_run_speed_test_impl, args.n_procs, args)
 
 
 def _run_speed_test_impl(args: Args) -> None:
@@ -411,22 +387,3 @@ def _run_speed_test_impl(args: Args) -> None:
             return run_own_benchmark(args)
         case _:
             raise ValueError("Unknown bench_fn: {args.bench_fn!r}")
-
-
-def _distributed_worker(rank: int, world_size: int, port: int, args: Args) -> None:
-    torch.cuda.set_device(rank % torch.cuda.device_count())
-    backend = "nccl" if torch.cuda.device_count() >= world_size else "gloo"
-    dist.init_process_group(
-        backend=backend,
-        init_method=f"tcp://localhost:{port}",
-        rank=rank,
-        world_size=world_size,
-    )
-    _run_speed_test_impl(args)
-    dist.destroy_process_group()
-
-
-def _find_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]

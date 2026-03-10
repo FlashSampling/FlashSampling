@@ -8,6 +8,8 @@ import triton
 from pydantic_settings import BaseSettings
 
 from ..core import get_gpu_name, get_sampler
+from ..testing import shard_weights
+from ..tp_info import TP1, TPInfo, run_maybe_distributed
 
 # prevent torch._dynamo.exc.FailOnRecompileLimitHit: recompile_limit reached with fullgraph=True
 assert torch._dynamo.config.cache_size_limit == 8
@@ -37,6 +39,15 @@ class Args(BaseSettings):
     name: str | None = None
     n_hidden_states: int | None = None
     case: str = "all"
+    n_procs: int = 1
+
+    def make_tp(self) -> TPInfo:
+        if self.n_procs > 1:
+            return TPInfo.from_world()
+        return TP1
+
+    def providers(self) -> list[str]:
+        return self.name.split(",") if self.name is not None else list(provider_names)
 
 
 class CliArgs(Args, cli_parse_args=True):
@@ -73,18 +84,15 @@ def create_benchmark(args: Args, case: str):
     case_config = BENCHMARK_CASES[case]
     vocab_size = case_config["vocab_size"]
     hidden_size = case_config["hidden_size"]
+    tp = args.make_tp()
 
     if args.n_hidden_states is not None:
         x_vals = [args.n_hidden_states]
     else:
         x_vals = [1, 2, 4, 8, 16, 32, 64, 128, 256]  # nobody uses 512 or 1024
 
-    if args.name is not None:
-        providers = [args.name]
-    else:
-        providers = list(provider_names.keys())
-
-    lines_names = [provider_names[prov] for prov in providers]
+    providers = args.providers()
+    lines_names = [provider_names.get(prov, prov) for prov in providers]
 
     config = triton.testing.Benchmark(
         x_names=["n_hidden_states"],
@@ -105,20 +113,24 @@ def create_benchmark(args: Args, case: str):
             (n_hidden_states, hidden_size), dtype=torch.bfloat16, device=device
         )
         weights = torch.randn((vocab_size, hidden_size), dtype=torch.bfloat16, device=device)
-        return _run_benchmark(hidden_states, weights, provider)
+        weights = shard_weights(weights, tp)
+        return _run_benchmark(hidden_states, weights, provider, tp)
 
     return benchmark
 
 
-def _run_benchmark(hidden_states: torch.Tensor, weights: torch.Tensor, provider: str) -> float:
+def _run_benchmark(
+    hidden_states: torch.Tensor, weights: torch.Tensor, provider: str, tp: TPInfo = TP1
+) -> float:
     """Common benchmark logic for all modes."""
-    print(f"Running benchmark for provider: {provider}")
+    tp.rank0_print(f"Running benchmark for provider: {provider}")
 
     kwargs = dict(
         hidden_states=hidden_states,
         weights=weights,
         num_samples=N_SAMPLES,
         temperature=torch.tensor(TEMPERATURE, device=weights.device),
+        tp=tp,
     )
 
     sampler = get_sampler(provider, weights=weights)
@@ -140,8 +152,13 @@ def _resolve_cases(case: str) -> list[str]:
 
 
 def run_triton_bechmark(args: Args):
-    print("GPU:", get_gpu_name())
-    print("Arguments:", args.model_dump_json())
+    run_maybe_distributed(_run_triton_benchmark_impl, args.n_procs, args)
+
+
+def _run_triton_benchmark_impl(args: Args):
+    tp = args.make_tp()
+    tp.rank0_print("GPU:", get_gpu_name())
+    tp.rank0_print("Arguments:", args.model_dump_json())
 
     cases = _resolve_cases(args.case)
     directory = args.tgt_dir
@@ -149,15 +166,16 @@ def run_triton_bechmark(args: Args):
 
     for case in cases:
         case_config = BENCHMARK_CASES[case]
-        print("=" * 80)
-        print(f"Benchmark Case: {case}")
-        print("Configuration:")
-        print(f"  vocab_size: {case_config['vocab_size']}")
-        print(f"  hidden_size: {case_config['hidden_size']}")
-        print(f"  n_samples: {N_SAMPLES}")
-        print(f"  temperature: {TEMPERATURE}")
-        print()
+        tp.rank0_print("=" * 80)
+        tp.rank0_print(f"Benchmark Case: {case}")
+        tp.rank0_print("Configuration:")
+        tp.rank0_print(f"  vocab_size: {case_config['vocab_size']}")
+        tp.rank0_print(f"  hidden_size: {case_config['hidden_size']}")
+        tp.rank0_print(f"  n_samples: {N_SAMPLES}")
+        tp.rank0_print(f"  temperature: {TEMPERATURE}")
+        tp.rank0_print(f"  n_procs: {args.n_procs}")
+        tp.rank0_print()
 
         benchmark = create_benchmark(args, case)
         benchmark.run(print_data=True, save_path=directory)
-        print()
+        tp.rank0_print()

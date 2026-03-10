@@ -7,7 +7,7 @@ import pandas as pd
 import seaborn as sns
 from pydantic_settings import BaseSettings
 
-# Must match BENCHMARK_CASES in src/fused_mm_sampling/bench/triton_benchmark.py
+# Must match BENCHMARK_CASES in src/fused_mm_sampling/bench/triton_benchmark_lib.py
 BENCHMARK_CASES = {
     "qwen3-1.7b": {"vocab_size": 151_936, "hidden_size": 2_048},
     "small": {"vocab_size": 128_256, "hidden_size": 4_096},

@@ -1,5 +1,8 @@
 # AGENTS.md
 
+- the speed test runner is in `benchmarking/speed_test.py`, and the triton benchmark runner is in `benchmarking/triton_benchmark.py`. There are useful commands to run benchs in `benchmarking/Makefile`.
+- to test the distributed code works use `make pytest-distributed`.
+
 Development notes and lessons learned while building this project.
 
 **Meta-rule: Continuously update this file.** After every task, write new insights, patterns, and lessons learned into this file. Proactively review and update outdated information — if a timeout was changed, a cache strategy was revised, or a workaround is no longer needed, update the relevant section. This file is the project's living knowledge base.

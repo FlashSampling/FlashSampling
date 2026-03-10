@@ -1,5 +1,4 @@
 import os
-import socket
 from itertools import product
 from pathlib import Path
 
@@ -8,14 +7,12 @@ os.environ.setdefault("HELION_AUTOTUNE_EFFORT", "none")
 import numpy as np
 import pytest
 import torch
-import torch.distributed as dist
-import torch.multiprocessing as mp
 from scipy.stats import chisquare
 
 from fused_mm_sampling.bench.speed_test import Args, run_speed_test
 from fused_mm_sampling.core import JLSampler, bsz_h, get_sampler
 from fused_mm_sampling.testing import assert_sampling_distribution, make_synthetic_inputs
-from fused_mm_sampling.tp_info import TPInfo
+from fused_mm_sampling.tp_info import TPInfo, run_maybe_distributed
 
 device = torch.device("cuda")
 
@@ -121,22 +118,7 @@ def test_sampling_distribution(provider, vocab_size, n_hidden_states):
     reason="Set FMMS_TEST_DISTRIBUTED=1 to run",
 )
 def test_sampling_distribution_tp2() -> None:
-    mp.spawn(
-        _tp_assert_sampling_distribution,
-        args=(2, _find_free_port()),
-        nprocs=2,
-        join=True,
-    )
-
-
-def _tp_assert_sampling_distribution(rank: int, world_size: int, port: int) -> None:
-    dist.init_process_group(
-        backend="gloo", init_method=f"tcp://localhost:{port}", rank=rank, world_size=world_size
-    )
-    try:
-        _run_distributed_testcases()
-    finally:
-        dist.destroy_process_group()
+    run_maybe_distributed(_run_distributed_testcases, n_procs=2)
 
 
 def _run_distributed_testcases() -> None:
@@ -150,12 +132,6 @@ def _run_distributed_testcases() -> None:
         if tp.rank == 0:
             msg = f"✅ Passed: {provider} vocab_size={vocab_size} n_hidden_states={n_hidden_states}"
             print(msg)
-
-
-def _find_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
-        return s.getsockname()[1]
 
 
 @pytest.mark.parametrize("n_hidden_states", [1, 2])

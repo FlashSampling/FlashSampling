@@ -125,14 +125,14 @@ sample_compiled_with_breaks = torch.compile(sample)
 
 
 @functools.wraps(sample)
-def sample_compiled(*args, tp: TPInfo, **kwargs):
+def sample_compiled(*args, tp: TPInfo = TP1, **kwargs):
     if tp.size > 1:
         if tp.is_rank0():
             print_once("Using sample_compiled_with_breaks")
-        return sample_compiled_with_breaks(*args, **kwargs)
+        return sample_compiled_with_breaks(*args, tp=tp, **kwargs)
     if tp.is_rank0():
         print_once("Using sample_compiled_fullgraph")
-    return sample_compiled_fullgraph(*args, **kwargs)
+    return sample_compiled_fullgraph(*args, tp=tp, **kwargs)
 
 
 @nvtx.annotate()
@@ -637,6 +637,7 @@ def flashinfer_top_k_top_p_sampling_from_logits(
     temperature: torch.Tensor,  # scalar (0-d)
     top_p: float,
     top_k: int,
+    **_kwargs,
 ) -> torch.Tensor:
     batch_size = hidden_states.shape[0]
     logits, indices = flashinfer_create_logits_and_indices(
@@ -676,6 +677,7 @@ def flashinfer_sampling_from_logits(
     hidden_states: torch.Tensor,  # [n_hidden_states, D]
     num_samples: int,
     temperature: torch.Tensor,  # scalar (0-d)
+    **_kwargs,
 ) -> torch.Tensor:
     batch_size = hidden_states.shape[0]
     logits, indices = flashinfer_create_logits_and_indices(
