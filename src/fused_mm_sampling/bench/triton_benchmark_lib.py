@@ -3,6 +3,8 @@ from pathlib import Path
 
 os.environ["TRITON_PRINT_AUTOTUNING"] = "1"
 
+import json
+
 import torch
 import triton
 from pydantic_settings import BaseSettings
@@ -198,15 +200,23 @@ def run_triton_bechmark(args: Args):
 
 def _run_triton_benchmark_impl(args: Args):
     tp = args.make_tp()
-    tp.rank0_print("GPU:", get_gpu_name())
+    gpu_name = get_gpu_name()
+    device_count = torch.cuda.device_count()
+    tp.rank0_print("GPU:", gpu_name)
+    tp.rank0_print("Number of GPUs:", device_count)
     tp.rank0_print("Arguments:", args.model_dump_json())
 
     cases = _resolve_cases(args.case)
     directory = args.tgt_dir
     os.makedirs(directory, exist_ok=True)
 
-    args_file = Path(directory) / "args.json"
-    args_file.write_text(args.model_dump_json(indent=2))
+    metadata = {
+        "gpu_name": gpu_name,
+        "device_count": device_count,
+        "args": args.model_dump(mode="json"),
+    }
+    metadata_file = Path(directory) / "metadata.json"
+    metadata_file.write_text(json.dumps(metadata, indent=2))
 
     for case in cases:
         case_config = BENCHMARK_CASES[case]

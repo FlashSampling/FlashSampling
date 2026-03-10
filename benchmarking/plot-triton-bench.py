@@ -68,7 +68,24 @@ def _provider_markers(providers: pd.Series | list[str]) -> dict[str, str]:
     return {p: PROVIDER_MARKERS[p] for p in unique}
 
 
-def read_gpu_name(folder: Path) -> str | None:
+def read_metadata(folder: Path) -> dict:
+    """Read metadata.json dumped by the benchmark runner.
+
+    Falls back to args.json and logs.txt for older result directories.
+    """
+    metadata_file = folder / "metadata.json"
+    if metadata_file.exists():
+        return json.loads(metadata_file.read_text())
+
+    # defaults for old results that don't have metadata.json
+    metadata: dict = {
+        "gpu_name": _read_gpu_name_from_logs(folder),
+        "device_count": 1,
+    }
+    return metadata
+
+
+def _read_gpu_name_from_logs(folder: Path) -> str | None:
     """Parse the GPU name from the 'GPU: ...' line in logs.txt."""
     logs = folder / "logs.txt"
     if not logs.exists():
@@ -78,14 +95,6 @@ def read_gpu_name(folder: Path) -> str | None:
         if m:
             return m.group(1).strip()
     return None
-
-
-def read_bench_args(folder: Path) -> dict:
-    """Read args.json dumped by the benchmark runner. Falls back to parsing logs.txt."""
-    args_file = folder / "args.json"
-    if args_file.exists():
-        return json.loads(args_file.read_text())
-    return {}
 
 
 def plot_batch_scaling(bdf_long: pd.DataFrame):
@@ -415,18 +424,15 @@ def create_and_triton_bench_plots(
     tgt_folder = folder / "custom-plots"
     tgt_folder.mkdir(parents=True, exist_ok=True)
 
-    gpu_name = read_gpu_name(folder)
-    bench_args: dict = read_bench_args(folder)
-    n_procs = bench_args.get("n_procs", 1)
-    peak_bw_gbs = GPU_PEAK_BW_GBS.get(gpu_name) * n_procs if gpu_name else None
-    peak_compute_tflops = GPU_PEAK_COMPUTE_TFLOPS.get(gpu_name) * n_procs if gpu_name else None
-    if gpu_name:
-        tp_suffix = f" x {n_procs} GPUs" if n_procs > 1 else ""
-        print(
-            f"GPU: {gpu_name}{tp_suffix} → peak HBM BW: {peak_bw_gbs} GB/s, peak compute: {peak_compute_tflops} TFLOP/s"
-        )
-    else:
-        print("Warning: could not detect GPU from logs.txt, skipping peak BW line")
+    metadata = read_metadata(folder)
+    gpu_name = metadata["gpu_name"]
+    n_gpus = metadata["device_count"]
+    peak_bw_gbs = GPU_PEAK_BW_GBS[gpu_name] * n_gpus
+    peak_compute_tflops = GPU_PEAK_COMPUTE_TFLOPS[gpu_name] * n_gpus
+    tp_suffix = f" x {n_gpus} GPUs" if n_gpus > 1 else ""
+    print(
+        f"GPU: {gpu_name}{tp_suffix} → peak HBM BW: {peak_bw_gbs} GB/s, peak compute: {peak_compute_tflops} TFLOP/s"
+    )
 
     csv_prefix = "fused-mm-sample-batch-scaling-"
     for csv_path in sorted(folder.glob(f"{csv_prefix}*.csv")):
