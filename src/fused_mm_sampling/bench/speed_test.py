@@ -318,11 +318,11 @@ def run_cupti(args: Args) -> None:
             enable_cupti=True,
         )
         if args.n_procs > 1:
-            print("Reading bench iteration counts from Args")
+            tp.rank0_print("Reading bench iteration counts from Args")
             bench_kwargs["dry_run_iters"] = args.n_runs_warmup
             bench_kwargs["repeat_iters"] = args.n_runs_benchmark
         else:
-            print("Using adaptive bench iteration counts")
+            tp.rank0_print("Using adaptive bench iteration counts")
 
         times_ms = bench_gpu_time(**bench_kwargs)
         times_md = pd.Series(times_ms)
@@ -336,8 +336,11 @@ def run_cupti(args: Args) -> None:
             }
         )
 
-    if not tp.is_rank0():
-        return
+    if tp.is_rank0():
+        _print_and_dump_cupti_results(rows, args)
+
+
+def _print_and_dump_cupti_results(rows: list[dict], args: Args) -> None:
     df = pd.DataFrame(rows).sort_values("median_ms")
     print()
     print(df.round(3))
@@ -353,8 +356,11 @@ def run_own_benchmark(args: Args) -> None:
     tp = args.make_tp()
     cases: list[Case] = args.all_cases()
     df = benchmark_all(cases)
-    if not tp.is_rank0():
-        return
+    if tp.is_rank0():
+        _print_and_dump_own_results(df, args)
+
+
+def _print_and_dump_own_results(df: pd.DataFrame, args: Args) -> None:
     print(f"{args.n_samples=}")
 
     total_runtimes = df.groupby(["name", "total[s]"], as_index=False).size()
