@@ -56,6 +56,7 @@ PROVIDER_COLORS: dict[str, str] = {
     "FMMS (Triton NoNoise)": "#ff7f0e",  # orange
     "PyTorch Compiled Sampling": "#7f7f7f",  # gray
     "Naive PyTorch Compiled": "#7f7f7f",  # gray (legacy CSV column name)
+    "Naive PyTorch Eager": "#bcbd22",  # olive
     "flashinfer:top_k_top_p_sampling_from_logits": "#1f77b4",  # muted blue
     "flashinfer:sampling_from_logits": "#aec7e8",  # light blue
 }
@@ -67,6 +68,7 @@ PROVIDER_MARKERS: dict[str, str] = {
     "FMMS (Triton NoNoise)": "^",
     "PyTorch Compiled Sampling": "s",
     "Naive PyTorch Compiled": "s",
+    "Naive PyTorch Eager": "P",
     "flashinfer:top_k_top_p_sampling_from_logits": "X",
     "flashinfer:sampling_from_logits": "v",
 }
@@ -78,6 +80,7 @@ PROVIDER_HATCHES: dict[str, str] = {
     "FMMS (Triton NoNoise)": "\\\\",
     "PyTorch Compiled Sampling": "///",
     "Naive PyTorch Compiled": "///",
+    "Naive PyTorch Eager": "\\\\",
     "flashinfer:top_k_top_p_sampling_from_logits": "xxx",
     "flashinfer:sampling_from_logits": "...",
 }

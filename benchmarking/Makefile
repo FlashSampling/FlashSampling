@@ -20,6 +20,7 @@ NSIGHT_RESULTS_DIR=profiles/nsight
 NCU_RESULTS_DIR=profiles/ncu
 NCU_TXT_DIR=profiles/ncu-txt
 CASE=small
+N_PROCS=1
 PROTON_RESULTS_DIR=profiles/proton
 
 speed-test-topp-topk:
@@ -149,13 +150,18 @@ parse-sweep-ncu:
 parse-sweep-proton:
 	$(PYTHON) parse_proton_intrakernel.py --dir $(PROTON_SWEEP_DIR) | tee $(PROTON_SWEEP_DIR)/summary.txt
 
+TRITON_BENCH_DIR=profiles/triton-bench/tp$(N_PROCS)
+
 triton-benchmark:
-	@if [ -d profiles/triton-bench/ ]; then rm -rf profiles/triton-bench/; fi
-	mkdir -p profiles/triton-bench
-	PYTHONUNBUFFERED=1 $(PYTHON) triton_benchmark.py --tgt_dir profiles/triton-bench/ --case $(CASE) 2>&1 | tee profiles/triton-bench/logs.txt
+	@if [ -d $(TRITON_BENCH_DIR) ]; then rm -rf $(TRITON_BENCH_DIR); fi
+	mkdir -p $(TRITON_BENCH_DIR)
+	PYTHONUNBUFFERED=1 $(PYTHON) triton_benchmark.py --tgt_dir $(TRITON_BENCH_DIR) --case $(CASE) --n_procs $(N_PROCS) $(if $(NAME),--name $(NAME)) 2>&1 | tee $(TRITON_BENCH_DIR)/logs.txt
 	$(PYTHON) plot-triton-bench.py
 	$(PYTHON) plot-triton-bench.py --fmt pdf
 	$(PYTHON) plot_bsz_sweep_runtime.py --fmt pdf
+
+distr-triton-benchmark:
+	$(MAKE) triton-benchmark N_PROCS=2 NAME=fused-triton,naive-pt,naive-compiled
 
 clean-triton-autotunes:
 	rm -rf ~/.triton/cache

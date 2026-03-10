@@ -59,6 +59,7 @@ provider_names = {
     # "fused-cuda": "FMMS (CUDA)",
     # "fused-triton-no-gumbel": "FMMS (Triton NoNoise)",
     # "helion": "FMMS (Helion)",  # autotuning too slow atm. It runs on every bsz change
+    "naive-pt": "Naive PyTorch Eager",
     "naive-compiled": "PyTorch Compiled Sampling",
     # "sequential-compiled": "Sequential PyTorch Compiled",
     # "naive-tl-matmul": "Naive Triton Matmul",
@@ -140,7 +141,47 @@ def _run_benchmark(
         return sampler.sample(**kwargs)
 
     quantiles = [0.1, 0.5, 0.9]
+    if tp.size > 1:
+        return _do_bench_fixed_iters(fn, quantiles=quantiles)
     return triton.testing.do_bench(fn, quantiles=quantiles)
+
+
+def _do_bench_fixed_iters(
+    fn, warmup_iters: int = 5, rep_iters: int = 25, quantiles: list[float] | None = None
+):
+    """Like triton.testing.do_bench but with fixed iteration counts.
+
+    triton.testing.do_bench calibrates iteration counts by wall-clock time,
+    so different distributed ranks can run different numbers of iterations,
+    causing collective mismatches (https://github.com/triton-lang/triton/issues/9683).
+    This version uses fixed counts instead.
+
+    Follows the same L2 cache flushing strategy as triton.testing.do_bench
+    (https://github.com/triton-lang/triton/blob/dacfe7ad8939/python/triton/testing.py#L152-L182):
+    a 256 MB buffer is zeroed before each timed iteration to evict stale L2
+    cache lines, ensuring consistent cold-cache measurements.
+    """
+    cache = torch.empty(256 * 1024 * 1024 // 4, dtype=torch.int, device="cuda")
+
+    for _ in range(warmup_iters):
+        fn()
+    torch.cuda.synchronize()
+
+    start_events = [torch.cuda.Event(enable_timing=True) for _ in range(rep_iters)]
+    end_events = [torch.cuda.Event(enable_timing=True) for _ in range(rep_iters)]
+    for i in range(rep_iters):
+        cache.zero_()
+        start_events[i].record()
+        fn()
+        end_events[i].record()
+    torch.cuda.synchronize()
+
+    times = [s.elapsed_time(e) for s, e in zip(start_events, end_events)]
+    if quantiles is not None:
+        import numpy as np
+
+        return [np.quantile(times, q) for q in quantiles]
+    return float(torch.tensor(times).median())
 
 
 def _resolve_cases(case: str) -> list[str]:

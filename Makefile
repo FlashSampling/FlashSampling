@@ -6,9 +6,12 @@ update-deps:
 	uv sync --all-extras  # Install exact versions from lockfile, including optional groups
 
 GPU := b200
-POSTFIX := 
-VOLUME_DIR_NAME := triton-bench-$(GPU)$(POSTFIX)
-TRITON_BENCH_DIR := benchmarking/modal-results/$(VOLUME_DIR_NAME)
+POSTFIX :=
+N_PROCS := 1
+CASE := all
+NAME :=
+BENCH_DIR := triton-bench-$(GPU)$(POSTFIX)/tp$(N_PROCS)
+RESULTS_DIR := benchmarking/modal-results/$(BENCH_DIR)
 
 modal-speed-test:
 	modal run -m src.fused_mm_sampling.modal_lib.modal_speed_test
@@ -16,21 +19,25 @@ modal-speed-test:
 modal-triton-benchmark: modal-create-results-triton-bench modal-get-results-triton-bench modal-plot-triton-bench
 
 modal-create-results-triton-bench:
-	mkdir -p $(TRITON_BENCH_DIR)
-	GPU=$(GPU) TGT_DIR="/vol-fused-mm-sample/$(VOLUME_DIR_NAME)" \
+	mkdir -p $(RESULTS_DIR)
+	GPU=$(GPU) TGT_DIR="/vol-fused-mm-sample/$(BENCH_DIR)" \
+	N_PROCS=$(N_PROCS) CASE=$(CASE) NAME=$(NAME) \
 	modal run \
 		-m src.fused_mm_sampling.modal_lib.modal_triton_benchmark \
-		> $(TRITON_BENCH_DIR)/logs.txt
+		> $(RESULTS_DIR)/logs.txt
 
 modal-plot-triton-bench:
-	python benchmarking/plot-triton-bench.py --tgt_dir $(TRITON_BENCH_DIR)
-	python benchmarking/plot-triton-bench.py --tgt_dir $(TRITON_BENCH_DIR) --fmt pdf --use_name_flashsampling=1
+	python benchmarking/plot-triton-bench.py --tgt_dir $(RESULTS_DIR)
+	python benchmarking/plot-triton-bench.py --tgt_dir $(RESULTS_DIR) --fmt pdf --use_name_flashsampling=1
 
 TRITON_BENCH_GPUS := b300 b200 h200 h100!
 
 modal-triton-benchmark-all-gpus:
 	$(foreach gpu,$(TRITON_BENCH_GPUS),\
 		$(MAKE) modal-triton-benchmark GPU=$(gpu) &&) true
+
+modal-distr-triton-benchmark:
+	$(MAKE) modal-triton-benchmark N_PROCS=2 NAME=fused-triton,naive-pt,naive-compiled
 
 DIAGRAM_SRC := imgs/baseline-vs-fmms-diagram.drawio
 DIAGRAM_PNG := imgs/baseline-vs-fmms-diagram.png
@@ -44,10 +51,14 @@ diagram:
 		--output $(DIAGRAM_FLASHSAMPLING_PDF) $(DIAGRAM_SRC).tmp
 	rm $(DIAGRAM_SRC).tmp
 
+TRITON_BENCH_TPS := 1 2
+
 plot-all:
 	$(foreach gpu,$(TRITON_BENCH_GPUS),\
-		python benchmarking/plot-triton-bench.py --tgt_dir benchmarking/modal-results/triton-bench-$(gpu) && \
-		python benchmarking/plot-triton-bench.py --tgt_dir benchmarking/modal-results/triton-bench-$(gpu) --fmt pdf --use_name_flashsampling=1 &&) true
+		$(foreach tp,$(TRITON_BENCH_TPS),\
+			$(if $(wildcard benchmarking/modal-results/triton-bench-$(gpu)/tp$(tp)/*.csv),\
+				python benchmarking/plot-triton-bench.py --tgt_dir benchmarking/modal-results/triton-bench-$(gpu)/tp$(tp) && \
+				python benchmarking/plot-triton-bench.py --tgt_dir benchmarking/modal-results/triton-bench-$(gpu)/tp$(tp) --fmt pdf --use_name_flashsampling=1 &&,)) ) true
 	$(MAKE) plot-vllm-bench
 
 plot-vllm-bench:
@@ -62,8 +73,8 @@ modal-get-results-speed-test:
 	cd benchmarking/modal-results/ && modal volume get fused-mm-sample speed-test
 
 modal-get-results-triton-bench:
-	mkdir -p benchmarking/modal-results/
-	cd benchmarking/modal-results/ && modal volume get fused-mm-sample $(VOLUME_DIR_NAME)
+	mkdir -p $(RESULTS_DIR)
+	modal volume get fused-mm-sample $(BENCH_DIR) $(dir $(RESULTS_DIR))
 
 modal-persistent-matmul:
 	GPU=$(GPU) \

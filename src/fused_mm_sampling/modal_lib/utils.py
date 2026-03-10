@@ -14,6 +14,7 @@ def make_image():
         "matplotlib",
         "nvtx",
         "llnl-hatchet",
+        "scipy",
     ]
     return img.uv_pip_install(deps)
 
