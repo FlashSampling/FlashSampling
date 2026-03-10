@@ -52,6 +52,9 @@ def _distributed_worker(rank: int, world_size: int, port: int, fn: Callable, arg
 
     torch.cuda.set_device(rank % torch.cuda.device_count())
     backend = "nccl" if torch.cuda.device_count() >= world_size else "gloo"
+    if rank == 0:
+        print(f"Using distributed backend: '{backend}'")
+
     dist.init_process_group(
         backend=backend,
         init_method=f"tcp://localhost:{port}",

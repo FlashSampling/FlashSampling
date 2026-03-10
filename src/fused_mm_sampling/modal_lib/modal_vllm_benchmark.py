@@ -8,7 +8,7 @@ from pathlib import Path
 
 import modal
 
-from .utils import make_app, make_volumes
+from .utils import make_app, make_volumes, set_volume_caches, volume_path
 
 _repo_root = Path(__file__).resolve().parents[3]
 _bench_params_dir = _repo_root / "benchmarking" / "vllm"
@@ -93,13 +93,8 @@ variants = os.getenv("VARIANTS", "")
     timeout=2 * 60 * 60,
 )
 def function(args: Args):
-    from .utils import volume_path
-
+    set_volume_caches()
     os.environ["HF_HOME"] = f"{volume_path}/hf-cache"
-    # Persist torch.compile and flashinfer caches on the Modal volume so they
-    # survive across runs. Without this, every run re-compiles graphs (~8 min)
-    # and re-downloads flashinfer cubins.
-    os.environ["XDG_CACHE_HOME"] = f"{volume_path}/cache"
 
     model_slug = args.model.split("/")[-1]
     is_quick = args.sweep == "quick"

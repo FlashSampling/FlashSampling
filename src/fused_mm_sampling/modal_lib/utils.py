@@ -1,3 +1,5 @@
+import os
+
 import modal
 
 
@@ -24,3 +26,9 @@ volume_path = "/vol-fused-mm-sample"
 
 def make_volumes():
     return {volume_path: modal.Volume.from_name("fused-mm-sample")}
+
+
+def set_volume_caches():
+    """Point XDG_CACHE_HOME to the Modal volume so caches (Triton, flashinfer,
+    torch.compile, etc.) persist across runs."""
+    os.environ["XDG_CACHE_HOME"] = f"{volume_path}/cache"

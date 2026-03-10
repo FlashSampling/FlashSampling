@@ -1,7 +1,7 @@
 import os
 
 from ..bench.triton_benchmark_lib import Args, run_triton_bechmark
-from .utils import make_app, make_image, make_volumes
+from .utils import make_app, make_image, make_volumes, set_volume_caches
 
 app = make_app()
 
@@ -16,6 +16,7 @@ gpu_spec = f"{gpu}:{n_procs}" if n_procs > 1 else gpu
 
 @app.function(gpu=gpu_spec, image=make_image(), volumes=make_volumes(), timeout=20 * 60)
 def function(args: Args):
+    set_volume_caches()
     run_triton_bechmark(args)
 
 

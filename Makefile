@@ -37,7 +37,7 @@ modal-triton-benchmark-all-gpus:
 		$(MAKE) modal-triton-benchmark GPU=$(gpu) &&) true
 
 modal-distr-triton-benchmark:
-	$(MAKE) modal-triton-benchmark N_PROCS=2 NAME=fused-triton,naive-pt,naive-compiled
+	$(MAKE) modal-triton-benchmark N_PROCS=2 NAME=fused-triton,naive-pt,naive-compiled,flashinfer:sampling_from_logits,flashinfer:top_k_top_p_sampling_from_logits
 
 DIAGRAM_SRC := imgs/baseline-vs-fmms-diagram.drawio
 DIAGRAM_PNG := imgs/baseline-vs-fmms-diagram.png
