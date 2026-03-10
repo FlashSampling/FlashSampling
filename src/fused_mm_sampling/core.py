@@ -1,11 +1,11 @@
 # import os
 
 # os.environ["TRITON_INTERPRET"] = "1"
+import functools
 import math
 import os
 from dataclasses import dataclass
 from functools import lru_cache
-from logging import getLogger
 from typing import Callable, NamedTuple, Protocol
 
 import flashinfer
@@ -18,8 +18,6 @@ import triton.profiler.language as pl
 
 from .tl_matmul import matmul
 from .tp_info import TP1, TPInfo
-
-logger = getLogger(__name__)
 
 
 @nvtx.annotate()
@@ -122,7 +120,19 @@ def apply_top_k_top_p_qitra(
     return logits.softmax(dim=-1)
 
 
-sample_compiled = torch.compile(sample)
+sample_compiled_fullgraph = torch.compile(sample, fullgraph=True)
+sample_compiled_with_breaks = torch.compile(sample)
+
+
+@functools.wraps(sample)
+def sample_compiled(*args, tp: TPInfo, **kwargs):
+    if tp.size > 1:
+        if tp.is_rank0():
+            print_once("Using sample_compiled_with_breaks")
+        return sample_compiled_with_breaks(*args, **kwargs)
+    if tp.is_rank0():
+        print_once("Using sample_compiled_fullgraph")
+    return sample_compiled_fullgraph(*args, **kwargs)
 
 
 @nvtx.annotate()

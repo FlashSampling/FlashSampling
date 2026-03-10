@@ -12,6 +12,7 @@ import torch.distributed as dist
 import torch.multiprocessing as mp
 import triton
 import triton.profiler as proton
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 from ..core import fused_mm_sample_triton_kernel, get_gpu_name, get_sampler, sample
@@ -40,6 +41,17 @@ class Args(BaseSettings):
     top_k: int | None = None
     top_p: float | None = None
     n_procs: int = 1
+
+    @model_validator(mode="after")
+    def _validate_distributed_bench_fn(self) -> "Args":
+        if self.n_procs > 1 and self.bench_fn == "nvbench":
+            raise ValueError(
+                "Distributed benchmarking is not supported with --bench_fn=nvbench. "
+                "nvbench controls iteration counts internally, which causes collective op "
+                "deadlocks when ranks run different numbers of iterations. "
+                "Use --bench_fn=own or --bench_fn=fi-cupti instead."
+            )
+        return self
 
     def make_tp(self) -> TPInfo:
         if self.n_procs > 1:
@@ -300,11 +312,19 @@ def run_cupti(args: Args) -> None:
         torch.cuda.synchronize()
 
         tp.rank0_print(f"Benchmarking {provider}...")
-        times_ms = bench_gpu_time(
+        bench_kwargs = dict(
             fn=lambda s=sampler: s.sample(**kwargs),
             cold_l2_cache=True,
             enable_cupti=True,
         )
+        if args.n_procs > 1:
+            print("Reading bench iteration counts from Args")
+            bench_kwargs["dry_run_iters"] = args.n_runs_warmup
+            bench_kwargs["repeat_iters"] = args.n_runs_benchmark
+        else:
+            print("Using adaptive bench iteration counts")
+
+        times_ms = bench_gpu_time(**bench_kwargs)
         times_md = pd.Series(times_ms)
         rows.append(
             {
