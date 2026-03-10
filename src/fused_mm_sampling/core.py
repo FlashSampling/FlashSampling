@@ -667,8 +667,7 @@ def flashinfer_create_logits_and_indices(
     batch_size = hidden_states.shape[0]
     assert weights.shape[1] == hidden_states.shape[1], "weights must transposed"
     logits = hidden_states @ weights.T  # [batch_size, vocab]
-    # TODO: Is this call to .contiguous() necessary?
-    logits = (logits / temperature).contiguous()
+    logits /= temperature
     indices = torch.repeat_interleave(
         torch.arange(batch_size, device=device, dtype=torch.int32), num_samples
     )
