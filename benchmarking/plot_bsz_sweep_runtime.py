@@ -1,4 +1,4 @@
-"""Stacked bar chart: matmul vs sampling time for FlashSampling, Naive, and FI-sample.
+"""Stacked bar chart: matmul vs sampling time for FMMS, Naive, and FI-sample.
 
 Combines NCU sweep data (inter-kernel breakdown) with Proton sweep data
 (intra-kernel breakdown for FlashSampling) to produce a stacked bar chart
@@ -12,7 +12,6 @@ Usage:
 
 import argparse
 import csv
-import importlib
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -20,12 +19,7 @@ import pandas as pd
 import seaborn as sns
 from parse_ncu_sweep import parse_method
 from parse_proton_intrakernel import parse_chrome_trace, trace_phase_pcts
-
-# plot-triton-bench.py has hyphens, so use importlib to import it.
-_ptb = importlib.import_module("plot-triton-bench")
-PROVIDER_COLORS = _ptb.PROVIDER_COLORS
-PROVIDER_HATCHES = _ptb.PROVIDER_HATCHES
-PROVIDER_MARKERS = _ptb.PROVIDER_MARKERS
+from plot_styles import PROVIDER_COLORS, PROVIDER_HATCHES, PROVIDER_MARKERS
 
 SWEEPS = Path("profiles/sweeps/bsz")
 DEFAULT_NCU_DIR = SWEEPS / "ncu-txt" / "case-small"
@@ -35,7 +29,7 @@ DEFAULT_OUT_DIR = SWEEPS
 # Methods: (NCU filename, internal key, is_fmms)
 METHODS = [
     ("fused-triton.txt", "FMMS (Triton)", True),
-    ("naive-compiled.txt", "PyTorch Compiled Sampling", False),
+    ("naive-compiled.txt", "Multinomial Sampling (Compiled)", False),
     ("flashinfer-sampling.txt", "flashinfer:sampling_from_logits", False),
 ]
 
@@ -148,7 +142,7 @@ def plot(
         ax.set_xticks(ax.get_xticks(), labels=df["bsz"].unique().astype(int))
     else:
         for method in methods:
-            mdf = df[df["method"] == method]
+            mdf = df.query("method == @method")
             ax.plot(
                 mdf["bsz"],
                 mdf[y_col],

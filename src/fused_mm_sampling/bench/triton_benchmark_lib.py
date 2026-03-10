@@ -221,5 +221,5 @@ def _run_triton_benchmark_impl(args: Args):
         tp.rank0_print()
 
         benchmark = create_benchmark(args, case)
-        benchmark.run(print_data=True, save_path=directory)
+        benchmark.run(print_data=tp.is_rank0(), save_path=directory if tp.is_rank0() else None)
         tp.rank0_print()

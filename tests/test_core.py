@@ -123,7 +123,13 @@ def test_sampling_distribution_tp2() -> None:
 
 def _run_distributed_testcases() -> None:
     tp = TPInfo.from_world()
-    providers = ["fused-triton", "naive-pt", "naive-compiled"]
+    providers = [
+        "fused-triton",
+        "naive-pt",
+        "naive-compiled",
+        "flashinfer:sampling_from_logits",
+        "flashinfer:top_k_top_p_sampling_from_logits",
+    ]
     vocab_sizes = [100, 200, 256]
     n_hidden_states_list = [1, 2]
     combinations = product(providers, vocab_sizes, n_hidden_states_list)

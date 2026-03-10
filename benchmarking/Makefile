@@ -156,12 +156,12 @@ triton-benchmark:
 	@if [ -d $(TRITON_BENCH_DIR) ]; then rm -rf $(TRITON_BENCH_DIR); fi
 	mkdir -p $(TRITON_BENCH_DIR)
 	PYTHONUNBUFFERED=1 $(PYTHON) triton_benchmark.py --tgt_dir $(TRITON_BENCH_DIR) --case $(CASE) --n_procs $(N_PROCS) $(if $(NAME),--name $(NAME)) 2>&1 | tee $(TRITON_BENCH_DIR)/logs.txt
-	$(PYTHON) plot-triton-bench.py
-	$(PYTHON) plot-triton-bench.py --fmt pdf
+	$(PYTHON) plot-triton-bench.py --tgt_dir $(TRITON_BENCH_DIR)
+	$(PYTHON) plot-triton-bench.py --tgt_dir $(TRITON_BENCH_DIR) --fmt pdf
 	$(PYTHON) plot_bsz_sweep_runtime.py --fmt pdf
 
 distr-triton-benchmark:
-	$(MAKE) triton-benchmark N_PROCS=2 NAME=fused-triton,naive-pt,naive-compiled
+	$(MAKE) triton-benchmark N_PROCS=2 NAME=fused-triton,naive-pt,naive-compiled,flashinfer:sampling_from_logits,flashinfer:top_k_top_p_sampling_from_logits
 
 clean-triton-autotunes:
 	rm -rf ~/.triton/cache

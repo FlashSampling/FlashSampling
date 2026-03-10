@@ -637,12 +637,15 @@ def flashinfer_top_k_top_p_sampling_from_logits(
     temperature: torch.Tensor,  # scalar (0-d)
     top_p: float,
     top_k: int,
+    tp: "TPInfo" = TP1,
     **_kwargs,
 ) -> torch.Tensor:
     batch_size = hidden_states.shape[0]
     logits, indices = flashinfer_create_logits_and_indices(
         weights, hidden_states, num_samples, temperature
     )
+    if tp.size > 1:
+        logits = _allgather_logits(logits)
     result = flashinfer.sampling.top_k_top_p_sampling_from_logits(
         logits=logits,
         top_k=top_k,
@@ -664,6 +667,7 @@ def flashinfer_create_logits_and_indices(
     batch_size = hidden_states.shape[0]
     assert weights.shape[1] == hidden_states.shape[1], "weights must transposed"
     logits = hidden_states @ weights.T  # [batch_size, vocab]
+    # TODO: Is this call to .contiguous() necessary?
     logits = (logits / temperature).contiguous()
     indices = torch.repeat_interleave(
         torch.arange(batch_size, device=device, dtype=torch.int32), num_samples
@@ -673,16 +677,19 @@ def flashinfer_create_logits_and_indices(
 
 @nvtx.annotate()
 def flashinfer_sampling_from_logits(
-    weights: torch.Tensor,  # [D, V]
+    weights: torch.Tensor,  # [V, D]
     hidden_states: torch.Tensor,  # [n_hidden_states, D]
     num_samples: int,
     temperature: torch.Tensor,  # scalar (0-d)
+    tp: "TPInfo" = TP1,
     **_kwargs,
 ) -> torch.Tensor:
     batch_size = hidden_states.shape[0]
     logits, indices = flashinfer_create_logits_and_indices(
         weights, hidden_states, num_samples, temperature
     )
+    if tp.size > 1:
+        logits = _allgather_logits(logits)
     result = flashinfer.sampling.sampling_from_logits(logits=logits, indices=indices)
     return result.reshape(batch_size, num_samples)
 
