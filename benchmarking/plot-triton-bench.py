@@ -54,9 +54,8 @@ PROVIDER_COLORS: dict[str, str] = {
     "FMMS (Triton)": "#d62728",  # bold red
     "FMMS (Helion)": "#e45756",  # lighter red
     "FMMS (Triton NoNoise)": "#ff7f0e",  # orange
-    "PyTorch Compiled Sampling": "#7f7f7f",  # gray
-    "Naive PyTorch Compiled": "#7f7f7f",  # gray (legacy CSV column name)
-    "Naive PyTorch Eager": "#bcbd22",  # olive
+    "Multinomial Sampling (Compiled)": "#7f7f7f",  # gray
+    "Multinomial Sampling (Eager)": "#bcbd22",  # olive
     "flashinfer:top_k_top_p_sampling_from_logits": "#1f77b4",  # muted blue
     "flashinfer:sampling_from_logits": "#aec7e8",  # light blue
 }
@@ -66,9 +65,8 @@ PROVIDER_MARKERS: dict[str, str] = {
     "FMMS (Triton)": "o",
     "FMMS (Helion)": "D",
     "FMMS (Triton NoNoise)": "^",
-    "PyTorch Compiled Sampling": "s",
-    "Naive PyTorch Compiled": "s",
-    "Naive PyTorch Eager": "P",
+    "Multinomial Sampling (Compiled)": "s",
+    "Multinomial Sampling (Eager)": "P",
     "flashinfer:top_k_top_p_sampling_from_logits": "X",
     "flashinfer:sampling_from_logits": "v",
 }
@@ -78,9 +76,8 @@ PROVIDER_HATCHES: dict[str, str] = {
     "FMMS (Triton)": "",
     "FMMS (Helion)": "//",
     "FMMS (Triton NoNoise)": "\\\\",
-    "PyTorch Compiled Sampling": "///",
-    "Naive PyTorch Compiled": "///",
-    "Naive PyTorch Eager": "\\\\",
+    "Multinomial Sampling (Compiled)": "///",
+    "Multinomial Sampling (Eager)": "\\\\",
     "flashinfer:top_k_top_p_sampling_from_logits": "xxx",
     "flashinfer:sampling_from_logits": "...",
 }
@@ -506,7 +503,7 @@ def create_and_triton_bench_plots(
         FMMS = "FMMS (Triton)"  # noqa: N806
         if use_name_flashsampling:
             FMMS = FLASHSAMPLING_RENAMES[FMMS]  # noqa: N806
-        NAIVE = "PyTorch Compiled Sampling"  # noqa: N806
+        NAIVE = "Multinomial Sampling (Compiled)"  # noqa: N806
         FI_SAMPLE = "flashinfer:sampling_from_logits"  # noqa: N806
         FI_TOPK = "flashinfer:top_k_top_p_sampling_from_logits"  # noqa: N806
 

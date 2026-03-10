@@ -59,8 +59,8 @@ provider_names = {
     # "fused-cuda": "FMMS (CUDA)",
     # "fused-triton-no-gumbel": "FMMS (Triton NoNoise)",
     # "helion": "FMMS (Helion)",  # autotuning too slow atm. It runs on every bsz change
-    "naive-pt": "Naive PyTorch Eager",
-    "naive-compiled": "PyTorch Compiled Sampling",
+    "naive-pt": "Multinomial Sampling (Eager)",
+    "naive-compiled": "Multinomial Sampling (Compiled)",
     # "sequential-compiled": "Sequential PyTorch Compiled",
     # "naive-tl-matmul": "Naive Triton Matmul",
     # "jl-compiled": "JL Compiled",
