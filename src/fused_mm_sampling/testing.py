@@ -6,7 +6,8 @@ import numpy as np
 import torch
 from scipy.stats import chisquare
 
-from .core import TPInfo, get_sampler
+from .core import get_sampler
+from .tp_info import TP1, TPInfo
 
 
 @dataclass
@@ -27,7 +28,7 @@ def make_synthetic_inputs(
     hidden_size: int = 10,
     n_hidden_states: int = 2,
     device: torch.device = torch.device("cuda"),
-    tp: TPInfo | None = None,
+    tp: TPInfo = TP1,
 ) -> SyntheticInputs:
     """Build weights and hidden_states that produce known logits.
 
@@ -58,8 +59,7 @@ def make_synthetic_inputs(
         offset=float(vocab_size),
     )
 
-    if tp is not None:
-        weights_bf16 = _shard_weights(weights_bf16, tp)
+    weights_bf16 = shard_weights(weights_bf16, tp)
 
     return SyntheticInputs(
         weights=weights_bf16,
@@ -70,8 +70,10 @@ def make_synthetic_inputs(
     )
 
 
-def _shard_weights(weights: torch.Tensor, tp: TPInfo) -> torch.Tensor:
+def shard_weights(weights: torch.Tensor, tp: TPInfo) -> torch.Tensor:
     """Shard weights along vocab dim (same as vLLM's VocabParallelEmbedding.weight_loader)."""
+    if tp.size == 1:
+        return weights  # early return for single-GPU case
     shard_size = weights.shape[0] // tp.size
     start_idx = tp.rank * shard_size
     shard = weights.narrow(0, start_idx, shard_size)
@@ -85,7 +87,7 @@ def assert_sampling_distribution(
     n_hidden_states: int,
     num_samples: int = 10_000,
     temperature_val: float = 5.0,
-    tp: TPInfo | None = None,
+    tp: TPInfo = TP1,
 ) -> None:
     """Verify that a sampler produces the correct distribution.
 
@@ -103,13 +105,13 @@ def assert_sampling_distribution(
     )
     sampler = get_sampler(provider, weights=inputs.weights)
     sampler.prepare()
-    tp_kwargs = dict(tp=tp, seed=tp.rank * 1_000_000) if tp else {}
     samples = sampler.sample(
         weights=inputs.weights,
         hidden_states=inputs.hidden_states,
         num_samples=num_samples,
         temperature=temperature,
-        **tp_kwargs,
+        tp=tp,
+        seed=tp.rank * 1_000_000,
     )
 
     for seq_idx in range(inputs.logits.shape[0]):

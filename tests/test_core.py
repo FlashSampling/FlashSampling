@@ -13,8 +13,9 @@ import torch.multiprocessing as mp
 from scipy.stats import chisquare
 
 from fused_mm_sampling.bench.speed_test import Args, run_speed_test
-from fused_mm_sampling.core import JLSampler, TPInfo, bsz_h, get_sampler
+from fused_mm_sampling.core import JLSampler, bsz_h, get_sampler
 from fused_mm_sampling.testing import assert_sampling_distribution, make_synthetic_inputs
+from fused_mm_sampling.tp_info import TPInfo
 
 device = torch.device("cuda")
 
@@ -116,7 +117,8 @@ def test_sampling_distribution(provider, vocab_size, n_hidden_states):
 
 
 @pytest.mark.skipif(
-    not os.environ.get("FMMS_TEST_DISTRIBUTED"), reason="Set FMMS_TEST_DISTRIBUTED=1 to run"
+    not os.environ.get("FMMS_TEST_DISTRIBUTED"),
+    reason="Set FMMS_TEST_DISTRIBUTED=1 to run",
 )
 def test_sampling_distribution_tp2() -> None:
     mp.spawn(
@@ -131,8 +133,15 @@ def _tp_assert_sampling_distribution(rank: int, world_size: int, port: int) -> N
     dist.init_process_group(
         backend="gloo", init_method=f"tcp://localhost:{port}", rank=rank, world_size=world_size
     )
-    tp = TPInfo.from_group(dist.group.WORLD)
-    providers = ["fused-triton", "naive-pt"]
+    try:
+        _run_distributed_testcases()
+    finally:
+        dist.destroy_process_group()
+
+
+def _run_distributed_testcases() -> None:
+    tp = TPInfo.from_world()
+    providers = ["fused-triton", "naive-pt", "naive-compiled"]
     vocab_sizes = [100, 200, 256]
     n_hidden_states_list = [1, 2]
     combinations = product(providers, vocab_sizes, n_hidden_states_list)
@@ -141,7 +150,6 @@ def _tp_assert_sampling_distribution(rank: int, world_size: int, port: int) -> N
         if tp.rank == 0:
             msg = f"✅ Passed: {provider} vocab_size={vocab_size} n_hidden_states={n_hidden_states}"
             print(msg)
-    dist.destroy_process_group()
 
 
 def _find_free_port() -> int:

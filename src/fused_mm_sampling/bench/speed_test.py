@@ -1,4 +1,5 @@
 import os
+import socket
 import timeit
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,11 +8,15 @@ from typing import Literal
 import cuda.bench as nvbench
 import pandas as pd
 import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
 import triton
 import triton.profiler as proton
 from pydantic_settings import BaseSettings
 
 from ..core import fused_mm_sample_triton_kernel, get_gpu_name, get_sampler, sample
+from ..testing import shard_weights
+from ..tp_info import TP1, TPInfo
 from .triton_benchmark import BENCHMARK_CASES
 
 device = torch.device("cuda")
@@ -34,6 +39,12 @@ class Args(BaseSettings):
     bench_fn: Literal["own", "nvbench", "fi-cupti"] = "fi-cupti"
     top_k: int | None = None
     top_p: float | None = None
+    n_procs: int = 1
+
+    def make_tp(self) -> TPInfo:
+        if self.n_procs > 1:
+            return TPInfo.from_world()
+        return TP1
 
     def as_case(self, name: str) -> "Case":
         assert self.n_runs_warmup is not None
@@ -55,6 +66,7 @@ class Args(BaseSettings):
             hidden_size=case_config["hidden_size"],
             top_k=self.top_k,
             top_p=self.top_p,
+            tp=self.make_tp(),
         )
 
     def providers(self) -> list[str]:
@@ -84,18 +96,22 @@ class Case:
     hidden_size: int
     top_k: int | None = None
     top_p: float | None = None
+    tp: TPInfo = TP1
 
     def make_fn_kwargs(self) -> dict:
         """This function can be slow because it allocates tensors."""
+        weights = torch.randn(
+            (self.vocab_size, self.hidden_size), dtype=torch.bfloat16, device=device
+        )
+        weights = shard_weights(weights, self.tp)
         kwargs = dict(
             hidden_states=torch.randn(
                 (self.n_hidden_states, self.hidden_size), dtype=torch.bfloat16, device=device
             ),
-            weights=torch.randn(
-                (self.vocab_size, self.hidden_size), dtype=torch.bfloat16, device=device
-            ),
+            weights=weights,
             num_samples=self.n_samples,
             temperature=torch.tensor(1.0, device=device),
+            tp=self.tp,
         )
         if self.top_k is not None:
             kwargs["top_k"] = self.top_k
@@ -153,8 +169,8 @@ def clear_l2_cache(cache):
 
 def benchmark(case: Case) -> pd.DataFrame:
     """Inspired by triton.testing.do_bench"""
-    print("=" * 80)
-    print(f"Benchmarking {case.name}...")
+    case.tp.rank0_print("=" * 80)
+    case.tp.rank0_print(f"Benchmarking {case.name}...")
     kwargs = case.make_fn_kwargs()
     sampler = get_sampler(case.name, weights=kwargs["weights"])
     sampler.prepare()
@@ -179,13 +195,13 @@ def benchmark(case: Case) -> pd.DataFrame:
     end_events = [di.Event(enable_timing=True) for _ in range(case.n_runs_benchmark)]
 
     if case.n_runs_warmup > 0:
-        print("Warming up...")
+        case.tp.rank0_print("Warming up...")
         with proton.scope("warmup"):
             for _ in range(case.n_runs_warmup):
                 clear_l2_cache(cache)
                 fn()
 
-    print("Timing...")
+    case.tp.rank0_print("Timing...")
     with proton.scope("timing"):
         for _, start_event, end_event in zip(
             range(case.n_runs_benchmark), start_events, end_events
@@ -271,6 +287,7 @@ def run_cupti(args: Args) -> None:
     """Run benchmarks using FlashInfer's CUPTI-based bench_gpu_time."""
     from flashinfer.testing import bench_gpu_time
 
+    tp = args.make_tp()
     rows = []
     for provider in args.providers():
         case = args.as_case(name=provider)
@@ -282,7 +299,7 @@ def run_cupti(args: Args) -> None:
         sampler.sample(**kwargs)
         torch.cuda.synchronize()
 
-        print(f"Benchmarking {provider}...")
+        tp.rank0_print(f"Benchmarking {provider}...")
         times_ms = bench_gpu_time(
             fn=lambda s=sampler: s.sample(**kwargs),
             cold_l2_cache=True,
@@ -299,6 +316,8 @@ def run_cupti(args: Args) -> None:
             }
         )
 
+    if not tp.is_rank0():
+        return
     df = pd.DataFrame(rows).sort_values("median_ms")
     print()
     print(df.round(3))
@@ -311,8 +330,11 @@ def run_cupti(args: Args) -> None:
 
 
 def run_own_benchmark(args: Args) -> None:
+    tp = args.make_tp()
     cases: list[Case] = args.all_cases()
     df = benchmark_all(cases)
+    if not tp.is_rank0():
+        return
     print(f"{args.n_samples=}")
 
     total_runtimes = df.groupby(["name", "total[s]"], as_index=False).size()
@@ -330,15 +352,29 @@ def run_own_benchmark(args: Args) -> None:
 
 def run_speed_test(args: Args) -> None:
     """Run a speed test for a given set of arguments."""
-    print("GPU:", get_gpu_name())
-    print("Arguments:", args.model_dump_json())
+    if args.n_procs > 1:
+        mp.spawn(
+            _distributed_worker,
+            args=(args.n_procs, _find_free_port(), args),
+            nprocs=args.n_procs,
+            join=True,
+        )
+        return
+    _run_speed_test_impl(args)
+
+
+def _run_speed_test_impl(args: Args) -> None:
+    tp = args.make_tp()
     case_config = BENCHMARK_CASES[args.case]
-    print(f"Benchmark case: {args.case}")
-    print(f"  vocab_size: {case_config['vocab_size']}")
-    print(f"  hidden_size: {case_config['hidden_size']}")
-    print(f"  n_hidden_states: {args.n_hidden_states}")
-    print(f"  n_samples: {args.n_samples}")
-    print()
+    tp.rank0_print("GPU:", get_gpu_name())
+    tp.rank0_print("Arguments:", args.model_dump_json())
+    tp.rank0_print(f"Benchmark case: {args.case}")
+    tp.rank0_print(f"  vocab_size: {case_config['vocab_size']}")
+    tp.rank0_print(f"  hidden_size: {case_config['hidden_size']}")
+    tp.rank0_print(f"  n_hidden_states: {args.n_hidden_states}")
+    tp.rank0_print(f"  n_samples: {args.n_samples}")
+    tp.rank0_print(f"  n_procs: {args.n_procs}")
+    tp.rank0_print()
 
     match args.bench_fn:
         case "nvbench":
@@ -349,3 +385,22 @@ def run_speed_test(args: Args) -> None:
             return run_own_benchmark(args)
         case _:
             raise ValueError("Unknown bench_fn: {args.bench_fn!r}")
+
+
+def _distributed_worker(rank: int, world_size: int, port: int, args: Args) -> None:
+    torch.cuda.set_device(rank % torch.cuda.device_count())
+    backend = "nccl" if torch.cuda.device_count() >= world_size else "gloo"
+    dist.init_process_group(
+        backend=backend,
+        init_method=f"tcp://localhost:{port}",
+        rank=rank,
+        world_size=world_size,
+    )
+    _run_speed_test_impl(args)
+    dist.destroy_process_group()
+
+
+def _find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]

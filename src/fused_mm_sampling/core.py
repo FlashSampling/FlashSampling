@@ -11,11 +11,13 @@ from typing import Callable, NamedTuple, Protocol
 import flashinfer
 import nvtx
 import torch
+import torch.distributed as dist
 import triton
 import triton.language as tl
 import triton.profiler.language as pl
 
 from .tl_matmul import matmul
+from .tp_info import TP1, TPInfo
 
 logger = getLogger(__name__)
 
@@ -32,7 +34,7 @@ def sample(
     top_k: int | None = None,
     top_p: float | None = None,
     use_qitra: bool = False,
-    tp: "TPInfo | None" = None,
+    tp: "TPInfo" = TP1,
 ):
     if seed is not None:
         torch.manual_seed(seed)
@@ -40,8 +42,8 @@ def sample(
         logits = matmul(hidden_states, weights)  # [n_hidden_states, V]
     else:
         logits = hidden_states @ weights.T  # [n_hidden_states, V]
-    if tp is not None:
-        logits = _allgather_logits(logits, tp)  # shape [H, V_local] -> [H, V]
+    if tp.size > 1:
+        logits = _allgather_logits(logits)  # shape [H, V_local] -> [H, V]
     # Upcast to float32: torch.multinomial produces incorrect distributions with bfloat16.
     # If we remove the cast, the correctness test fails (a chi-squared test).
     logits = logits.float() / temperature
@@ -55,13 +57,14 @@ def sample(
     return samples
 
 
+@torch.compiler.disable
 def _allgather_logits(
     logits: torch.Tensor,  # [H, V_local]
-    tp: "TPInfo",
 ) -> torch.Tensor:
     """All-gather local logits along the vocab dimension to reconstruct [H, V_global]."""
-    all_logits = [torch.empty_like(logits) for _ in range(tp.size)]
-    torch.distributed.all_gather(all_logits, logits, group=tp.group)
+    tp_size = dist.get_world_size()
+    all_logits = [torch.empty_like(logits) for _ in range(tp_size)]
+    dist.all_gather(all_logits, logits)
     return torch.cat(all_logits, dim=1)  # [H, V_global]
 
 
@@ -174,7 +177,7 @@ def fused_mm_sample_triton(
     temperature: torch.Tensor,  # scalar (0-d)
     seed: int,
     GUMBEL: bool = True,  # noqa: N803
-    tp: "TPInfo | None" = None,
+    tp: "TPInfo" = TP1,
 ):
     V, D = weights.shape  # noqa: N806
     H, D2 = hidden_states.shape  # noqa: N806
@@ -219,12 +222,12 @@ def fused_mm_sample_triton(
     assert grid_size["v"] is not None
 
     # Stage 2: local reduction across V-tiles on this rank.
-    vocab_start_index = tp.rank * V if tp else 0
+    vocab_start_index = tp.rank * V
     samples, max_values = _local_reduce(maxs, maxs_idx, vocab_start_index)
 
     # Stage 3: cross-rank reduction via Gumbel-max decomposition
-    if tp is not None:
-        samples = _tensor_parallel_reduce(samples, max_values, tp.group)
+    if tp.size > 1:
+        samples = _tensor_parallel_reduce(samples, max_values)
 
     return samples  # [n_hidden_states, num_samples]
 
@@ -246,34 +249,18 @@ def _local_reduce(
 def _tensor_parallel_reduce(
     samples: torch.Tensor,  # [H, num_samples]
     max_values: torch.Tensor,  # [H, num_samples]
-    tp_group: torch.distributed.ProcessGroup,
 ) -> torch.Tensor:
     """All-gather local Gumbel maxes across TP ranks and pick the global winner."""
-    world_size = tp_group.size()
-    all_max_values = [torch.empty_like(max_values) for _ in range(world_size)]
-    all_samples = [torch.empty_like(samples) for _ in range(world_size)]
-    torch.distributed.all_gather(all_max_values, max_values, group=tp_group)
-    torch.distributed.all_gather(all_samples, samples, group=tp_group)
+    tp_size = dist.get_world_size()
+    all_max_values = [torch.empty_like(max_values) for _ in range(tp_size)]
+    all_samples = [torch.empty_like(samples) for _ in range(tp_size)]
+    dist.all_gather(all_max_values, max_values)
+    dist.all_gather(all_samples, samples)
 
     stacked_values = torch.stack(all_max_values)  # [world_size, H, num_samples]
     stacked_samples = torch.stack(all_samples)  # [world_size, H, num_samples]
     winner_rank = stacked_values.argmax(dim=0)  # [H, num_samples]
     return stacked_samples.gather(0, winner_rank.unsqueeze(0)).squeeze(0)
-
-
-@dataclass
-class TPInfo:
-    """Tensor parallel context."""
-
-    rank: int
-    size: int
-    group: torch.distributed.ProcessGroup
-
-    @classmethod
-    def from_group(cls, group: torch.distributed.ProcessGroup) -> "TPInfo":
-        import torch.distributed as dist
-
-        return cls(rank=dist.get_rank(group), size=dist.get_world_size(group), group=group)
 
 
 def clip(low, high, x):
