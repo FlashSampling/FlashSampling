@@ -259,18 +259,24 @@ def _local_reduce(
 def _tensor_parallel_reduce(
     samples: torch.Tensor,  # [H, num_samples]
     max_values: torch.Tensor,  # [H, num_samples]
-) -> torch.Tensor:
+) -> torch.Tensor:  # [H, num_samples]
     """All-gather local Gumbel maxes across TP ranks and pick the global winner."""
     tp_size = dist.get_world_size()
     all_max_values = [torch.empty_like(max_values) for _ in range(tp_size)]
     all_samples = [torch.empty_like(samples) for _ in range(tp_size)]
     dist.all_gather(all_max_values, max_values)
     dist.all_gather(all_samples, samples)
+    samples = _stack_and_select_winner(all_max_values, all_samples)
+    return samples  # [H, num_samples]
 
+
+@torch.compile(fullgraph=True)
+def _stack_and_select_winner(all_max_values, all_samples) -> torch.Tensor:  # [H, num_samples]
     stacked_values = torch.stack(all_max_values)  # [world_size, H, num_samples]
     stacked_samples = torch.stack(all_samples)  # [world_size, H, num_samples]
     winner_rank = stacked_values.argmax(dim=0)  # [H, num_samples]
-    return stacked_samples.gather(0, winner_rank.unsqueeze(0)).squeeze(0)
+    samples = stacked_samples.gather(0, winner_rank.unsqueeze(0)).squeeze(0)
+    return samples  # [H, num_samples]
 
 
 def clip(low, high, x):

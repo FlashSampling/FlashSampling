@@ -17,8 +17,8 @@ N_RUNS_BENCHMARK=1
 # Can be set to 'sudo' or to nothing
 SUDO=
 NSIGHT_RESULTS_DIR=profiles/nsight
-NCU_RESULTS_DIR=profiles/ncu
-NCU_TXT_DIR=profiles/ncu-txt
+NCU_RESULTS_DIR=profiles/ncu/tp$(N_PROCS)
+NCU_TXT_DIR=profiles/ncu-txt/tp$(N_PROCS)
 CASE=small
 N_PROCS=1
 PROTON_RESULTS_DIR=profiles/proton
@@ -87,10 +87,13 @@ NAME :=
 ncu-export:
 	@test -n "$(NAME)" || (echo "Usage: make ncu-export NAME=fused-cutlass-evt"; exit 1)
 	mkdir -p $(NCU_TXT_DIR)
+	$(if $(filter-out 1,$(N_PROCS)),echo quit | sudo nvidia-cuda-mps-control 2>/dev/null || true)
 	$(SUDO) $(NCU) --set full \
 		--nvtx \
 		--nvtx-include "kernel/" \
-		$(PYTHON) ./speed_test.py --name $(NAME) --n_hidden_states $(N_HIDDEN_STATES) --n_runs_benchmark $(N_RUNS_BENCHMARK) --bench_fn=own --case=$(CASE) > $(NCU_TXT_DIR)/$(NAME).txt
+		--target-processes all \
+		$(PYTHON) ./speed_test.py --name $(NAME) --n_hidden_states $(N_HIDDEN_STATES) --n_runs_benchmark $(N_RUNS_BENCHMARK) --bench_fn=own --case=$(CASE) --n_procs=$(N_PROCS) > $(NCU_TXT_DIR)/$(NAME).txt
+	$(if $(filter-out 1,$(N_PROCS)),sudo nvidia-cuda-mps-control -d 2>/dev/null || true)
 
 ncu-export-fused-triton:
 	$(MAKE) ncu-export NAME=fused-triton
