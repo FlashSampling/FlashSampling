@@ -329,6 +329,19 @@ Two Modal workspaces are configured. Switch with `modal profile activate <name>`
 
 Check the active profile with `modal profile list` (the `•` marker shows the active one). When downloading results with `make modal-get-results-*`, ensure the correct profile is active or the volume lookup will fail silently (no matching directory).
 
+### Modal volume management
+
+The `fused-mm-sample` volume stores benchmark results, model caches, and torch.compile caches. Useful commands:
+
+```bash
+modal volume ls fused-mm-sample                     # list root
+modal volume ls fused-mm-sample triton-bench-b200   # list subdirectory
+modal volume rm fused-mm-sample <path> -r           # delete recursively
+modal volume get fused-mm-sample <path> <local_dir> # download to local
+```
+
+**Paths with special characters** (e.g. `triton-bench-h100!`): use double quotes around the path argument to prevent shell expansion.
+
 ## Modal benchmarking (triton-bench)
 
 Kernel microbenchmarks run on Modal cloud GPUs. The root `Makefile` has a three-step pipeline:
