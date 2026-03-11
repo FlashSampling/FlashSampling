@@ -176,7 +176,7 @@ def benchmark(case: Case) -> pd.DataFrame:
 
     di = triton.runtime.driver.active.get_device_interface()
 
-    if case.use_proton:
+    if case.use_proton and case.tp.is_rank0():
         setup_proton(case.proton_mode)
 
     # 2026-03-01 Tomas: Not sure we need this separately from the warmup.
@@ -209,7 +209,7 @@ def benchmark(case: Case) -> pd.DataFrame:
                 end_event.record()
         di.synchronize()
 
-    if case.use_proton:
+    if case.use_proton and case.tp.is_rank0():
         proton.finalize()
 
     times_ms = [s.elapsed_time(e) for s, e in zip(start_events, end_events)]

@@ -199,15 +199,15 @@ proton-profile:
 	#TRITON_CUPTI_LIB_PATH=$(CUPTI_LIB_DIR) $(PYTHON) ./speed_test.py --n_hidden_states=$(N_HIDDEN_STATES) --use_proton=True --name=fused-triton --n_runs_benchmark=10 --n_runs_warmup=0 --bench_fn=own --case=$(CASE) 2>&1 | tee $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/speed-test.txt
 	#proton-viewer -m num_samples/%,time/s kernel.hatchet -i timing > $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/kernel-by-line.txt
 	#mv kernel.hatchet $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/kernel.hatchet
-	TRITON_CUPTI_LIB_PATH=$(CUPTI_LIB_DIR) TRITON_ALWAYS_COMPILE=1 TRITON_KERNEL_DUMP=1 TRITON_DUMP_DIR=$(PROTON_RESULTS_DIR)/$(PROTON_NAME)/ttgir_dump $(PYTHON) ./speed_test.py --n_hidden_states=$(N_HIDDEN_STATES) --use_proton=True --proton_mode=trace --name=fused-triton --n_runs_benchmark=1 --n_runs_warmup=0 --bench_fn=own --case=$(CASE) 2>&1 | tee $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/speed-test.txt
+	TRITON_CUPTI_LIB_PATH=$(CUPTI_LIB_DIR) TRITON_ALWAYS_COMPILE=1 TRITON_KERNEL_DUMP=1 TRITON_DUMP_DIR=$(PROTON_RESULTS_DIR)/$(PROTON_NAME)/ttgir_dump $(PYTHON) ./speed_test.py --n_hidden_states=$(N_HIDDEN_STATES) --use_proton=True --proton_mode=trace --name=fused-triton --n_runs_benchmark=1 --n_runs_warmup=0 --bench_fn=own --case=$(CASE) --n_procs=$(N_PROCS) 2>&1 | tee $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/speed-test.txt
 	mv kernel.chrome_trace $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/kernel.chrome_trace
 
-PROTON_SWEEP_DIR=$(SWEEPS_DIR)/proton/case-$(CASE)
+PROTON_SWEEP_DIR=$(SWEEPS_DIR)/proton/tp$(N_PROCS)/case-$(CASE)
 
 sweep-bsz-proton:
 	@for bsz in $(SWEEP_BSZ); do \
 		echo "=== proton-profile, case=$(CASE), bsz=$$bsz ==="; \
-		$(MAKE) proton-profile N_HIDDEN_STATES=$$bsz PROTON_RESULTS_DIR=$(PROTON_SWEEP_DIR) PROTON_NAME=bsz$$bsz CASE=$(CASE); \
+		$(MAKE) proton-profile N_HIDDEN_STATES=$$bsz PROTON_RESULTS_DIR=$(PROTON_SWEEP_DIR) PROTON_NAME=bsz$$bsz CASE=$(CASE) N_PROCS=$(N_PROCS); \
 	done
 	@echo "Proton sweep done. Reports in $(PROTON_SWEEP_DIR)/"
 	$(MAKE) parse-sweep-proton
