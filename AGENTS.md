@@ -145,7 +145,7 @@ You cannot describe a transpose via TMA strides — Triton's `semantic.py` check
 
 The `findings/` directory contains detailed write-ups of bugs, workarounds, and design decisions discovered during development:
 
-- `upcasting-before-softmax.md` — `torch.multinomial` produces wrong distributions with bfloat16 due to CDF precision loss. Fix: upcast to float32 before softmax.
+- `upcasting-before-softmax.md` — `torch.multinomial` produces wrong distributions with bfloat16. Fix: upcast to float32 before softmax.
 - `helion-hl-rand-specialize-1-bug.md` — `hl.rand` crashes when a dimension is `hl.specialize(1)`. Includes root cause analysis, in-place fix, and minimal reproduction.
 - `helion-barrier-single-kernel.md` — Merging stage 2 into the Helion kernel with `hl.barrier()`. Eliminates host-side reduction, reduces kernel launches from 3 to 1. Rigorous benchmarking shows barrier is ~3% slower at H=1 (host overhead is negligible). Barrier code is on the `barrier-kernel` branch.
 - `rtx3090-barrier-comparison/` — Raw benchmark results (speed test, proton, NCU) for barrier vs two-stage on RTX 3090.
@@ -234,7 +234,7 @@ See `findings/helion-barrier-single-kernel.md` for full NCU and Proton analysis,
 
 ## `torch.multinomial` and bfloat16
 
-`torch.multinomial` produces incorrect sampling distributions when given bfloat16 probabilities. The internal CDF accumulation loses precision. Fix: upcast to float32 before softmax:
+`torch.multinomial` produces incorrect sampling distributions when given bfloat16 probabilities. Fix: upcast to float32 before softmax:
 
 ```python
 probs = (logits.float() / temperature).softmax(dim=1)

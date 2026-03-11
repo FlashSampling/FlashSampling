@@ -47,7 +47,9 @@ def sample(
         probs = apply_top_k_top_p_qitra(logits, top_k, top_p)
     else:
         probs = apply_top_k_top_p(logits, top_k, top_p)
-    samples = _fast_multinomial(probs, num_samples)
+    # Upcast to float32: torch.multinomial produces imprecise distributions with
+    # bfloat16 inputs (chi-squared p≈0). See findings/upcasting-before-softmax.md.
+    samples = torch.multinomial(probs.float(), num_samples, replacement=True)
     if return_probs:
         return samples, probs
     return samples
