@@ -11,33 +11,35 @@ Usage:
 """
 
 import argparse
-import csv
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
-from parse_ncu_sweep import parse_method
+from parse_ncu_sweep import parse_ncu_csv
 from parse_proton_intrakernel import parse_chrome_trace, trace_phase_pcts
 from plot_styles import PROVIDER_COLORS, PROVIDER_HATCHES, PROVIDER_MARKERS
 
 SWEEPS = Path("profiles/sweeps/bsz")
-DEFAULT_NCU_DIR = SWEEPS / "ncu-txt" / "case-small"
-DEFAULT_PROTON_DIR = SWEEPS / "proton" / "case-small"
-DEFAULT_OUT_DIR = SWEEPS
+N_PROCS = 1
+CASE = "small"
+PROTON_DIR = SWEEPS / "proton" / f"case-{CASE}"
 
 # Methods: (NCU filename, internal key, is_fmms)
 METHODS = [
     ("fused-triton.txt", "FMMS (Triton)", True),
     ("naive-compiled.txt", "Multinomial Sampling (Compiled)", False),
-    ("flashinfer-sampling.txt", "flashinfer:sampling_from_logits", False),
+    ("flashinfer:sampling_from_logits.txt", "flashinfer:sampling_from_logits", False),
 ]
 
 
-def load_data(ncu_dir: Path, proton_dir: Path) -> list[dict]:
-    """Load and combine NCU + Proton data into per-method, per-bsz rows."""
+def load_data(ncu_dir: Path, proton_dir: Path) -> pd.DataFrame:
+    """Load and combine NCU + Proton data into a DataFrame.
+
+    Columns: bsz, method, matmul_us, sampling_us, total_us.
+    """
     bsz_dirs = sorted(ncu_dir.glob("bsz*"), key=lambda p: int(p.name[3:]))
-    rows = []
+    frames = []
 
     for d in bsz_dirs:
         bsz = int(d.name[3:])
@@ -47,39 +49,44 @@ def load_data(ncu_dir: Path, proton_dir: Path) -> list[dict]:
         proton_pcts = trace_phase_pcts(proton_trace) if proton_trace else None
 
         for fname, label, is_fmms in METHODS:
-            m = parse_method(d / fname)
-            if not m:
+            path = d / fname
+            if not path.exists():
                 continue
+            kdf = parse_ncu_csv(path)
+            is_matmul = kdf["kernel_name"].str.contains("gemm|fused_mm_sample", case=False)
+            assert is_matmul.iloc[0], (
+                f"First kernel in {path} is not a matmul: {kdf['kernel_name'].iloc[0]}"
+            )
+            row = pd.DataFrame(
+                [
+                    {
+                        "bsz": bsz,
+                        "method": label,
+                        "total_us": kdf["duration_us"].sum(),
+                        "matmul_us": kdf.loc[is_matmul, "duration_us"].sum(),
+                        "sampling_us": kdf.loc[~is_matmul, "duration_us"].sum(),
+                    }
+                ]
+            )
 
             if is_fmms and proton_pcts:
                 # FMMS: use Proton percentages to split the NCU total
                 matmul_frac = proton_pcts["matmul"] / 100
                 sampling_frac = proton_pcts["sampling"] / 100
-                matmul_us = m["total_us"] * matmul_frac
-                sampling_us = m["total_us"] * sampling_frac
-            else:
-                # Baselines: NCU gives matmul (1st kernel) and post-matmul
-                matmul_us = m["matmul_us"]
-                sampling_us = m["post_us"]
+                row["matmul_us"] = row["total_us"] * matmul_frac
+                row["sampling_us"] = row["total_us"] * sampling_frac
 
-            rows.append(
-                {
-                    "bsz": bsz,
-                    "method": label,
-                    "matmul_us": round(matmul_us, 1),
-                    "sampling_us": round(sampling_us, 1),
-                    "total_us": round(m["total_us"], 1),
-                }
-            )
+            frames.append(row)
 
-    return rows
+    df = pd.concat(frames, ignore_index=True)
+    df[["matmul_us", "sampling_us", "total_us"]] = df[
+        ["matmul_us", "sampling_us", "total_us"]
+    ].round(1)
+    return df
 
 
-def save_csv(rows: list[dict], path: Path) -> None:
-    with open(path, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["bsz", "method", "matmul_us", "sampling_us", "total_us"])
-        w.writeheader()
-        w.writerows(rows)
+def save_csv(df: pd.DataFrame, path: Path) -> None:
+    df.to_csv(path, index=False)
     print(f"CSV saved to {path}")
 
 
@@ -92,7 +99,7 @@ def _apply_hatches(ax, methods):
 
 
 def plot(
-    rows: list[dict],
+    df: pd.DataFrame,
     out_path: Path,
     fmt: str,
     y_col: str,
@@ -102,7 +109,6 @@ def plot(
     style: str = "line",
 ) -> plt.Figure:
     methods = [label for _, label, _ in METHODS]
-    df = pd.DataFrame(rows)
 
     palette = {m: PROVIDER_COLORS[m] for m in methods}
     fig, ax = plt.subplots()
@@ -185,11 +191,19 @@ def plot(
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--ncu-dir", type=Path, default=DEFAULT_NCU_DIR)
-    parser.add_argument("--proton-dir", type=Path, default=DEFAULT_PROTON_DIR)
-    parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
+    parser.add_argument(
+        "--n_procs", type=int, default=N_PROCS, help="Number of processes (default: 1)"
+    )
+    parser.add_argument("--case", default=CASE, help="Benchmark case (default: small)")
+    parser.add_argument("--ncu-dir", type=Path, default=None)
+    parser.add_argument("--proton-dir", type=Path, default=PROTON_DIR)
+    parser.add_argument("--out-dir", type=Path, default=None)
     parser.add_argument("--fmt", default="png", help="Output image format (default: png)")
     args = parser.parse_args()
+    if args.ncu_dir is None:
+        args.ncu_dir = SWEEPS / "ncu-txt" / f"tp{args.n_procs}" / f"case-{args.case}"
+    if args.out_dir is None:
+        args.out_dir = SWEEPS / f"tp{args.n_procs}"
 
     rows = load_data(args.ncu_dir, args.proton_dir)
     save_csv(rows, args.out_dir / "runtime-breakdown.csv")

@@ -16,7 +16,7 @@ Development notes and lessons learned while building this project.
 - **Top-down structure**: Define high-level functions first, helpers below. A reader should encounter the main logic before the details it delegates to. Helper functions go **after** the function that calls them, not before.
 - **Never introduce GPU-CPU synchronizations.** Operations like `tensor.item()`, `float(tensor)`, `tensor.cpu()`, or `print(tensor)` on CUDA tensors force the CPU to wait for all pending GPU work to finish, destroying pipeline parallelism. Pass scalar values as 0-d CUDA tensors instead of extracting Python floats. Both the Triton kernel (`tl.load(temperature_ptr)`) and the Helion kernel (`temperature: torch.Tensor`) accept 0-d tensors directly.
 - **Always save logs to the output folder.** When running servers, benchmarks, or evals, pipe stdout/stderr to a log file in the results directory so logs are always accessible after the run. Never discard or hide process output.
-- **Pandas style**: Use `.query()` for row filtering, never boolean indexing (`df[df["col"] == val]`). Use `.merge()` for joins instead of nested loops. Use `.groupby().agg()` instead of manual loops over unique values. Use `.pivot()` / `.melt()` for reshaping.
+- **Pandas style**: Always use pandas (or equivalent DataFrame library) for data analysis. Never write nested loops with manual data joins when a pandas-based solution exists. Use `.query()` for row filtering, never boolean indexing (`df[df["col"] == val]`). Use `.merge()` for joins. Use `.groupby().agg()` instead of manual loops over unique values. Use `.pivot()` / `.melt()` for reshaping. Use `pd.concat()` to build DataFrames, not list-of-dicts loops.
 
 ## Writing style (README, blog post, docs)
 
@@ -276,6 +276,34 @@ Documentation: https://github.com/triton-lang/triton/tree/main/third_party/proto
 **`--bench_fn=own` required for Proton**: The default `fi-cupti` benchmark path (FlashInfer's `bench_gpu_time`) does not call `setup_proton()` / `proton.finalize()`, so no `.hatchet` file is produced. The `own` benchmark function is the one wired to Proton.
 
 **Pitfall: Proton inflates per-launch overhead.** Proton adds fixed instrumentation cost per kernel launch. When comparing approaches with different numbers of launches (e.g. 1 vs 4), the wall-clock difference under Proton is misleading. For example, the barrier vs two-stage comparison showed a ~5ms gap under Proton that doesn't exist in uninstrumented runs (~0.01ms real overhead). Always cross-reference Proton wall-clock with `speed_test.py --use_proton=False`.
+
+## NCU (Nsight Compute) batch-size sweep
+
+`benchmarking/parse_ncu_sweep.py` parses per-kernel GPU time from NCU CSV exports across batch sizes. It expects a directory layout like:
+
+```
+<dir>/bsz1/fused-triton.txt
+<dir>/bsz1/naive-compiled.txt
+<dir>/bsz4/fused-triton.txt
+...
+```
+
+Each `.txt` file is NCU output with `--csv --page raw` containing `gpu__time_duration.sum`. Lines starting with `"` are CSV rows; others are NCU log messages.
+
+**Method file names** (mapped to display labels in `METHOD_FILES`): `fused-triton.txt`, `naive-pt.txt`, `naive-compiled.txt`, `flashinfer:sampling_from_logits.txt` → `fi-sample`, `flashinfer:top_k_top_p_sampling_from_logits.txt` → `fi-topkp`.
+
+**Data locations**:
+- `benchmarking/profiles/sweeps/bsz/ncu-txt/tp1/case-small/` — tp1 data (RTX 3090, but files lack CSV metrics, only log output)
+- `benchmarking/profiles/sweeps/bsz/ncu-txt/tp2/case-small/` — tp2 data (has valid CSV data)
+
+**Usage**:
+```bash
+python benchmarking/parse_ncu_sweep.py --dir benchmarking/profiles/sweeps/bsz/ncu-txt/tp2/case-small
+# Or via Makefile:
+make parse-sweep-ncu N_PROCS=2 CASE=small
+```
+
+**Ruff pitfall**: `first_baseline` variable looks unused (F841) but is referenced via pandas `@first_baseline` in `.query()`. Suppressed with `# noqa: F841`.
 
 ## Nsight Systems (nsys) profiling
 

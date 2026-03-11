@@ -84,11 +84,14 @@ nsight-profile-naive-pt:
 		-o $(NSIGHT_RESULTS_DIR)/naive-pt $(PYTHON) ./speed_test.py --name naive-pt --n_hidden_states $(N_HIDDEN_STATES) --n_runs_benchmark $(N_RUNS_BENCHMARK)
 
 NAME :=
+NCU_METRICS=--set full
+NCU_OUTPUT_FLAGS=
 ncu-export:
 	@test -n "$(NAME)" || (echo "Usage: make ncu-export NAME=fused-cutlass-evt"; exit 1)
 	mkdir -p $(NCU_TXT_DIR)
 	$(if $(filter-out 1,$(N_PROCS)),echo quit | sudo nvidia-cuda-mps-control 2>/dev/null || true)
-	$(SUDO) $(NCU) --set full \
+	$(SUDO) $(NCU) $(NCU_METRICS) \
+		$(NCU_OUTPUT_FLAGS) \
 		--nvtx \
 		--nvtx-include "kernel/" \
 		--target-processes all \
@@ -100,6 +103,9 @@ ncu-export-fused-triton:
 
 ncu-export-naive-tl-matmul:
 	$(MAKE) ncu-export NAME=naive-tl-matmul
+
+ncu-export-naive-pt:
+	$(MAKE) ncu-export NAME=naive-pt
 
 ncu-export-naive-compiled:
 	$(MAKE) ncu-export NAME=naive-compiled
@@ -134,14 +140,14 @@ ncu-export-all: ncu-export-fused-triton ncu-export-naive-compiled ncu-export-fla
 #   make sweep-bsz-proton
 SWEEP_BSZ=1 4 16 64 128 256
 SWEEPS_DIR=profiles/sweeps/bsz
-NCU_SWEEP_DIR=$(SWEEPS_DIR)/ncu-txt/case-$(CASE)
-NCU_SWEEP_TARGETS=ncu-export-fused-triton ncu-export-naive-compiled ncu-export-flashinfer ncu-export-flashinfer-top-k-top-p
+NCU_SWEEP_DIR=$(SWEEPS_DIR)/ncu-txt/tp$(N_PROCS)/case-$(CASE)
+NCU_SWEEP_TARGETS=ncu-export-fused-triton ncu-export-naive-pt ncu-export-naive-compiled ncu-export-flashinfer ncu-export-flashinfer-top-k-top-p
 
 sweep-bsz-ncu:
 	@for bsz in $(SWEEP_BSZ); do \
 		for tgt in $(NCU_SWEEP_TARGETS); do \
 			echo "=== $$tgt, case=$(CASE), bsz=$$bsz ==="; \
-			$(MAKE) $$tgt N_HIDDEN_STATES=$$bsz NCU_TXT_DIR=$(NCU_SWEEP_DIR)/bsz$$bsz CASE=$(CASE); \
+			$(MAKE) $$tgt N_HIDDEN_STATES=$$bsz NCU_TXT_DIR=$(NCU_SWEEP_DIR)/bsz$$bsz CASE=$(CASE) N_PROCS=$(N_PROCS) NCU_METRICS="--metrics gpu__time_duration.sum" NCU_OUTPUT_FLAGS="--csv --page raw"; \
 		done; \
 	done
 	@echo "NCU sweep done. Reports in $(NCU_SWEEP_DIR)/"
@@ -153,6 +159,9 @@ parse-sweep-ncu:
 parse-sweep-proton:
 	$(PYTHON) parse_proton_intrakernel.py --dir $(PROTON_SWEEP_DIR) | tee $(PROTON_SWEEP_DIR)/summary.txt
 
+plot-bsz-sweep-runtime:
+	$(PYTHON) plot_bsz_sweep_runtime.py --n_procs $(N_PROCS) --case $(CASE) --fmt pdf
+
 TRITON_BENCH_DIR=profiles/triton-bench/tp$(N_PROCS)
 
 triton-benchmark:
@@ -161,7 +170,6 @@ triton-benchmark:
 	PYTHONUNBUFFERED=1 $(PYTHON) triton_benchmark.py --tgt_dir $(TRITON_BENCH_DIR) --case $(CASE) --n_procs $(N_PROCS) $(if $(NAME),--name $(NAME)) 2>&1 | tee $(TRITON_BENCH_DIR)/logs.txt
 	$(PYTHON) plot-triton-bench.py --tgt_dir $(TRITON_BENCH_DIR)
 	$(PYTHON) plot-triton-bench.py --tgt_dir $(TRITON_BENCH_DIR) --fmt pdf
-	$(PYTHON) plot_bsz_sweep_runtime.py --fmt pdf
 
 distr-triton-benchmark:
 	$(MAKE) triton-benchmark N_PROCS=2 NAME=fused-triton,naive-pt,naive-compiled,flashinfer:sampling_from_logits,flashinfer:top_k_top_p_sampling_from_logits
