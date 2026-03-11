@@ -1,0 +1,3 @@
+# `torch.multinomial` validation overhead
+
+`torch.multinomial` spends ~2/3 of its GPU runtime on input validation, not sampling. NCU profiling on an RTX 3090 with V=128K shows 13 CUDA kernels totaling 163 us, of which 10 kernels (107 us) just check that probabilities are non-negative, at most 1, and sum to 1. The actual sampling (exponential RNG, normalize, argmax) takes only 55 us across 3 kernels. The fix is to replace `torch.multinomial` with the exponential race method (`probs.div(q.exponential_()).argmax()`), which is what vLLM V1 does in [`compiled_random_sample`](https://github.com/vllm-project/vllm/blob/main/vllm/v1/sample/ops/topk_topp_sampler.py). Filed upstream as [pytorch/pytorch#177127](https://github.com/pytorch/pytorch/issues/177127).
