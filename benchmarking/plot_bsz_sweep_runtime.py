@@ -18,12 +18,12 @@ import pandas as pd
 import seaborn as sns
 from parse_ncu_sweep import parse_ncu_csv
 from parse_proton_intrakernel import parse_chrome_trace, trace_phase_pcts
-from plot_styles import PROVIDER_COLORS, PROVIDER_HATCHES, PROVIDER_MARKERS
+from plot_styles import FLASHSAMPLING_RENAMES, PROVIDER_COLORS, PROVIDER_HATCHES, PROVIDER_MARKERS
 
 SWEEPS = Path("profiles/sweeps/bsz")
 N_PROCS = 1
 CASE = "small"
-PROTON_DIR = SWEEPS / "proton" / f"case-{CASE}"
+PROTON_DIR = SWEEPS / "proton" / f"tp{N_PROCS}" / f"case-{CASE}"
 
 # Methods: (NCU filename, internal key, is_fmms)
 METHODS = [
@@ -57,28 +57,30 @@ def load_data(ncu_dir: Path, proton_dir: Path) -> pd.DataFrame:
             assert is_matmul.iloc[0], (
                 f"First kernel in {path} is not a matmul: {kdf['kernel_name'].iloc[0]}"
             )
-            row = pd.DataFrame(
-                [
-                    {
-                        "bsz": bsz,
-                        "method": label,
-                        "total_us": kdf["duration_us"].sum(),
-                        "matmul_us": kdf.loc[is_matmul, "duration_us"].sum(),
-                        "sampling_us": kdf.loc[~is_matmul, "duration_us"].sum(),
-                    }
-                ]
-            )
-
-            if is_fmms and proton_pcts:
-                # FMMS: use Proton percentages to split the NCU total
+            row = {
+                "bsz": bsz,
+                "method": label,
+                "total_us": kdf["duration_us"].sum(),
+            }
+            if is_fmms:
+                if not proton_pcts:
+                    print(f"WARNING: skipping FMMS at bsz={bsz}: no Proton trace found")
+                    continue
+                # Split the fused kernel using Proton percentages, then add
+                # auxiliary kernels (local reduce, TP reduce) to sampling.
+                fused_us = kdf.loc[is_matmul, "duration_us"].sum()
+                aux_us = kdf.loc[~is_matmul, "duration_us"].sum()
                 matmul_frac = proton_pcts["matmul"] / 100
                 sampling_frac = proton_pcts["sampling"] / 100
-                row["matmul_us"] = row["total_us"] * matmul_frac
-                row["sampling_us"] = row["total_us"] * sampling_frac
+                row["matmul_us"] = fused_us * matmul_frac
+                row["sampling_us"] = fused_us * sampling_frac + aux_us
+            else:
+                row["matmul_us"] = kdf.loc[is_matmul, "duration_us"].sum()
+                row["sampling_us"] = kdf.loc[~is_matmul, "duration_us"].sum()
 
             frames.append(row)
 
-    df = pd.concat(frames, ignore_index=True)
+    df = pd.DataFrame(frames)
     df[["matmul_us", "sampling_us", "total_us"]] = df[
         ["matmul_us", "sampling_us", "total_us"]
     ].round(1)
@@ -108,7 +110,7 @@ def plot(
     log_y: bool = False,
     style: str = "line",
 ) -> plt.Figure:
-    methods = [label for _, label, _ in METHODS]
+    methods = list(df["method"].unique())
 
     palette = {m: PROVIDER_COLORS[m] for m in methods}
     fig, ax = plt.subplots()
@@ -196,16 +198,26 @@ def main():
     )
     parser.add_argument("--case", default=CASE, help="Benchmark case (default: small)")
     parser.add_argument("--ncu-dir", type=Path, default=None)
-    parser.add_argument("--proton-dir", type=Path, default=PROTON_DIR)
+    parser.add_argument("--proton-dir", type=Path, default=None)
     parser.add_argument("--out-dir", type=Path, default=None)
     parser.add_argument("--fmt", default="png", help="Output image format (default: png)")
+    parser.add_argument(
+        "--use-name-flashsampling",
+        action="store_true",
+        help="Use 'FlashSampling' instead of 'FMMS' in plot labels",
+    )
     args = parser.parse_args()
     if args.ncu_dir is None:
         args.ncu_dir = SWEEPS / "ncu-txt" / f"tp{args.n_procs}" / f"case-{args.case}"
+    if args.proton_dir is None:
+        args.proton_dir = SWEEPS / "proton" / f"tp{args.n_procs}" / f"case-{args.case}"
     if args.out_dir is None:
         args.out_dir = SWEEPS / f"tp{args.n_procs}"
 
+    args.out_dir.mkdir(parents=True, exist_ok=True)
     rows = load_data(args.ncu_dir, args.proton_dir)
+    if args.use_name_flashsampling:
+        rows["method"] = rows["method"].replace(FLASHSAMPLING_RENAMES)
     save_csv(rows, args.out_dir / "runtime-breakdown.csv")
     plot(
         rows,

@@ -158,7 +158,7 @@ parse-sweep-proton:
 	$(PYTHON) parse_proton_intrakernel.py --dir $(PROTON_SWEEP_DIR) | tee $(PROTON_SWEEP_DIR)/summary.txt
 
 plot-bsz-sweep-runtime:
-	$(PYTHON) plot_bsz_sweep_runtime.py --n_procs $(N_PROCS) --case $(CASE) --fmt pdf
+	$(PYTHON) plot_bsz_sweep_runtime.py --n_procs $(N_PROCS) --case $(CASE) --fmt pdf --use-name-flashsampling
 
 TRITON_BENCH_DIR=profiles/triton-bench/tp$(N_PROCS)
 
