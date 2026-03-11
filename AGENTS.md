@@ -5,6 +5,7 @@
 - to plot all plots use `make plot-all`.
 - to test the distributed code works use `make pytest-distributed`.
 - when benchmarking many combinations, don't run the bench in parallel, since they will contend for the same resources. Instead launch them sequentially.
+- use the hugging face cli when appropriate.
 
 Development notes and lessons learned while building this project.
 

@@ -26,6 +26,7 @@ BENCHMARK_CASES = {
     "small": {"vocab_size": 151_936, "hidden_size": 4_096},  # Qwen3 8B, Qwen3-235B MoE
     "large": {"vocab_size": 128_256, "hidden_size": 8_192},  # Llama 3 70B, DeepSeek V3
     "gpt-oss-120b": {"vocab_size": 201_088, "hidden_size": 2_880},  # GPT-OSS 120B
+    "kimi-k2.5": {"vocab_size": 163_840, "hidden_size": 7_168},  # Kimi K2.5
 }
 
 N_SAMPLES = 1
@@ -149,7 +150,10 @@ def _run_benchmark(
 
 
 def _do_bench_fixed_iters(
-    fn, warmup_iters: int = 5, rep_iters: int = 25, quantiles: list[float] | None = None
+    fn,
+    warmup_iters: int = 25,
+    rep_iters: int = 100,
+    quantiles: list[float] | None = None,
 ):
     """Like triton.testing.do_bench but with fixed iteration counts.
 

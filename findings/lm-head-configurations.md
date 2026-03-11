@@ -42,7 +42,12 @@ The location of `vocab_size` and `hidden_size` in `config.json` depends on the m
 
 | Model | config.json | Released | vocab_size | hidden_size | Experts | Active/Token | LM Head (bf16) |
 |-------|-------------|----------|-----------|-------------|---------|-------------|-----------------|
+| Kimi K2.5 | [link](https://huggingface.co/moonshotai/Kimi-K2.5/blob/main/config.json) | Feb 2026 | 163,840 | 7,168 | 384 | 8 | 2.2 GB |
+| Llama 4 Maverick | [link](https://huggingface.co/meta-llama/Llama-4-Maverick-17B-128E-Instruct/blob/main/config.json) | Apr 2025 | 202,048 | 5,120 | 128 | 1 | 1.9 GB |
+| GLM-5 | [link](https://huggingface.co/zai-org/GLM-5/blob/main/config.json) | Feb 2026 | 154,880 | 6,144 | 256 | 8 | 1.8 GB |
 | DeepSeek V3 | [link](https://huggingface.co/deepseek-ai/DeepSeek-V3/blob/main/config.json) | Dec 2024 | 129,280 | 7,168 | 256 | 8 | 1.8 GB |
+| Mistral Large 3 | [link](https://huggingface.co/mistralai/Mistral-Large-3-675B-Instruct-2512) | Dec 2025 | 131,072 | 7,168 | 128 | 4 | 1.8 GB |
+| DeepSeek V3.2 | [link](https://huggingface.co/deepseek-ai/DeepSeek-V3.2/blob/main/config.json) | Jun 2025 | 129,280 | 7,168 | 256 | 8 | 1.7 GB |
 | Qwen3 235B-A22B | [link](https://huggingface.co/Qwen/Qwen3-235B-A22B/blob/main/config.json) | Apr 2025 | 151,936 | 4,096 | 128 | 8 | 1.2 GB |
 | GPT-OSS 120B | [link](https://huggingface.co/openai/GPT-OSS-120B/blob/main/config.json) | Aug 2025 | 201,088 | 2,880 | 128 | 4 | 1.1 GB |
 | GPT-OSS 20B | [link](https://huggingface.co/openai/GPT-OSS-20B/blob/main/config.json) | Aug 2025 | 201,088 | 2,880 | 32 | 4 | 1.1 GB |
@@ -93,3 +98,10 @@ The "small" vs "large" naming refers to the LM head memory footprint.
 | **Large** | 128,256 | 8,192 | 2.01 GB | Llama 3 70B, DeepSeek V3 |
 
 Gemma 3's 262K vocabulary is an outlier and could be used as a stress test for memory-bandwidth sensitivity.
+
+## Trends (as of early 2026)
+
+The latest frontier MoE models (Kimi K2.5, GLM-5, DeepSeek V3.2, Mistral Large 3) cluster around d=6,144-7,168 with V=129K-164K, producing LM heads of 1.7-2.2 GB.
+This aligns well with the existing "large" benchmark config (V=128K, d=8,192).
+Llama 4 Maverick is an outlier with a large vocab (V=202K) but smaller hidden dim (d=5,120).
+All frontier open-source models are now MoE, reinforcing that the decode-time LM head matmul is shaped by the active hidden dim (not total params).
