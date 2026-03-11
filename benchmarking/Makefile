@@ -89,14 +89,12 @@ NCU_OUTPUT_FLAGS=
 ncu-export:
 	@test -n "$(NAME)" || (echo "Usage: make ncu-export NAME=fused-cutlass-evt"; exit 1)
 	mkdir -p $(NCU_TXT_DIR)
-	$(if $(filter-out 1,$(N_PROCS)),echo quit | sudo nvidia-cuda-mps-control 2>/dev/null || true)
 	$(SUDO) $(NCU) $(NCU_METRICS) \
 		$(NCU_OUTPUT_FLAGS) \
 		--nvtx \
 		--nvtx-include "kernel/" \
 		--target-processes all \
 		$(PYTHON) ./speed_test.py --name $(NAME) --n_hidden_states $(N_HIDDEN_STATES) --n_runs_benchmark $(N_RUNS_BENCHMARK) --bench_fn=own --case=$(CASE) --n_procs=$(N_PROCS) > $(NCU_TXT_DIR)/$(NAME).txt
-	$(if $(filter-out 1,$(N_PROCS)),sudo nvidia-cuda-mps-control -d 2>/dev/null || true)
 
 ncu-export-fused-triton:
 	$(MAKE) ncu-export NAME=fused-triton
