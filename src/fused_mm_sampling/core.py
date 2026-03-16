@@ -1,5 +1,6 @@
 import functools
 import math
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Callable, NamedTuple, Protocol
@@ -10,6 +11,7 @@ import torch
 import torch.distributed as dist
 import triton
 import triton.language as tl
+import triton.profiler.language as pl
 
 from .tl_matmul import matmul
 from .tp_info import TP1, TPInfo
@@ -239,6 +241,7 @@ def fused_mm_sample_triton(
         WARP_SPECIALIZE=supports_warp_specialization(),
         NUM_SMS=NUM_SMS,
         GUMBEL=GUMBEL,
+        USE_PROTON_SCOPES=os.environ.get("USE_PROTON_SCOPES", "0") == "1",
     )
 
     assert grid_size["v"] is not None
@@ -412,6 +415,7 @@ def fused_mm_sample_triton_kernel(
     WARP_SPECIALIZE: tl.constexpr,  # noqa: N803
     NUM_SMS: tl.constexpr,  # noqa: N803
     GUMBEL: tl.constexpr,  # noqa: N803
+    USE_PROTON_SCOPES: tl.constexpr,  # noqa: N803
 ):
     """Persistent kernel for fused matmul + Gumbel-max sampling.
 
@@ -471,12 +475,16 @@ def fused_mm_sample_triton_kernel(
         logits_blk = tl.zeros((BLOCK_SIZE_V, BLOCK_SIZE_H), dtype=tl.float32)
 
         # Compute a block of logits logits_blk
+        if USE_PROTON_SCOPES:
+            pl.enter_scope("matmul-tile")
         for d_start in range(0, hidden_size, BLOCK_SIZE_D):
             # load weights tile [BLOCK_SIZE_V, BLOCK_SIZE_D]
             w_blk = w_desc.load([v_start, d_start])
             # load hidden_states tile [BLOCK_SIZE_H, BLOCK_SIZE_D]
             hidden_states_blk = hidden_states_desc.load([h_start, d_start])
             logits_blk = tl.dot(w_blk, hidden_states_blk.T, acc=logits_blk)
+        if USE_PROTON_SCOPES:
+            pl.exit_scope("matmul-tile")
 
         # Later we will take max over logits + noise, but rows outside the mask
         # should not be considered. Setting them to -inf achieves this.
@@ -490,6 +498,8 @@ def fused_mm_sample_triton_kernel(
         h_start_c = pid_h_c * BLOCK_SIZE_H
 
         for sample_idx in range(num_samples):
+            if USE_PROTON_SCOPES:
+                pl.enter_scope("sample")
             # Note: Creating appropriately sized tensors is tricky because
             # tl.arange() only accepts tl.constexpr that are powers of 2.
             noise_size: tl.constexpr = BLOCK_SIZE_V * BLOCK_SIZE_H
@@ -513,7 +523,11 @@ def fused_mm_sample_triton_kernel(
             else:
                 gumbel_max, gumbel_max_idx_local = tl.max(logits_blk, axis=0, return_indices=True)
             gumbel_max_idx_global = gumbel_max_idx_local + v_start_c
+            if USE_PROTON_SCOPES:
+                pl.exit_scope("sample")
 
+            if USE_PROTON_SCOPES:
+                pl.enter_scope("store")
             max_desc.store(
                 [sample_idx, pid_v_c, h_start_c],
                 gumbel_max[None, None, :],
@@ -522,6 +536,8 @@ def fused_mm_sample_triton_kernel(
                 [sample_idx, pid_v_c, h_start_c],
                 gumbel_max_idx_global[None, None, :],
             )
+            if USE_PROTON_SCOPES:
+                pl.exit_scope("store")
 
 
 def set_torch_allocator_for_tma_descriptors():
