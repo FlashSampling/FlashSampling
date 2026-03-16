@@ -10,6 +10,7 @@ benchmarking/speed_test*
 tests/qwen3-0.6b/hidden_states.pt
 tests/qwen3-0.6b/weights.pt
 helion-cache/
+fancy-matmul/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

@@ -9,7 +9,7 @@ import torch
 import triton
 from pydantic_settings import BaseSettings
 
-from ..core import get_sampler
+from ..core import get_sampler, set_torch_allocator_for_tma_descriptors
 from ..testing import shard_weights
 from ..tp_info import TP1, TPInfo, run_maybe_distributed
 from .sys_metadata import gather_system_metadata
@@ -19,6 +19,7 @@ assert torch._dynamo.config.cache_size_limit == 8
 torch._dynamo.config.cache_size_limit = 1_000
 
 device = torch.device("cuda")
+set_torch_allocator_for_tma_descriptors()
 
 # Benchmark configurations representing real LLM sizes.
 # See findings/lm-head-configurations.md for details.
