@@ -206,10 +206,6 @@ def _run_triton_benchmark_impl(args: Args):
     tp = args.make_tp()
     gpu_name = get_gpu_name()
     device_count = torch.cuda.device_count()
-    tp.rank0_print("GPU:", gpu_name)
-    tp.rank0_print("Number of GPUs:", device_count)
-    tp.rank0_print("Arguments:", args.model_dump_json())
-
     cases = _resolve_cases(args.case)
     directory = args.tgt_dir
     os.makedirs(directory, exist_ok=True)
@@ -217,10 +213,15 @@ def _run_triton_benchmark_impl(args: Args):
     metadata = {
         "gpu_name": gpu_name,
         "device_count": device_count,
+        "python_version": _python_version(),
+        "pytorch_version": torch.__version__,
+        "triton_version": triton.__version__,
+        "cuda_version": torch.version.cuda,
         "args": args.model_dump(mode="json"),
     }
     metadata_file = Path(directory) / "metadata.json"
     metadata_file.write_text(json.dumps(metadata, indent=2))
+    tp.rank0_print("Metadata:", json.dumps(metadata, indent=2))
 
     for case in cases:
         case_config = BENCHMARK_CASES[case]
@@ -237,3 +238,9 @@ def _run_triton_benchmark_impl(args: Args):
         benchmark = create_benchmark(args, case)
         benchmark.run(print_data=tp.is_rank0(), save_path=directory if tp.is_rank0() else None)
         tp.rank0_print()
+
+
+def _python_version() -> str:
+    import sys
+
+    return sys.version.split()[0]
