@@ -12,9 +12,10 @@ import triton.profiler as proton
 from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
-from ..core import fused_mm_sample_triton_kernel, get_gpu_name, get_sampler, sample
+from ..core import fused_mm_sample_triton_kernel, get_sampler, sample
 from ..testing import shard_weights
 from ..tp_info import TP1, TPInfo, run_maybe_distributed
+from .sys_metadata import get_gpu_name
 from .triton_benchmark_lib import BENCHMARK_CASES, provider_names
 
 device = torch.device("cuda")

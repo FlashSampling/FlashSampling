@@ -712,10 +712,6 @@ def flashinfer_sampling_from_logits(
     return result.reshape(batch_size, num_samples)
 
 
-def get_gpu_name() -> str:
-    return torch.cuda.get_device_name()
-
-
 def bsz_h(H: int) -> int:  # noqa: N803
     if H <= 16:
         return 16

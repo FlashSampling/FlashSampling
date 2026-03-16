@@ -9,9 +9,10 @@ import torch
 import triton
 from pydantic_settings import BaseSettings
 
-from ..core import get_gpu_name, get_sampler
+from ..core import get_sampler
 from ..testing import shard_weights
 from ..tp_info import TP1, TPInfo, run_maybe_distributed
+from .sys_metadata import gather_system_metadata
 
 # prevent torch._dynamo.exc.FailOnRecompileLimitHit: recompile_limit reached with fullgraph=True
 assert torch._dynamo.config.cache_size_limit == 8
@@ -204,19 +205,12 @@ def run_triton_bechmark(args: Args):
 
 def _run_triton_benchmark_impl(args: Args):
     tp = args.make_tp()
-    gpu_name = get_gpu_name()
-    device_count = torch.cuda.device_count()
     cases = _resolve_cases(args.case)
     directory = args.tgt_dir
     os.makedirs(directory, exist_ok=True)
 
     metadata = {
-        "gpu_name": gpu_name,
-        "device_count": device_count,
-        "python_version": _python_version(),
-        "pytorch_version": torch.__version__,
-        "triton_version": triton.__version__,
-        "cuda_version": torch.version.cuda,
+        **gather_system_metadata(),
         "args": args.model_dump(mode="json"),
     }
     metadata_file = Path(directory) / "metadata.json"
@@ -238,9 +232,3 @@ def _run_triton_benchmark_impl(args: Args):
         benchmark = create_benchmark(args, case)
         benchmark.run(print_data=tp.is_rank0(), save_path=directory if tp.is_rank0() else None)
         tp.rank0_print()
-
-
-def _python_version() -> str:
-    import sys
-
-    return sys.version.split()[0]
