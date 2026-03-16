@@ -1,3 +1,6 @@
+# import os
+
+# os.environ["TRITON_INTERPRET"] = "1"
 import functools
 import math
 import os
@@ -278,7 +281,7 @@ def _local_reduce(
     samples = maxs_idx.gather(1, idxs.unsqueeze(1)).squeeze(1)  # [num_samples, H]
     max_values = maxs.gather(1, idxs.unsqueeze(1)).squeeze(1)  # [num_samples, H]
     samples += vocab_start_index
-    return samples.T, max_values.T  # [H, num_samples]
+    return samples.T.contiguous(), max_values.T.contiguous()  # [H, num_samples]
 
 
 def _tensor_parallel_reduce(
