@@ -305,10 +305,10 @@ def is_config_valid(bsz_v, bsz_d, bsz_h):
     # - logits_blk: bsz_v * bsz_h * 4 bytes (float32, persists)
     # - w_blk: bsz_v * bsz_d * 2 bytes (bfloat16, during matmul)
     # - hidden_states_blk: bsz_h * bsz_d * 2 bytes (bfloat16, during matmul)
-    # - noise: bsz_v * bsz_h * 4 bytes (float32, BLOCK_SIZE_NSAMPLES=1)
-    # - gumbel_noise: bsz_v * bsz_h * 4 bytes (float32, BLOCK_SIZE_NSAMPLES=1)
+    # - noise: bsz_v * bsz_h * 4 bytes (float32)
+    # - gumbel_noise: bsz_v * bsz_h * 4 bytes (float32)
 
-    # Peak memory during sampling phase (BLOCK_SIZE_NSAMPLES=1):
+    # Peak memory during sampling phase:
     # logits_blk + gumbel_noise = bsz_v * bsz_h * (4 + 4) bytes
     # = bsz_v * bsz_h * 8 bytes per element
     bytes_per_elem = 8
@@ -357,7 +357,6 @@ def unpack_grid(grid):
                 "BLOCK_SIZE_V": bsz_v,
                 "BLOCK_SIZE_D": bsz_d,
                 "GROUP_SIZE_V": 4,
-                "BLOCK_SIZE_NSAMPLES": 1,
             },
             num_warps=num_warps,
             num_stages=num_stages,
@@ -388,7 +387,6 @@ def fused_mm_sample_triton_kernel(
     BLOCK_SIZE_V: tl.constexpr,  # noqa: N803
     BLOCK_SIZE_D: tl.constexpr,  # noqa: N803
     BLOCK_SIZE_H: tl.constexpr,  # noqa: N803
-    BLOCK_SIZE_NSAMPLES: tl.constexpr,  # noqa: N803
     GROUP_SIZE_V: tl.constexpr,  # noqa: N803
     GUMBEL: tl.constexpr,  # noqa: N803
     USE_PROTON_SCOPES: tl.constexpr,  # noqa: N803
@@ -447,64 +445,49 @@ def fused_mm_sample_triton_kernel(
     logits_blk = tl.where(mask_v[:, None], logits_blk, -float("inf"))
     logits_blk = logits_blk / temperature  # [Vblk, n_hidden_states]
 
-    # Process samples in batches to limit memory usage
-    samples_n_batches: tl.constexpr = triton.cdiv(num_samples, BLOCK_SIZE_NSAMPLES)
-    for batch_idx in range(samples_n_batches):
+    for sample_idx in range(num_samples):
         if USE_PROTON_SCOPES:
             pl.enter_scope("sample")
-        # Calculate how many samples in this batch
-        batch_start = batch_idx * BLOCK_SIZE_NSAMPLES
-        batch_end = min(batch_start + BLOCK_SIZE_NSAMPLES, num_samples)
-        actual_batch_size = batch_end - batch_start
-
         # Note: Creating appropriately sized tensors is tricky because
         # tl.arange() only accepts tl.constexpr that are powers of 2.
-        noise_size: tl.constexpr = BLOCK_SIZE_V * BLOCK_SIZE_H * BLOCK_SIZE_NSAMPLES
-        noise_offsets = tl.arange(0, noise_size).reshape(
-            (BLOCK_SIZE_NSAMPLES, BLOCK_SIZE_V, BLOCK_SIZE_H)
-        )
-        # Note: Each tile (v, h) and batch of samples needs a different seed,
+        noise_size: tl.constexpr = BLOCK_SIZE_V * BLOCK_SIZE_H
+        noise_offsets = tl.arange(0, noise_size).reshape((BLOCK_SIZE_V, BLOCK_SIZE_H))
+        # Note: Each tile (v, h) and sample needs a different seed,
         # otherwise they all create the same noise, leading to sampling artifacts.
         # Compute gumbel noise directly to reduce register pressure
         if GUMBEL:
-            logits_plus_noise = logits_blk - tl.log(
+            gumbel_noise = -tl.log(
                 -tl.log(
                     tl.rand(
-                        seed + pid_v * 100 + pid_h * 1_000 + batch_idx * 10_000,
+                        seed + pid_v * 100 + pid_h * 1_000 + sample_idx * 10_000,
                         noise_offsets,
                     )
                 )
             )
+            gumbel_max, gumbel_max_idx_local = tl.max(
+                logits_blk + gumbel_noise, axis=0, return_indices=True
+            )
         else:
-            logits_plus_noise = logits_blk[None, :, :]
-
-        gumbel_max, gumbel_max_idx_local = tl.max(logits_plus_noise, axis=1, return_indices=True)
+            gumbel_max, gumbel_max_idx_local = tl.max(logits_blk, axis=0, return_indices=True)
         gumbel_max_idx_global = gumbel_max_idx_local + v_start
         if USE_PROTON_SCOPES:
             pl.exit_scope("sample")
 
         if USE_PROTON_SCOPES:
             pl.enter_scope("store")
-        # Output offset for this batch
-        out_blk_start = pid_v * n_hidden_states * num_samples + batch_start
-
-        # Note: It makes a difference if indices are row-major or column-major
+        # Output offset for this sample
+        out_blk_start = pid_v * n_hidden_states * num_samples + sample_idx
         # Note: The stride needs to match the non-padded shape!
-        out_offsets = (
-            tl.arange(0, BLOCK_SIZE_NSAMPLES)[:, None]
-            + num_samples * (h_start + tl.arange(0, BLOCK_SIZE_H))[None, :]
-        )
-        mask_nsamples = tl.arange(0, BLOCK_SIZE_NSAMPLES) < actual_batch_size
-        out_mask = mask_nsamples[:, None] & mask_h[None, :]
+        out_offsets = num_samples * (h_start + tl.arange(0, BLOCK_SIZE_H))
         tl.store(
             max_out_ptr + out_blk_start + out_offsets,
             gumbel_max,
-            mask=out_mask,
+            mask=mask_h,
         )
         tl.store(
             max_out_idx_ptr + out_blk_start + out_offsets,
             gumbel_max_idx_global,
-            mask=out_mask,
+            mask=mask_h,
         )
         if USE_PROTON_SCOPES:
             pl.exit_scope("store")
