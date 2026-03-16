@@ -32,9 +32,15 @@ modal-plot-triton-bench:
 
 TRITON_BENCH_GPUS := b300 b200 h200 h100!
 
-modal-triton-benchmark-all-gpus:
+modal-triton-benchmark-all-gpus: modal-create-results-triton-bench-all-gpus modal-get-and-plot-triton-bench-all-gpus
+
+modal-create-results-triton-bench-all-gpus:
 	$(foreach gpu,$(TRITON_BENCH_GPUS),\
-		$(MAKE) modal-triton-benchmark GPU=$(gpu) &&) true
+		$(MAKE) modal-create-results-triton-bench GPU=$(gpu) &) wait
+
+modal-get-and-plot-triton-bench-all-gpus:
+	$(foreach gpu,$(TRITON_BENCH_GPUS),\
+		$(MAKE) modal-get-results-triton-bench modal-plot-triton-bench GPU=$(gpu) &&) true
 
 modal-distr-triton-benchmark:
 	$(MAKE) modal-triton-benchmark N_PROCS=2 NAME=fused-triton,naive-pt,naive-compiled,flashinfer:sampling_from_logits,flashinfer:top_k_top_p_sampling_from_logits
