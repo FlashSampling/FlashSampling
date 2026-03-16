@@ -1,0 +1,53 @@
+100.000 0.086 ROOT
+└─ 61.450 0.054 timing
+   ├─ 7.059 0.006 clear-l2-cache
+   │  └─ 7.059 0.006 clear-l2-cache
+   │     └─ 7.059 0.006 _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIiEESt5arrayIPcLm1EEEEviT0_T1_
+   └─ 54.390 0.048 kernel
+      ├─ 0.000 0.000 _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIfEESt5arrayIPcLm1EEEEviT0_T1_
+      ├─ 0.000 0.000 _ZN2at6native29vectorized_elementwise_kernelILi4ENS0_11FillFunctorIjEESt5arrayIPcLm1EEEEviT0_T1_
+      └─ 54.390 0.048 _helion_fused_sample_helion_kernel
+         ├─ 0.009 nan /home/tomasruiz/code/fused-mm-sample/.venv/lib/python3.12/site-packages/torch/_inductor/runtime/triton_helpers.py:116@_helion_fused_sample_helion_kernel
+         ├─ 0.001 nan /home/tomasruiz/code/fused-mm-sample/.venv/lib/python3.12/site-packages/torch/_inductor/runtime/triton_helpers.py:118@_helion_fused_sample_helion_kernel
+         ├─ 0.005 nan /home/tomasruiz/code/fused-mm-sample/.venv/lib/python3.12/site-packages/torch/_inductor/runtime/triton_helpers.py:119@_helion_fused_sample_helion_kernel
+         ├─ 0.001 nan /home/tomasruiz/code/fused-mm-sample/.venv/lib/python3.12/site-packages/torch/_inductor/runtime/triton_helpers.py:153@_helion_fused_sample_helion_kernel
+         ├─ 0.003 nan /home/tomasruiz/code/fused-mm-sample/.venv/lib/python3.12/site-packages/torch/_inductor/runtime/triton_helpers.py:160@_helion_fused_sample_helion_kernel
+         ├─ 0.003 nan /home/tomasruiz/code/fused-mm-sample/.venv/lib/python3.12/site-packages/torch/_inductor/runtime/triton_helpers.py:161@_helion_fused_sample_helion_kernel
+         ├─ 0.049 nan /home/tomasruiz/code/fused-mm-sample/.venv/lib/python3.12/site-packages/torch/_inductor/runtime/triton_helpers.py:171@_helion_fused_sample_helion_kernel
+         ├─ 0.000 nan /home/tomasruiz/code/fused-mm-sample/.venv/lib/python3.12/site-packages/torch/_inductor/runtime/triton_helpers.py:695@_helion_fused_sample_helion_kernel
+         ├─ 0.000 nan /home/tomasruiz/code/fused-mm-sample/.venv/lib/python3.12/site-packages/torch/_inductor/runtime/triton_helpers.py:700@_helion_fused_sample_helion_kernel
+         ├─ 0.031 nan /home/tomasruiz/code/fused-mm-sample/.venv/lib/python3.12/site-packages/torch/_inductor/runtime/triton_helpers.py:705@_helion_fused_sample_helion_kernel
+         ├─ 0.600 nan /home/tomasruiz/code/fused-mm-sample/.venv/lib/python3.12/site-packages/torch/_inductor/runtime/triton_helpers.py:708@_helion_fused_sample_helion_kernel
+         ├─ 25.369 nan /home/tomasruiz/code/fused-mm-sample/.venv/lib/python3.12/site-packages/torch/_inductor/runtime/triton_helpers.py:710@_helion_fused_sample_helion_kernel
+         ├─ 2.834 nan /home/tomasruiz/code/fused-mm-sample/.venv/lib/python3.12/site-packages/torch/_inductor/runtime/triton_helpers.py:712@_helion_fused_sample_helion_kernel
+         ├─ 0.212 nan /home/tomasruiz/code/fused-mm-sample/.venv/lib/python3.12/site-packages/torch/_inductor/runtime/triton_helpers.py:715@_helion_fused_sample_helion_kernel
+         ├─ 0.000 nan /home/tomasruiz/code/fused-mm-sample/.venv/lib/python3.12/site-packages/triton/language/random.py:142@_helion_fused_sample_helion_kernel
+         ├─ 0.000 nan /home/tomasruiz/code/fused-mm-sample/.venv/lib/python3.12/site-packages/triton/language/random.py:143@_helion_fused_sample_helion_kernel
+         ├─ 0.009 nan /home/tomasruiz/code/fused-mm-sample/.venv/lib/python3.12/site-packages/triton/language/random.py:35@_helion_fused_sample_helion_kernel
+         ├─ 0.010 nan /home/tomasruiz/code/fused-mm-sample/.venv/lib/python3.12/site-packages/triton/language/random.py:36@_helion_fused_sample_helion_kernel
+         ├─ 0.003 nan /home/tomasruiz/code/fused-mm-sample/.venv/lib/python3.12/site-packages/triton/language/random.py:37@_helion_fused_sample_helion_kernel
+         ├─ 0.003 nan /home/tomasruiz/code/fused-mm-sample/.venv/lib/python3.12/site-packages/triton/language/random.py:38@_helion_fused_sample_helion_kernel
+         ├─ 0.001 nan /tmp/torchinductor_tomasruiz/ze/czeb53lz4zj2p35t4r5k2k6ps3hc6fhoohn3uhxjh7schqpdiaja.py:116@_helion_fused_sample_helion_kernel
+         ├─ 0.000 nan /tmp/torchinductor_tomasruiz/ze/czeb53lz4zj2p35t4r5k2k6ps3hc6fhoohn3uhxjh7schqpdiaja.py:182@_helion_fused_sample_helion_kernel
+         ├─ 0.000 nan /tmp/torchinductor_tomasruiz/ze/czeb53lz4zj2p35t4r5k2k6ps3hc6fhoohn3uhxjh7schqpdiaja.py:183@_helion_fused_sample_helion_kernel
+         ├─ 0.001 nan /tmp/torchinductor_tomasruiz/ze/czeb53lz4zj2p35t4r5k2k6ps3hc6fhoohn3uhxjh7schqpdiaja.py:191@_helion_fused_sample_helion_kernel
+         ├─ 0.003 nan /tmp/torchinductor_tomasruiz/ze/czeb53lz4zj2p35t4r5k2k6ps3hc6fhoohn3uhxjh7schqpdiaja.py:24@_helion_fused_sample_helion_kernel
+         ├─ 0.003 nan /tmp/torchinductor_tomasruiz/ze/czeb53lz4zj2p35t4r5k2k6ps3hc6fhoohn3uhxjh7schqpdiaja.py:31@_helion_fused_sample_helion_kernel
+         ├─ 0.000 nan /tmp/torchinductor_tomasruiz/ze/czeb53lz4zj2p35t4r5k2k6ps3hc6fhoohn3uhxjh7schqpdiaja.py:32@_helion_fused_sample_helion_kernel
+         ├─ 0.005 nan /tmp/torchinductor_tomasruiz/ze/czeb53lz4zj2p35t4r5k2k6ps3hc6fhoohn3uhxjh7schqpdiaja.py:33@_helion_fused_sample_helion_kernel
+         ├─ 0.001 nan /tmp/torchinductor_tomasruiz/ze/czeb53lz4zj2p35t4r5k2k6ps3hc6fhoohn3uhxjh7schqpdiaja.py:51@_helion_fused_sample_helion_kernel
+         ├─ 0.196 nan /tmp/torchinductor_tomasruiz/ze/czeb53lz4zj2p35t4r5k2k6ps3hc6fhoohn3uhxjh7schqpdiaja.py:63@_helion_fused_sample_helion_kernel
+         ├─ 18.603 nan /tmp/torchinductor_tomasruiz/ze/czeb53lz4zj2p35t4r5k2k6ps3hc6fhoohn3uhxjh7schqpdiaja.py:68@_helion_fused_sample_helion_kernel
+         ├─ 2.859 nan /tmp/torchinductor_tomasruiz/ze/czeb53lz4zj2p35t4r5k2k6ps3hc6fhoohn3uhxjh7schqpdiaja.py:69@_helion_fused_sample_helion_kernel
+         ├─ 3.461 nan /tmp/torchinductor_tomasruiz/ze/czeb53lz4zj2p35t4r5k2k6ps3hc6fhoohn3uhxjh7schqpdiaja.py:70@_helion_fused_sample_helion_kernel
+         ├─ 0.052 nan /tmp/torchinductor_tomasruiz/ze/czeb53lz4zj2p35t4r5k2k6ps3hc6fhoohn3uhxjh7schqpdiaja.py:72@_helion_fused_sample_helion_kernel
+         ├─ 0.033 nan /tmp/torchinductor_tomasruiz/ze/czeb53lz4zj2p35t4r5k2k6ps3hc6fhoohn3uhxjh7schqpdiaja.py:73@_helion_fused_sample_helion_kernel
+         ├─ 0.006 nan /tmp/torchinductor_tomasruiz/ze/czeb53lz4zj2p35t4r5k2k6ps3hc6fhoohn3uhxjh7schqpdiaja.py:79@_helion_fused_sample_helion_kernel
+         ├─ 0.000 nan /tmp/torchinductor_tomasruiz/ze/czeb53lz4zj2p35t4r5k2k6ps3hc6fhoohn3uhxjh7schqpdiaja.py:80@_helion_fused_sample_helion_kernel
+         ├─ 0.006 nan /tmp/torchinductor_tomasruiz/ze/czeb53lz4zj2p35t4r5k2k6ps3hc6fhoohn3uhxjh7schqpdiaja.py:81@_helion_fused_sample_helion_kernel
+         ├─ 0.000 nan /tmp/torchinductor_tomasruiz/ze/czeb53lz4zj2p35t4r5k2k6ps3hc6fhoohn3uhxjh7schqpdiaja.py:82@_helion_fused_sample_helion_kernel
+         ├─ 0.000 nan /tmp/torchinductor_tomasruiz/ze/czeb53lz4zj2p35t4r5k2k6ps3hc6fhoohn3uhxjh7schqpdiaja.py:84@_helion_fused_sample_helion_kernel
+         ├─ 0.014 nan /tmp/torchinductor_tomasruiz/ze/czeb53lz4zj2p35t4r5k2k6ps3hc6fhoohn3uhxjh7schqpdiaja.py:87@_helion_fused_sample_helion_kernel
+         ├─ 0.000 nan /tmp/torchinductor_tomasruiz/ze/czeb53lz4zj2p35t4r5k2k6ps3hc6fhoohn3uhxjh7schqpdiaja.py:89@_helion_fused_sample_helion_kernel
+         └─ 0.001 nan /tmp/torchinductor_tomasruiz/ze/czeb53lz4zj2p35t4r5k2k6ps3hc6fhoohn3uhxjh7schqpdiaja.py:92@_helion_fused_sample_helion_kernel
+

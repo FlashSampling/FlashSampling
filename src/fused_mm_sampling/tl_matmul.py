@@ -35,7 +35,7 @@ import triton.language as tl
 def matmul_kernel(
     # Pointers to matrices
     a_ptr,  # [M, K]
-    b_ptr,  # [N, K]
+    b_ptr,  # [K, N] (pre-transposed by wrapper)
     c_ptr,
     # Matrix dimensions
     M,  # noqa: N803
@@ -48,14 +48,20 @@ def matmul_kernel(
     GROUP_SIZE_M: tl.constexpr,  # noqa: N803
     ACTIVATION: tl.constexpr,  # noqa: N803
 ):
-    """Kernel for computing the matmul C = A x B.
-    A has shape (M, K), B has shape (N, K) and C has shape (M, N).
+    """Kernel for computing the matmul C = A x B.T.
+    A has shape (M, K), B is pre-transposed to (K, N), and C has shape (M, N).
     Uses device-side tensor descriptors (TMA) for efficient memory access.
+
+    NOTE: tl.dot(a, b.T) does NOT work correctly with TMA-loaded blocks —
+    .T only swaps the logical view without rearranging shared memory, but
+    tensor core MMA instructions depend on physical layout. And TMA enforces
+    strides[-1] == 1 so we can't describe the transpose via strides either.
+    The wrapper pre-transposes B to [K, N] contiguous.
     """
     # -----------------------------------------------------------
     # Create device-side tensor descriptors for TMA
     # A: [M, K] row-major contiguous
-    # B: [N, K] row-major contiguous (transposed for A @ B.T)
+    # B: [K, N] row-major contiguous (pre-transposed by wrapper)
     # C: [M, N] row-major contiguous
     a_desc = tl.make_tensor_descriptor(
         a_ptr,
@@ -65,9 +71,9 @@ def matmul_kernel(
     )
     b_desc = tl.make_tensor_descriptor(
         b_ptr,
-        shape=[N, K],
-        strides=[K, 1],
-        block_shape=[BLOCK_SIZE_N, BLOCK_SIZE_K],
+        shape=[K, N],
+        strides=[N, 1],
+        block_shape=[BLOCK_SIZE_K, BLOCK_SIZE_N],
     )
     c_desc = tl.make_tensor_descriptor(
         c_ptr,
@@ -103,9 +109,9 @@ def matmul_kernel(
         offs_k = k * BLOCK_SIZE_K
         # Load blocks using tensor descriptors (TMA handles bounds automatically)
         a = a_desc.load([offs_am, offs_k])
-        b = b_desc.load([offs_bn, offs_k])
+        b = b_desc.load([offs_k, offs_bn])
         # We accumulate along the K dimension.
-        accumulator = tl.dot(a, b.T, accumulator)
+        accumulator = tl.dot(a, b, accumulator)
 
     # You can fuse arbitrary activation functions here
     # while the accumulator is still in FP32!
@@ -133,6 +139,24 @@ def matmul(a, b, activation=""):
     assert b.is_contiguous(), "Matrix B must be contiguous"
     M, K = a.shape  # noqa: N806
     N, K = b.shape  # noqa: N806
+
+    # TMA requires the innermost (stride-1) dimension to be aligned to 16 bytes.
+    # For bfloat16 (2 bytes per element) that means multiples of 8 elements.
+    tma_align = 16 // a.element_size()
+    if K % tma_align != 0:
+        raise ValueError(
+            f"K={K} is not a multiple of {tma_align}. "
+            f"TMA descriptors require the innermost dimension to be aligned to 16 bytes."
+        )
+    if N % tma_align != 0:
+        raise ValueError(
+            f"N={N} is not a multiple of {tma_align}. "
+            f"TMA descriptors require the innermost dimension to be aligned to 16 bytes."
+        )
+
+    # Pre-transpose B: [N, K] -> [K, N] contiguous.
+    # TMA enforces strides[-1]==1, so we can't describe the transpose via strides.
+    b_t = b.T.contiguous()
     # Allocates output.
     c = torch.empty((M, N), device=a.device, dtype=torch.bfloat16)
 
@@ -147,13 +171,13 @@ def matmul(a, b, activation=""):
     # allowing A matrix (small M dimension) to be reused from L2 cache.
     def grid(meta):
         return (
-            triton.cdiv(N, meta["BLOCK_SIZE_N"]),  # N first (like vocab in fused kernel)
-            triton.cdiv(M, meta["BLOCK_SIZE_M"]),  # M second (like hidden_states in fused kernel)
+            triton.cdiv(N, meta["BLOCK_SIZE_N"]),
+            triton.cdiv(M, meta["BLOCK_SIZE_M"]),
         )
 
     matmul_kernel[grid](
         a,
-        b,
+        b_t,
         c,
         M,  # noqa: N803
         N,  # noqa: N803

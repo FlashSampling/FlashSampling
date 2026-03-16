@@ -1,0 +1,25 @@
+GPU: NVIDIA GeForce RTX 3090
+Arguments: {"name":"helion","n_runs_warmup":25,"n_runs_benchmark":100,"n_hidden_states":1,"n_samples":1,"tgt_dir":"profiles/barrier-comparison/barrier","use_proton":false,"case":"large"}
+Benchmark case: large
+  vocab_size: 128256
+  hidden_size: 8192
+  n_hidden_states: 1
+  n_samples: 1
+
+================================================================================
+Benchmarking helion...
+[0s] Autotune random seed: 1109870874
+Using cached config:
+	@helion.kernel(config=helion.Config(block_sizes=[1, 128, 1], indexing=['pointer', 'pointer', 'block_ptr', 'pointer', 'pointer', 'pointer', 'block_ptr'], l2_groupings=[2], load_eviction_policies=['', '', '', ''], loop_orders=[[0, 1]], maxnreg=256, num_sm_multiplier=2, num_stages=1, num_warps=16, pid_type='persistent_blocked', range_flattens=[None, None, None], range_multi_buffers=[None, None, None], range_unroll_factors=[0, 0, 1], range_warp_specializes=[]), static_shapes=True)
+[0s] Found cached config for fused_sample_helion_kernel, skipping autotuning.
+Cache directory: /home/tomasruiz/code/fused-mm-sample/helion-cache. To run autotuning again, delete the cache directory or set HELION_SKIP_CACHE=1.
+Warming up...
+Timing...
+args.n_samples=1
+     name  total[s]  size
+0  helion      0.24   100
+       time[ms]                                          
+          count  mean   std   min   25%   50%   75%   max
+name                                                     
+helion    100.0  2.39  0.01  2.37  2.38  2.38  2.39  2.52
+Saved results to  profiles/barrier-comparison/barrier

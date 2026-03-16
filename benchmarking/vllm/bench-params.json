@@ -1,0 +1,11 @@
+[
+  {"max_concurrency": 1, "num_prompts": 10, "request_rate": 1},
+  {"max_concurrency": 2, "num_prompts": 20, "request_rate": 2},
+  {"max_concurrency": 4, "num_prompts": 40, "request_rate": 4},
+  {"max_concurrency": 8, "num_prompts": 80, "request_rate": 8},
+  {"max_concurrency": 16, "num_prompts": 160, "request_rate": 16},
+  {"max_concurrency": 32, "num_prompts": 256, "request_rate": 32},
+  {"max_concurrency": 64, "num_prompts": 384, "request_rate": 64},
+  {"max_concurrency": 128, "num_prompts": 640, "request_rate": 128},
+  {"max_concurrency": 256, "num_prompts": 1024, "request_rate": 256}
+]

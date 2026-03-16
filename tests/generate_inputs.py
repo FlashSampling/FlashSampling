@@ -21,8 +21,8 @@ def main():
     # load the tokenizer and the model
     tokenizer = AutoTokenizer.from_pretrained(model_name)
     model: GenerationMixin = AutoModelForCausalLM.from_pretrained(
-        model_name, dtype="bfloat16", device_map="auto"
-    )
+        model_name, dtype="bfloat16"
+    ).to("cuda")
 
     prompts = [
         "Give me a short introduction to large language model.",
@@ -38,26 +38,9 @@ def main():
     os.makedirs("qwen3-0.6b", exist_ok=True)
     hidden_states = outputs.last_hidden_state[:, -1, :]  # [n_hidden_states, D]
     torch.save(hidden_states, "qwen3-0.6b/hidden_states.pt")
-    weights = model.lm_head.weight.data.T  # [D, V]
+    weights = model.lm_head.weight.data  # [V, D]
     torch.save(weights, "qwen3-0.6b/weights.pt")
 
 
 if __name__ == "__main__":
     main()
-
-# for response in tokenizer.batch_decode(generated_ids):
-#     print(response)
-#     print("-" * 100)
-
-#     samples = sample(
-#         weights=model.lm_head.weight,
-#         hidden_states=hidden_states,
-#         num_samples=1,
-#         temperature=0.7,
-#     )
-#     model_inputs["input_ids"] = torch.cat([model_inputs["input_ids"], samples], dim=-1)
-#     model_inputs = model._update_model_kwargs_for_generation(
-#         outputs=outputs,
-#         model_kwargs=model_inputs,
-#         is_encoder_decoder=False
-#     )

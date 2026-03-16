@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../tomasruizt.github.io"
+		},
+		{
+			"path": "../papers/flashsampling-paper"
+		}
+	],
+	"settings": {
+		"makefile.configureOnOpen": false
+	}
+}

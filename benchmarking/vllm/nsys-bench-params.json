@@ -1,0 +1,4 @@
+[
+    {"_benchmark_name": "warmup"},
+    {"_benchmark_name": "profiled", "profile": true}
+]

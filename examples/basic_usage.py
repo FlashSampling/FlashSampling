@@ -30,7 +30,7 @@ samples = fused_mm_sample_triton(
     weights=weights,
     hidden_states=hidden_states,
     num_samples=16,
-    temperature=0.8,
+    temperature=torch.tensor(0.8, device=device),
     seed=0,
 )
 
