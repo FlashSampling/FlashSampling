@@ -142,4 +142,29 @@ The "blocking" is just a CPU-side wait for the operation to be *enqueued*, not *
 
 The FMMS TP2 collective overhead (~0.12-0.20ms) is a fixed cost from NCCL collective latency, not from data volume or CPU blocking.
 Python-level optimizations (reordering ops, async mode) cannot reduce it.
-The only path to eliminate it is fusing the collective into the Triton kernel itself (e.g., via TMA multicast or direct NVLink access from Triton).
+The only path to eliminate it is fusing the collective into the Triton kernel itself.
+
+## Next step: fuse the all_gather into the Triton kernel via symmetric memory
+
+[Kraken](https://github.com/meta-pytorch/kraken) (Meta) provides Triton-level communication primitives that bypass NCCL entirely, using **symmetric memory** (direct NVLink peer access) and PTX barrier instructions.
+
+Kraken's `all_gather_matmul` demonstrates the pattern: a persistent Triton kernel polls a `progress` tensor to consume data chunks as they arrive from remote GPUs via a DMA copy engine on a separate stream.
+
+### How FMMS differs from Kraken's all_gather_matmul
+
+Kraken gathers the *input* matrix before the matmul.
+In FMMS TP2, each GPU already has its local weight shard, so the matmul needs no all_gather.
+The collective happens *after* the kernel, to exchange the Gumbel-max winners (`[H, 1]` scalars per rank).
+
+### Two approaches considered
+
+**Approach 1 (promising): post-kernel symmetric memory exchange.**
+After the Triton kernel computes local max values + indices, use symmetric memory to write them directly to peer GPU memory from within the kernel's epilogue.
+The kernel on each GPU could then poll for the remote values and do the final argmax, eliminating all 4 Python-side post-kernel ops.
+The data exchanged is tiny (`[H, 1]` scalars per rank), so the symmetric memory write + barrier would be much faster than NCCL collectives.
+Kraken's `symm_mem_sync` and `wait_gmem_barrier` PTX primitives are the building blocks.
+
+**Approach 2 (not promising): pre-kernel all_gather of weights (Kraken style).**
+All_gather the weight shards so each GPU has full V, then run the normal TP1 kernel.
+This eliminates the post-kernel collective but doubles the memory read per GPU (full V instead of V/2).
+At low H the kernel is memory-bound, so reading 2x the weights would roughly double compute time, negating the benefit.
