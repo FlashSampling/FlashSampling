@@ -29,6 +29,9 @@ BENCHMARK_CASES = {
     "large": {"vocab_size": 128_256, "hidden_size": 8_192},  # Llama 3 70B, DeepSeek V3
     "gpt-oss-120b": {"vocab_size": 201_088, "hidden_size": 2_880},  # GPT-OSS 120B
     "kimi-k2.5": {"vocab_size": 163_840, "hidden_size": 7_168},  # Kimi K2.5
+    # Half-V cases for estimating TP2 collective overhead (TP1 at V/2 ≈ per-GPU compute on TP2)
+    "large-halfv": {"vocab_size": 64_128, "hidden_size": 8_192},
+    "small-halfv": {"vocab_size": 75_968, "hidden_size": 4_096},
 }
 
 N_SAMPLES = 1
