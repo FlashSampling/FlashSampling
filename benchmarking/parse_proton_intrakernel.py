@@ -37,13 +37,17 @@ def parse_chrome_trace(path: Path) -> dict | None:
     total = sum(scope_dur.values())
     if total == 0:
         return None
-    n_warps = scope_cnt.get("setup", 0)
+    for scope in SCOPE_ORDER:
+        if scope not in scope_dur:
+            raise ValueError(
+                f"Missing expected scope {scope!r} in {path}. Found: {sorted(scope_dur)}"
+            )
 
     return {
         "scopes": dict(scope_dur),
         "counts": dict(scope_cnt),
         "total_ns": total,
-        "n_warp_events": n_warps,
+        "n_warp_events": scope_cnt["setup"],
     }
 
 
@@ -79,7 +83,7 @@ def trace_phase_pcts(trace: dict) -> dict[str, float]:
     total = trace["total_ns"]
     phase_ns: dict[str, float] = defaultdict(float)
     for scope in SCOPE_ORDER:
-        phase_ns[SCOPE_TO_PHASE[scope]] += trace["scopes"].get(scope, 0)
+        phase_ns[SCOPE_TO_PHASE[scope]] += trace["scopes"][scope]
     # Merge store into sampling
     phase_ns["sampling"] += phase_ns.pop("store", 0)
     return {k: v / total * 100 for k, v in phase_ns.items()}
@@ -131,7 +135,7 @@ def main():
                 continue
             total = t["total_ns"]
             n = t["n_warp_events"]
-            pcts = {s: t["scopes"].get(s, 0) / total * 100 for s in SCOPE_ORDER}
+            pcts = {s: t["scopes"][s] / total * 100 for s in SCOPE_ORDER}
             print(
                 f"   {bsz:>4}"
                 f"  {pcts['setup']:>6.2f}%"
@@ -157,7 +161,7 @@ def main():
             n = t["n_warp_events"]
             # Per-warp total → approximate kernel time
             # total_ns is sum across all warps; kernel time ≈ total_ns / n_warps
-            kernel_us = t["total_ns"] / n / 1000 if n else 0
+            kernel_us = t["total_ns"] / n / 1000
             print(
                 f"   {bsz:>4}"
                 f"  {pcts['matmul']:>6.2f}%"
@@ -180,9 +184,7 @@ def main():
             if not t:
                 continue
             n = t["n_warp_events"]
-            if not n:
-                continue
-            avgs = {s: t["scopes"].get(s, 0) / n for s in SCOPE_ORDER}
+            avgs = {s: t["scopes"][s] / n for s in SCOPE_ORDER}
             total_avg = t["total_ns"] / n
             print(
                 f"   {bsz:>4}"

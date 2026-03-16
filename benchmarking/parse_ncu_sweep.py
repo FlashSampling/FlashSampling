@@ -110,7 +110,7 @@ def _print_summary(df: pd.DataFrame) -> None:
     has_fused = FUSED in labels
 
     # Tag each kernel as matmul or sampling
-    matmul_patterns = ("gemm", "fused_mm_sample")
+    matmul_patterns = ("gemm", "gemv", "fused_mm_sample")
     df = df.assign(
         is_matmul=df["kernel_name"]
         .str.lower()

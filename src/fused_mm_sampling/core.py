@@ -425,6 +425,8 @@ def fused_mm_sample_triton_kernel(
     Each SM processes multiple tiles in a loop, staying persistent on the SM
     rather than exiting after processing a single tile.
     """
+    if USE_PROTON_SCOPES:
+        pl.enter_scope("setup")
     temperature = tl.load(temperature_ptr)
     start_pid = tl.program_id(axis=0)
     num_pid_v = tl.cdiv(vocab_size, BLOCK_SIZE_V)
@@ -457,7 +459,8 @@ def fused_mm_sample_triton_kernel(
         strides=[max_grid_size_v * n_hidden_states, n_hidden_states, 1],
         block_shape=[1, 1, BLOCK_SIZE_H],
     )
-
+    if USE_PROTON_SCOPES:
+        pl.exit_scope("setup")
     # tile_id_c is used in the epilogue to break the dependency between
     # the prologue and the epilogue (workaround for Blackwell pipelining bug)
     tile_id_c = start_pid - NUM_SMS
