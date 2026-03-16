@@ -160,6 +160,8 @@ parse-sweep-proton:
 plot-bsz-sweep-runtime:
 	$(PYTHON) plot_bsz_sweep_runtime.py --n_procs $(N_PROCS) --case $(CASE) --fmt pdf --use-name-flashsampling
 
+sweep-bsz-all: sweep-bsz-ncu sweep-bsz-proton plot-bsz-sweep-runtime
+
 TRITON_BENCH_DIR=profiles/triton-bench/tp$(N_PROCS)
 
 triton-benchmark:

@@ -20,7 +20,6 @@ from .tl_matmul import matmul
 from .tp_info import TP1, TPInfo
 
 
-@nvtx.annotate()
 def sample(
     weights: torch.Tensor,  # [V, D] (may be a TP shard over dim V)
     hidden_states: torch.Tensor,  # [n_hidden_states, D]
@@ -137,6 +136,7 @@ sample_compiled_fullgraph = torch.compile(sample, fullgraph=True)
 sample_compiled_with_breaks = torch.compile(sample)
 
 
+@nvtx.annotate()
 @functools.wraps(sample)
 def sample_compiled(*args, tp: TPInfo = TP1, **kwargs):
     if tp.size > 1:
