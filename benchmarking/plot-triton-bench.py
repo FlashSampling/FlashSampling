@@ -419,7 +419,10 @@ def plot_relative_performance_from_wide(
 
 
 def create_and_triton_bench_plots(
-    folder: Path, fmt: str = "png", use_name_flashsampling: bool = False
+    folder: Path,
+    fmt: str = "png",
+    use_name_flashsampling: bool = False,
+    skip_multinomial_eager: bool = False,
 ):
     tgt_folder = folder / "custom-plots"
     tgt_folder.mkdir(parents=True, exist_ok=True)
@@ -440,6 +443,8 @@ def create_and_triton_bench_plots(
         print(f"Plotting case: {case}")
 
         bdf = read_triton_bench_csv(csv_path)
+        if skip_multinomial_eager:
+            bdf = bdf.drop(columns=["Multinomial Sampling (Eager)"], errors="ignore")
         if use_name_flashsampling:
             bdf = apply_flashsampling_rename(bdf)
         bdf_long = bdf.melt(id_vars=["n_hidden_states"], var_name="provider", value_name="time[ms]")
@@ -506,10 +511,14 @@ class Args(BaseSettings, cli_parse_args=True):
     tgt_dir: Path = Path(__file__).parent / "profiles/triton-bench/"
     fmt: str = "png"
     use_name_flashsampling: bool = False
+    skip_multinomial_eager: bool = False
 
 
 if __name__ == "__main__":
     args = Args()
     create_and_triton_bench_plots(
-        args.tgt_dir, fmt=args.fmt, use_name_flashsampling=args.use_name_flashsampling
+        args.tgt_dir,
+        fmt=args.fmt,
+        use_name_flashsampling=args.use_name_flashsampling,
+        skip_multinomial_eager=args.skip_multinomial_eager,
     )

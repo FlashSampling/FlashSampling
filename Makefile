@@ -10,8 +10,12 @@ POSTFIX :=
 N_PROCS := 1
 CASE := all
 NAME :=
+# Skip "Multinomial Sampling (Eager)" from plots (it's always slower than Compiled).
+# To include it: make plot-all SKIP_EAGER=
+SKIP_EAGER := 1
 BENCH_DIR := triton-bench-$(GPU)$(POSTFIX)/tp$(N_PROCS)
 RESULTS_DIR := benchmarking/modal-results/$(BENCH_DIR)
+PLOT_EXTRA_FLAGS := $(if $(SKIP_EAGER),--skip_multinomial_eager=1,)
 
 modal-speed-test:
 	modal run -m src.fused_mm_sampling.modal_lib.modal_speed_test
@@ -27,8 +31,8 @@ modal-create-results-triton-bench:
 		> $(RESULTS_DIR)/logs.txt
 
 modal-plot-triton-bench:
-	python benchmarking/plot-triton-bench.py --tgt_dir $(RESULTS_DIR)
-	python benchmarking/plot-triton-bench.py --tgt_dir $(RESULTS_DIR) --fmt pdf --use_name_flashsampling=1
+	python benchmarking/plot-triton-bench.py --tgt_dir $(RESULTS_DIR) $(PLOT_EXTRA_FLAGS)
+	python benchmarking/plot-triton-bench.py --tgt_dir $(RESULTS_DIR) --fmt pdf --use_name_flashsampling=1 $(PLOT_EXTRA_FLAGS)
 
 TRITON_BENCH_GPUS := b300 b200 h200 h100!
 
@@ -63,8 +67,8 @@ plot-all:
 	$(foreach gpu,$(TRITON_BENCH_GPUS),\
 		$(foreach tp,$(TRITON_BENCH_TPS),\
 			$(if $(wildcard benchmarking/modal-results/triton-bench-$(gpu)/tp$(tp)/*.csv),\
-				python benchmarking/plot-triton-bench.py --tgt_dir benchmarking/modal-results/triton-bench-$(gpu)/tp$(tp) && \
-				python benchmarking/plot-triton-bench.py --tgt_dir benchmarking/modal-results/triton-bench-$(gpu)/tp$(tp) --fmt pdf --use_name_flashsampling=1 &&,)) ) true
+				python benchmarking/plot-triton-bench.py --tgt_dir benchmarking/modal-results/triton-bench-$(gpu)/tp$(tp) $(PLOT_EXTRA_FLAGS) && \
+				python benchmarking/plot-triton-bench.py --tgt_dir benchmarking/modal-results/triton-bench-$(gpu)/tp$(tp) --fmt pdf --use_name_flashsampling=1 $(PLOT_EXTRA_FLAGS) &&,)) ) true
 	$(MAKE) plot-vllm-bench
 
 plot-vllm-bench:

@@ -6,6 +6,8 @@
 - to test the distributed code works use `make pytest-distributed`.
 - when benchmarking many combinations, don't run the bench in parallel, since they will contend for the same resources. Instead launch them sequentially. On modal, you can launch benchmarks in parallel, since each job should get its own resources. When launching many parallel Modal benchmarks with an empty Triton autotune cache, consider running a single warmup job first to populate the cache on the volume. Otherwise every parallel job will autotune independently, wasting GPU time and risking inconsistent config selection.
 - use the hugging face cli when appropriate.
+- The blog post is in `~/code/tomasruizt.github.io/tomas-blog/posts/07_fused-mm-sample/index.qmd`.
+- The paper is in `~/code/papers/flashsampling-paper/`.
 
 Development notes and lessons learned while building this project.
 
