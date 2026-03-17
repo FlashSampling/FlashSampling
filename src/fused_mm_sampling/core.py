@@ -41,14 +41,15 @@ def sample(
         logits = hidden_states @ weights.T  # [n_hidden_states, V]
     if tp.size > 1:
         logits = _allgather_logits(logits)  # shape [H, V_local] -> [H, V]
-    logits /= temperature
+    # Upcast to float32 before temperature scaling: Qitra asserts float32, and
+    # torch.multinomial produces imprecise distributions with bfloat16.
+    # See findings/upcasting-before-softmax.md.
+    logits = logits.float() / temperature
     if use_qitra:
         probs = apply_top_k_top_p_qitra(logits, top_k, top_p)
     else:
         probs = apply_top_k_top_p(logits, top_k, top_p)
-    # Upcast to float32: torch.multinomial produces imprecise distributions with
-    # bfloat16 inputs (chi-squared p≈0). See findings/upcasting-before-softmax.md.
-    samples = torch.multinomial(probs.float(), num_samples, replacement=True)
+    samples = torch.multinomial(probs, num_samples, replacement=True)
     if return_probs:
         return samples, probs
     return samples
