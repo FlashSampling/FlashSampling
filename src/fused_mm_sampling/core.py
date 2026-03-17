@@ -383,14 +383,22 @@ def unpack_grid(grid):
         return grid[0], grid[1], grid[2]
 
 
-@triton.autotune(
-    configs=[
+def get_autotuning_configs() -> list[triton.Config]:
+    cc = torch.cuda.get_device_capability()
+    is_dev_machine: bool = cc == (8, 6)  # RTX 3090 config
+    if is_dev_machine:
+        # Single config to avoid register spilling
+        return [
+            triton.Config(
+                {"BLOCK_SIZE_V": MIN_BLOCK_SIZE_V, "BLOCK_SIZE_D": 32, "GROUP_SIZE_V": 4},
+                num_warps=4,
+                num_stages=2,
+                maxnreg=128,
+            )
+        ]
+    return [
         triton.Config(
-            {
-                "BLOCK_SIZE_V": bsz_v,
-                "BLOCK_SIZE_D": bsz_d,
-                "GROUP_SIZE_V": 4,
-            },
+            {"BLOCK_SIZE_V": bsz_v, "BLOCK_SIZE_D": bsz_d, "GROUP_SIZE_V": 4},
             num_warps=num_warps,
             num_stages=num_stages,
             maxnreg=maxnreg,
@@ -399,8 +407,12 @@ def unpack_grid(grid):
         for bsz_d in [64, 128]
         for num_warps in [8]  # Default 4
         for maxnreg in [128]  # Previously 255, not sure either is better
-        for num_stages in [4]  # 4 outpeforms 2, and 3
-    ],
+        for num_stages in [4]  # 4 outperforms 2, and 3
+    ]
+
+
+@triton.autotune(
+    configs=get_autotuning_configs(),
     key=["vocab_size", "hidden_size", "BLOCK_SIZE_H", "num_samples", "GREEDY_SAMPLING"],
     cache_results=True,
 )
