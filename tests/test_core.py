@@ -10,7 +10,7 @@ import torch
 from scipy.stats import chisquare
 
 from fused_mm_sampling.bench.speed_test import Args, run_speed_test
-from fused_mm_sampling.core import JLSampler, bsz_h, get_sampler
+from fused_mm_sampling.core import JLSampler, bsz_h, fused_mm_sample_triton, get_sampler
 from fused_mm_sampling.testing import assert_sampling_distribution, make_synthetic_inputs
 from fused_mm_sampling.tp_info import TPInfo, run_maybe_distributed
 
@@ -233,6 +233,48 @@ def reference_top_k_top_p(
     cumsum = sorted_probs.cumsum(dim=0)
     mask = cumsum - sorted_probs < top_p
     return topk_indices[sorted_order[mask]]
+
+
+@pytest.mark.parametrize("n_hidden_states", [1, 2])
+@pytest.mark.parametrize("vocab_size", [100, 200, 256])
+def test_fused_triton_return_logits(vocab_size: int, n_hidden_states: int):
+    """Verify that the fused kernel returns logits matching a PyTorch matmul reference."""
+    inputs = make_synthetic_inputs(vocab_size=vocab_size, n_hidden_states=n_hidden_states)
+    temperature = torch.tensor(1.0, device=device)
+
+    samples, logits = fused_mm_sample_triton(
+        weights=inputs.weights,
+        hidden_states=inputs.hidden_states,
+        num_samples=1,
+        temperature=temperature,
+        seed=0,
+        return_logits=True,
+    )
+
+    ref_logits = inputs.hidden_states.float() @ inputs.weights.float().T  # [H, V]
+    assert logits.shape == ref_logits.shape
+    torch.testing.assert_close(logits, ref_logits, atol=1e-4, rtol=1e-4)
+
+
+@pytest.mark.parametrize("n_hidden_states", [1, 2])
+@pytest.mark.parametrize("vocab_size", [100, 200, 256])
+def test_greedy_sampling(vocab_size, n_hidden_states):
+    """Verify that greedy_sampling=True returns the argmax token for each sequence."""
+    inputs = make_synthetic_inputs(vocab_size=vocab_size, n_hidden_states=n_hidden_states)
+
+    samples = fused_mm_sample_triton(
+        weights=inputs.weights,
+        hidden_states=inputs.hidden_states,
+        num_samples=1,
+        temperature=torch.empty((), device=device),
+        seed=0,
+        greedy_sampling=True,
+    )
+
+    ref_logits = inputs.hidden_states.float() @ inputs.weights.float().T  # [H, V]
+    expected = ref_logits.argmax(dim=-1)  # [H]
+    assert samples.shape == (n_hidden_states, 1)
+    torch.testing.assert_close(samples[:, 0], expected)
 
 
 def test_speed_test_smoke():

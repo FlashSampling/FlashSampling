@@ -199,8 +199,9 @@ def fused_mm_sample_triton(
     num_samples: int,
     temperature: torch.Tensor,  # scalar (0-d)
     seed: int,
-    GUMBEL: bool = True,  # noqa: N803
+    greedy_sampling: bool = False,
     tp: "TPInfo" = TP1,
+    return_logits: bool = False,
 ):
     V, D = weights.shape  # noqa: N806
     H, D2 = hidden_states.shape  # noqa: N806
@@ -218,6 +219,8 @@ def fused_mm_sample_triton(
         device=weights.device,
     )
     maxs_idx = torch.empty_like(maxs, dtype=torch.long)
+
+    logits_out = torch.empty((V, H), dtype=torch.float32, device=weights.device)
 
     grid_size = {"v": None}
 
@@ -241,9 +244,11 @@ def fused_mm_sample_triton(
         temperature_ptr=temperature,
         seed=seed,
         max_grid_size_v=max_grid_size_v,
+        logits_out_ptr=logits_out,
         WARP_SPECIALIZE=supports_warp_specialization(),
         NUM_SMS=NUM_SMS,
-        GUMBEL=GUMBEL,
+        GREEDY_SAMPLING=greedy_sampling,
+        RETURN_LOGITS=return_logits,
         USE_PROTON_SCOPES=os.environ.get("USE_PROTON_SCOPES", "0") == "1",
     )
 
@@ -259,6 +264,8 @@ def fused_mm_sample_triton(
     if tp.size > 1:
         samples = _tensor_parallel_reduce(samples, max_values)
 
+    if return_logits:
+        return samples, logits_out.T  # [n_hidden_states, num_samples], [H, V]
     return samples  # [n_hidden_states, num_samples]
 
 
@@ -394,7 +401,7 @@ def unpack_grid(grid):
         for maxnreg in [128]  # Previously 255, not sure either is better
         for num_stages in [4]  # 4 outpeforms 2, and 3
     ],
-    key=["vocab_size", "hidden_size", "BLOCK_SIZE_H", "num_samples", "GUMBEL"],
+    key=["vocab_size", "hidden_size", "BLOCK_SIZE_H", "num_samples", "GREEDY_SAMPLING"],
     cache_results=True,
 )
 @triton.heuristics(values={"BLOCK_SIZE_H": lambda args: bsz_h(args["n_hidden_states"])})
@@ -415,9 +422,11 @@ def fused_mm_sample_triton_kernel(
     BLOCK_SIZE_H: tl.constexpr,  # noqa: N803
     GROUP_SIZE_V: tl.constexpr,  # noqa: N803
     max_grid_size_v: tl.constexpr,
+    logits_out_ptr,  # [V, n_hidden_states] float32 (or dummy when RETURN_LOGITS=False)
     WARP_SPECIALIZE: tl.constexpr,  # noqa: N803
     NUM_SMS: tl.constexpr,  # noqa: N803
-    GUMBEL: tl.constexpr,  # noqa: N803
+    GREEDY_SAMPLING: tl.constexpr,  # noqa: N803
+    RETURN_LOGITS: tl.constexpr,  # noqa: N803
     USE_PROTON_SCOPES: tl.constexpr,  # noqa: N803
 ):
     """Persistent kernel for fused matmul + Gumbel-max sampling.
@@ -427,7 +436,8 @@ def fused_mm_sample_triton_kernel(
     """
     if USE_PROTON_SCOPES:
         pl.enter_scope("setup")
-    temperature = tl.load(temperature_ptr)
+    if not GREEDY_SAMPLING:
+        temperature = tl.load(temperature_ptr)
     start_pid = tl.program_id(axis=0)
     num_pid_v = tl.cdiv(vocab_size, BLOCK_SIZE_V)
     num_pid_h = tl.cdiv(n_hidden_states, BLOCK_SIZE_H)
@@ -492,10 +502,18 @@ def fused_mm_sample_triton_kernel(
         if USE_PROTON_SCOPES:
             pl.exit_scope("matmul-tile")
 
+        # Optionally store raw logits to GMEM before masking and temperature.
+        if RETURN_LOGITS:
+            offsets_h = h_start + tl.arange(0, BLOCK_SIZE_H)
+            logits_ptrs = logits_out_ptr + offsets_v[:, None] * n_hidden_states + offsets_h[None, :]
+            logits_mask = mask_v[:, None] & (offsets_h < n_hidden_states)[None, :]
+            tl.store(logits_ptrs, logits_blk, mask=logits_mask)
+
         # Later we will take max over logits + noise, but rows outside the mask
         # should not be considered. Setting them to -inf achieves this.
         logits_blk = tl.where(mask_v[:, None], logits_blk, -float("inf"))
-        logits_blk = logits_blk / temperature  # [Vblk, n_hidden_states]
+        if not GREEDY_SAMPLING:
+            logits_blk = logits_blk / temperature  # [Vblk, n_hidden_states]
 
         # Epilogue: use tile_id_c to break dependency with prologue
         tile_id_c += NUM_SMS
@@ -511,7 +529,7 @@ def fused_mm_sample_triton_kernel(
             noise_size: tl.constexpr = BLOCK_SIZE_V * BLOCK_SIZE_H
             noise_offsets = tl.arange(0, noise_size).reshape((BLOCK_SIZE_V, BLOCK_SIZE_H))
 
-            if GUMBEL:
+            if not GREEDY_SAMPLING:
                 # Note: Each tile (v, h) and sample needs a different seed,
                 # otherwise they all create the same noise, leading to sampling artifacts.
                 # Compute gumbel noise directly to reduce register pressure
@@ -646,9 +664,17 @@ def get_sampler(provider: str, weights: torch.Tensor) -> Sampler:
     match provider:
         case "fused-triton":
             return SimpleSampler(lambda **kwargs: fused_mm_sample_triton(**{"seed": 0, **kwargs}))
-        case "fused-triton-no-gumbel":
+        case "fused-triton-ret-logits":
             return SimpleSampler(
-                lambda **kwargs: fused_mm_sample_triton(**{"seed": 0, "GUMBEL": False, **kwargs})
+                lambda **kwargs: fused_mm_sample_triton(
+                    **{"seed": 0, "return_logits": True, **kwargs}
+                )[0]
+            )
+        case "fused-triton-greedy":
+            return SimpleSampler(
+                lambda **kwargs: fused_mm_sample_triton(
+                    **{"seed": 0, "greedy_sampling": True, **kwargs}
+                )
             )
         case "naive-pt":
             return SimpleSampler(sample)

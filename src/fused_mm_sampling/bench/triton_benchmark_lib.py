@@ -65,7 +65,7 @@ class CliArgs(Args, cli_parse_args=True):
 provider_names = {
     "fused-triton": "FMMS (Triton)",
     # "fused-cuda": "FMMS (CUDA)",
-    # "fused-triton-no-gumbel": "FMMS (Triton NoNoise)",
+    # "fused-triton-greedy": "FMMS Greedy (Triton)",
     # "helion": "FMMS (Helion)",  # autotuning too slow atm. It runs on every bsz change
     "naive-pt": "Multinomial Sampling (Eager)",
     "naive-compiled": "Multinomial Sampling (Compiled)",
