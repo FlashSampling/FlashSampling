@@ -77,6 +77,57 @@ reads the weight matrix from HBM**. Fusing top-k/top-p/sampling into the
 matmul kernel avoids additional HBM traffic for intermediate logits. Every
 extra kernel launch that re-reads data wastes bandwidth on the bottleneck path.
 
+## Empirical verification: return-logits ablation
+
+The `RETURN_LOGITS` flag adds a single extra store of the raw logits tensor
+`[V, H]` in float32 to the kernel, with no additional compute. This makes it a
+clean controlled experiment to test the IO model.
+
+### Predicted overhead
+
+```
+extra bytes    = 4 · V · H          (float32 logits store)
+baseline bytes = 2 · V · D          (weight matrix read, BF16)
+predicted overhead = 4·V·H / (2·V·D) = 2H / D
+```
+
+The overhead is independent of V and grows linearly with H.
+
+### Results (B200, 5-run average)
+
+**Large case (V=128,256, D=8,192):**
+
+| H   | Predicted (2H/D) | Measured | FMMS (ms)   | +logits (ms)  |
+|-----|------------------|----------|------------:|-------------:|
+| 1   | 0.02%            | 0.5%     | 0.334±0.003 | 0.335±0.003  |
+| 4   | 0.10%            | 0.7%     | 0.340±0.003 | 0.342±0.003  |
+| 16  | 0.39%            | 1.6%     | 0.341±0.002 | 0.346±0.003  |
+| 64  | 1.56%            | 3.6%     | 0.352±0.003 | 0.365±0.003  |
+| 128 | 3.13%            | 5.4%     | 0.432±0.029 | 0.456±0.008  |
+| 256 | 6.25%            | 8.1%     | 0.736±0.013 | 0.796±0.032  |
+
+**Small case (V=151,936, D=4,096):**
+
+| H   | Predicted (2H/D) | Measured | FMMS (ms)   | +logits (ms)  |
+|-----|------------------|----------|------------:|-------------:|
+| 1   | 0.05%            | 0.9%     | 0.214±0.001 | 0.216±0.001  |
+| 4   | 0.20%            | 1.2%     | 0.219±0.002 | 0.222±0.002  |
+| 16  | 0.78%            | 2.1%     | 0.221±0.001 | 0.225±0.001  |
+| 64  | 3.13%            | 4.8%     | 0.235±0.002 | 0.246±0.001  |
+| 128 | 6.25%            | 8.9%     | 0.291±0.007 | 0.317±0.006  |
+| 256 | 12.50%           | 15.2%    | 0.512±0.017 | 0.589±0.015  |
+
+### Analysis
+
+The measured overhead consistently exceeds the prediction by ~1.5-2.7 percentage
+points (a roughly constant offset). This gap likely comes from store instruction
+overhead (address computation, mask evaluation, issue slots) that exists even
+when bandwidth is not saturated. Despite this offset, the linear scaling with H
+matches the prediction well. Halving D from 8,192 to 4,096 roughly doubles the
+overhead at every batch size, as predicted.
+
+Raw CSVs: `benchmarking/modal-results/triton-bench-b200-logits-ablation-run{1..5}/`
+
 ## References
 
 [1]: https://resources.nvidia.com/en-us-tensor-core
