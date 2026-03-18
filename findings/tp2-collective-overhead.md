@@ -20,9 +20,9 @@ The difference is the collective overhead.
 TP1 at V/2 was measured by adding `large-halfv` (V=64,128, d=8,192) and `small-halfv` (V=75,968, d=4,096) benchmark cases.
 FMMS was measured across 6 runs, fi:sample across 6 runs.
 
-## FMMS TP2 code path
+## FMMS TP2 code path (before symmetric memory)
 
-After the Triton kernel produces per-tile maxes `[num_samples, n_tiles, H]`, the reduction has 4 sequential ops:
+After the Triton kernel produces per-tile maxes `[num_samples, n_tiles, H]`, the reduction had 4 sequential ops:
 
 1. `_local_reduce` (compiled kernel) - reduce across V-tiles on this rank
 2. `dist.all_gather(max_values)` - gather `[H, 1]` scalars from all ranks
@@ -140,31 +140,65 @@ The "blocking" is just a CPU-side wait for the operation to be *enqueued*, not *
 
 ## Conclusion
 
-The FMMS TP2 collective overhead (~0.12-0.20ms) is a fixed cost from NCCL collective latency, not from data volume or CPU blocking.
-Python-level optimizations (reordering ops, async mode) cannot reduce it.
-The only path to eliminate it is fusing the collective into the Triton kernel itself.
+The FMMS TP2 collective overhead (~0.12-0.20ms) was a fixed cost from NCCL collective latency, not from data volume or CPU blocking.
+Python-level optimizations (reordering ops, async mode) could not reduce it.
+The only path to eliminate it was fusing the collective into the Triton kernel itself.
 
-## Next step: fuse the all_gather into the Triton kernel via symmetric memory
+## Solution: symmetric memory (implemented 2026-03-18)
 
-[Kraken](https://github.com/meta-pytorch/kraken) (Meta) provides Triton-level communication primitives that bypass NCCL entirely, using **symmetric memory** (direct NVLink peer access) and PTX barrier instructions.
+The kernel output buffers (`maxs`, `maxs_idx`) are allocated in symmetric memory via `torch.distributed._symmetric_memory.get_symm_mem_workspace`.
+This means the kernel's existing TMA stores write directly to NVLink-mapped addresses, visible to all ranks.
+No NCCL collectives are needed.
 
-Kraken's `all_gather_matmul` demonstrates the pattern: a persistent Triton kernel polls a `progress` tensor to consume data chunks as they arrive from remote GPUs via a DMA copy engine on a separate stream.
+### How it works
 
-### How FMMS differs from Kraken's all_gather_matmul
+1. `allocate_symm_mem_outputs()` creates `maxs` and `maxs_idx` as views into the symmetric memory workspace (one per rank).
+2. The main Triton kernel writes per-tile Gumbel-max results via TMA stores (unchanged kernel code, just different backing memory).
+3. `symm_mem_hdl.barrier()` ensures all ranks' kernel writes are visible.
+4. Each rank reads all ranks' per-tile outputs from symmetric memory, runs `_local_reduce` per rank, and picks the global winner via `_stack_and_select_winner`.
 
-Kraken gathers the *input* matrix before the matmul.
-In FMMS TP2, each GPU already has its local weight shard, so the matmul needs no all_gather.
-The collective happens *after* the kernel, to exchange the Gumbel-max winners (`[H, 1]` scalars per rank).
+This eliminates the 2x NCCL all_gather entirely.
+The reductions are cheap and stay on the host side.
 
-### Two approaches considered
+### Implementation details
 
-**Approach 1 (promising): post-kernel symmetric memory exchange.**
-After the Triton kernel computes local max values + indices, use symmetric memory to write them directly to peer GPU memory from within the kernel's epilogue.
-The kernel on each GPU could then poll for the remote values and do the final argmax, eliminating all 4 Python-side post-kernel ops.
-The data exchanged is tiny (`[H, 1]` scalars per rank), so the symmetric memory write + barrier would be much faster than NCCL collectives.
-Kraken's `symm_mem_sync` and `wait_gmem_barrier` PTX primitives are the building blocks.
+- `src/fused_mm_sampling/kraken_reduce.py` contains `allocate_symm_mem_outputs()` and `kraken_post_kernel_reduce()`.
+- The `maxs_idx` (int64) buffer must start at a 128-byte-aligned offset after `maxs` (bfloat16) for TMA compatibility.
+- The workspace is allocated once per process group and reused across calls.
+- Requires NVLink-connected GPUs, PyTorch >= 2.6, CUDA >= 12.4.
+- Cannot be tested on a single GPU (symmetric memory requires distinct devices per rank).
 
-**Approach 2 (not promising): pre-kernel all_gather of weights (Kraken style).**
+### Benchmark results (B200 x2, averaged over 5 runs)
+
+#### Large config (V=128K, d=8192)
+
+| H | FMMS (ms) | Eager (ms) | Compiled (ms) | FlashInfer (ms) | FI top-k/p (ms) |
+|---|-----------|------------|---------------|-----------------|------------------|
+| 1 | 0.246 | 0.383 | 0.468 | 0.307 | 0.364 |
+| 8 | 0.289 | 0.384 | 0.501 | 0.329 | 0.391 |
+| 32 | 0.276 | 0.453 | 0.489 | 0.320 | 0.383 |
+| 64 | 0.280 | 0.493 | 0.494 | 0.335 | 0.391 |
+| 128 | 0.275 | 0.639 | 0.542 | 0.393 | 0.456 |
+| 256 | 0.383 | 0.997 | 0.787 | 0.590 | 0.702 |
+
+#### Small config (V=152K, d=4096)
+
+| H | FMMS (ms) | Eager (ms) | Compiled (ms) | FlashInfer (ms) | FI top-k/p (ms) |
+|---|-----------|------------|---------------|-----------------|------------------|
+| 1 | 0.254 | 0.300 | 0.523 | 0.334 | 0.383 |
+| 8 | 0.266 | 0.328 | 0.497 | 0.328 | 0.384 |
+| 32 | 0.278 | 0.384 | 0.502 | 0.333 | 0.401 |
+| 64 | 0.279 | 0.439 | 0.508 | 0.324 | 0.383 |
+| 128 | 0.271 | 0.611 | 0.556 | 0.348 | 0.441 |
+| 256 | 0.290 | 1.016 | 0.895 | 0.576 | 0.728 |
+
+FMMS with symmetric memory is fastest across all batch sizes in both configs.
+At H=256, it is 1.5-2x faster than FlashInfer and 2.5-3.5x faster than Eager.
+
+Compared to the previous NCCL-based TP2 results (see tables above), the symmetric memory approach reduced FMMS TP2 latency at H=1 from 0.304ms to 0.246ms (large) and from 0.329ms to 0.254ms (small).
+
+### Rejected approach: pre-kernel all_gather of weights
+
 All_gather the weight shards so each GPU has full V, then run the normal TP1 kernel.
 This eliminates the post-kernel collective but doubles the memory read per GPU (full V instead of V/2).
 At low H the kernel is memory-bound, so reading 2x the weights would roughly double compute time, negating the benefit.

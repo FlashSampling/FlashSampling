@@ -9,6 +9,7 @@
 - The blog post is in `~/code/tomasruizt.github.io/tomas-blog/posts/07_fused-mm-sample/index.qmd`.
 - The paper is in `~/code/papers/flashsampling-paper/`.
 - The FMMS Triton kernel is in `src/fused_mm_sampling/core.py`.
+- Despite locally having only single GPU, the distributed code can be unit tested because it uses the `gloo` backend.
 
 
 Development notes and lessons learned while building this project.
@@ -91,6 +92,7 @@ The `findings/` directory contains detailed write-ups of bugs, workarounds, and 
 - `torch-compile-overhead-tp2.md` — torch.compile adds 0.05-0.13ms overhead at TP2 that hurts all baselines at low batch sizes (up to 1.43x for multinomial, 1.23x for FlashInfer on small config). FMMS is the exception: its compiled `_local_reduce`/`_stack_and_select_winner` are small enough that compile helps. The effect is weaker for large config. At H>=64 compile wins for all providers.
 - `register-spilling-bsz256.md` — At H=256 the kernel spills 118 MB due to three [128, 64] f32 tensors being live simultaneously (persistent loop iter_arg + scaled logits + Gumbel noise). Fix: raise `maxnreg` from 128 to 255 (1.74x speedup on RTX 3090). Fusing noise into the matmul accumulator eliminates spilling but breaks D-loop software pipelining (30% regression). Datacenter GPUs keep `maxnreg=128` because warp specialization adds warps that exceed the register file at 255.
 - `proton-scopes-persistent-kernel.md` — DSL-level Proton scopes don't work inside persistent kernels (by design). Solution: TTGIR-level injection via `insert_proton_records.py`. Six scopes (kernel, setup, mask, tile-mgmt, sample, store); matmul derived by subtraction. Includes buffer overflow constraints, warp sampling, HBM vs SMEM comparison, and per-bsz results showing sampling grows from 1% (bsz=1) to 23% (bsz=256) due to BLOCK_SIZE_H increase and register spilling.
+- `tp2-collective-overhead.md` — FMMS TP2 collective overhead was ~0.12-0.20ms from NCCL latency. Fixed by allocating kernel outputs in symmetric memory (direct NVLink writes, no NCCL). Reduced H=1 latency from 0.304ms to 0.246ms (large) and 0.329ms to 0.254ms (small) on B200 x2.
 
 ## Architecture
 
@@ -153,6 +155,14 @@ Constraints:
 - At high bsz (>=256), the buffer overflows even with the current 6 scopes. Use `BUFFER_TYPE.GLOBAL` (HBM) for those. HBM vs SMEM gives identical ratios.
 - `SAMPLING_STRATEGY.SELECTIVE` with `sampling_options="0"` profiles only warp 0 to reduce event count.
 - When multiple proton.record ops share a line index, the sort key in `insert_proton_records.py` ensures correct nesting (end before start, kernel outermost).
+
+## Symmetric memory TP reduction
+
+`src/fused_mm_sampling/kraken_reduce.py` replaces the NCCL all_gather in the TP>1 code path with symmetric memory. Used automatically when `tp.size > 1`.
+
+Flow: the kernel output buffers (`maxs`, `maxs_idx`) are allocated in symmetric memory via `get_symm_mem_workspace`, so the kernel's existing TMA stores write directly to NVLink-mapped addresses. After the kernel completes, a host-side barrier ensures all ranks' writes are visible. Each rank then reads all ranks' per-tile outputs from symmetric memory, runs `_local_reduce` per rank, and picks the global winner via `_stack_and_select_winner`.
+
+Requires: NVLink-connected GPUs, PyTorch >= 2.6, CUDA >= 12.4. See `findings/tp2-collective-overhead.md` for motivation and analysis.
 
 ## vLLM integration
 

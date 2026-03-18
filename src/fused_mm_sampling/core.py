@@ -12,6 +12,7 @@ import triton
 import triton.language as tl
 
 from .alg_names import ShortNames as S
+from .kraken_reduce import allocate_symm_mem_outputs, kraken_post_kernel_reduce
 from .tl_matmul import matmul
 from .tp_info import TP1, TPInfo
 
@@ -225,12 +226,20 @@ def fused_mm_sample_triton(
     NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count  # noqa: N806
 
     max_grid_size_v = triton.cdiv(V, MIN_BLOCK_SIZE_V)
-    maxs = torch.empty(
-        (num_samples, max_grid_size_v, H),
-        dtype=torch.bfloat16,
-        device=weights.device,
-    )
-    maxs_idx = torch.empty_like(maxs, dtype=torch.long)
+    if tp.size > 1:
+        maxs, maxs_idx, symm_mem_hdl, storage_offset_maxs_idx = allocate_symm_mem_outputs(
+            num_samples=num_samples,
+            max_grid_size_v=max_grid_size_v,
+            H=H,
+            device=weights.device,
+        )
+    else:
+        maxs = torch.empty(
+            (num_samples, max_grid_size_v, H),
+            dtype=torch.bfloat16,
+            device=weights.device,
+        )
+        maxs_idx = torch.empty_like(maxs, dtype=torch.long)
 
     logits_out = torch.empty((V, H), dtype=torch.float32, device=weights.device)
 
@@ -265,15 +274,22 @@ def fused_mm_sample_triton(
 
     assert grid_size["v"] is not None
 
-    # Stage 2: local reduction across V-tiles on this rank.
-    vocab_start_index = tp.rank * V
-    samples, max_values = _local_reduce(
-        maxs[:, : grid_size["v"], :], maxs_idx[:, : grid_size["v"], :], vocab_start_index
-    )
-
-    # Stage 3: cross-rank reduction via Gumbel-max decomposition
     if tp.size > 1:
-        samples = _tensor_parallel_reduce(samples, max_values)
+        samples = kraken_post_kernel_reduce(
+            symm_mem_hdl=symm_mem_hdl,
+            storage_offset_maxs_idx=storage_offset_maxs_idx,
+            grid_size_v=grid_size["v"],
+            max_grid_size_v=max_grid_size_v,
+            H=H,
+            num_samples=num_samples,
+            vocab_size_per_rank=V,
+        )
+    else:
+        # Local reduction across V-tiles on this rank.
+        vocab_start_index = tp.rank * V
+        samples, max_values = _local_reduce(
+            maxs[:, : grid_size["v"], :], maxs_idx[:, : grid_size["v"], :], vocab_start_index
+        )
 
     if return_logits:
         return samples, logits_out.T  # [n_hidden_states, num_samples], [H, V]
@@ -300,20 +316,6 @@ def _local_reduce(
     max_values = maxs.gather(1, idxs.unsqueeze(1)).squeeze(1)  # [num_samples, H]
     samples += vocab_start_index
     return samples.T.contiguous(), max_values.T.contiguous()  # [H, num_samples]
-
-
-def _tensor_parallel_reduce(
-    samples: torch.Tensor,  # [H, num_samples]
-    max_values: torch.Tensor,  # [H, num_samples]
-) -> torch.Tensor:  # [H, num_samples]
-    """All-gather local Gumbel maxes across TP ranks and pick the global winner."""
-    tp_size = dist.get_world_size()
-    all_max_values = [torch.empty_like(max_values) for _ in range(tp_size)]
-    all_samples = [torch.empty_like(samples) for _ in range(tp_size)]
-    dist.all_gather(all_max_values, max_values)
-    dist.all_gather(all_samples, samples)
-    samples = _stack_and_select_winner(all_max_values, all_samples)
-    return samples  # [H, num_samples]
 
 
 @torch.compile(fullgraph=True)
