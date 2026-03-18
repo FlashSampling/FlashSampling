@@ -43,16 +43,24 @@ def trace_phase_pcts(trace: dict) -> dict[str, float]:
 
     Matmul is derived as kernel - setup - mask - tile-mgmt - sample - store.
     Sampling aggregates mask + sample + store (tile-mgmt excluded).
+
+    Raises if any expected scope is missing, since filling 0 would produce
+    a bogus matmul derivation.
     """
     scopes = trace["scopes"]
-    if "kernel" not in scopes:
-        return None
+    missing = [s for s in EXPECTED_SCOPES if s not in scopes]
+    if missing:
+        raise ValueError(
+            f"Chrome trace is missing scopes: {missing}. "
+            "The TTGIR injection likely failed (compiler renamed variables?). "
+            "Fix insert_proton_records.py patterns and re-run."
+        )
     kernel = scopes["kernel"]
-    setup = scopes.get("setup", 0)
-    mask = scopes.get("mask", 0)
-    tile_mgmt = scopes.get("tile-mgmt", 0)
-    sample = scopes.get("sample", 0)
-    store = scopes.get("store", 0)
+    setup = scopes["setup"]
+    mask = scopes["mask"]
+    tile_mgmt = scopes["tile-mgmt"]
+    sample = scopes["sample"]
+    store = scopes["store"]
     matmul = kernel - setup - mask - tile_mgmt - sample - store
     return {
         "matmul": matmul / kernel * 100,
@@ -64,42 +72,37 @@ EXPECTED_SCOPES = ["kernel", "setup", "mask", "tile-mgmt", "sample", "store"]
 
 
 def print_breakdown(trace: dict) -> None:
-    """Print per-scope runtime breakdown as percentages of kernel time."""
+    """Print per-scope runtime breakdown as percentages of kernel time.
+
+    Raises if any expected scope is missing, since filling 0 would produce
+    a bogus matmul derivation.
+    """
     scopes = trace["scopes"]
     counts = trace["counts"]
     missing = [s for s in EXPECTED_SCOPES if s not in scopes]
     if missing:
-        print(
-            f"WARNING: missing scopes (buffer overflow?): {missing}. Showing available scopes only."
+        raise ValueError(
+            f"Chrome trace is missing scopes: {missing}. "
+            "The TTGIR injection likely failed (compiler renamed variables?). "
+            "Fix insert_proton_records.py patterns and re-run."
         )
 
-    kernel = scopes.get("kernel")
-    if kernel is None:
-        # kernel/setup dropped by circular buffer overflow at high bsz.
-        # Show raw epilogue scopes without matmul derivation.
-        rows = []
-        for scope in EXPECTED_SCOPES:
-            if scope in scopes:
-                rows.append((scope, scopes[scope], counts[scope]))
-        df = pd.DataFrame(rows, columns=["phase", "cycles", "count"])
-        print(df.to_markdown(index=False))
-        return
-
-    setup = scopes.get("setup", 0)
-    mask = scopes.get("mask", 0)
-    tile_mgmt = scopes.get("tile-mgmt", 0)
-    sample = scopes.get("sample", 0)
-    store = scopes.get("store", 0)
+    kernel = scopes["kernel"]
+    setup = scopes["setup"]
+    mask = scopes["mask"]
+    tile_mgmt = scopes["tile-mgmt"]
+    sample = scopes["sample"]
+    store = scopes["store"]
     matmul = kernel - setup - mask - tile_mgmt - sample - store
 
     rows = [
-        ("kernel", kernel, counts.get("kernel")),
-        ("setup", setup, counts.get("setup")),
+        ("kernel", kernel, counts["kernel"]),
+        ("setup", setup, counts["setup"]),
         ("matmul*", matmul, None),
-        ("mask", mask, counts.get("mask")),
-        ("tile-mgmt", tile_mgmt, counts.get("tile-mgmt")),
-        ("sample", sample, counts.get("sample")),
-        ("store", store, counts.get("store")),
+        ("mask", mask, counts["mask"]),
+        ("tile-mgmt", tile_mgmt, counts["tile-mgmt"]),
+        ("sample", sample, counts["sample"]),
+        ("store", store, counts["store"]),
     ]
     df = pd.DataFrame(rows, columns=["phase", "cycles", "count"])
     df["runtime_%"] = (df["cycles"] / kernel * 100).round(1)

@@ -116,17 +116,20 @@ def _find_insertion_points(lines: list[str]) -> list[tuple[int, str]]:
 
     # ── Tile-mgmt ──
     # Next-tile coordinate computation (swizzle grouping). Sits between
-    # temperature scaling and Gumbel noise seed.
-    gumbel_line = _find_first_after(lines, "gumbel_noise", epilogue_if)
-    if divf_line is not None and gumbel_line is not None:
+    # temperature scaling and Gumbel noise seed. In the DSL, h_start_c is the
+    # last tile-mgmt variable before the sample loop. The compiler preserves
+    # this name in TTGIR as "%h_start_c = arith.muli ...".
+    h_start_line = _find_first_after(lines, "%h_start_c =", epilogue_if)
+    if divf_line is not None and h_start_line is not None:
         insertions.append((divf_line + 1, 'start "tile-mgmt"'))
-        insertions.append((gumbel_line, 'end "tile-mgmt"'))
+        insertions.append((h_start_line + 1, 'end "tile-mgmt"'))
 
     # ── Sample ──
     # Gumbel noise generation through tt.reduce (argmax).
+    # Starts right after tile-mgmt (seed offset + Philox RNG + log transform).
     reduce_close = _find_reduce_close(lines)
-    if gumbel_line is not None:
-        insertions.append((gumbel_line, 'start "sample"'))
+    if h_start_line is not None:
+        insertions.append((h_start_line + 1, 'start "sample"'))
     if reduce_close is not None:
         insertions.append((reduce_close + 1, 'end "sample"'))
 
@@ -199,22 +202,25 @@ def _find_last(lines: list[str], pattern: str) -> int | None:
 
 
 def _validate_insertions(insertions: list[tuple[int, str]], filepath: str) -> None:
-    """Check that we found all expected start/end pairs."""
+    """Check that we found all expected start/end pairs. Raises on missing scopes."""
     texts = [t for _, t in insertions]
+    errors = []
     for scope in ["kernel", "setup", "mask", "tile-mgmt", "sample", "store"]:
         has_start = f'start "{scope}"' in texts
         has_end = f'end "{scope}"' in texts
         if has_start != has_end:
-            print(
-                f"WARNING: {filepath}: found {'start' if has_start else 'end'} "
-                f"but not {'end' if has_start else 'start'} for scope {scope!r}",
-                file=sys.stderr,
+            errors.append(
+                f"{filepath}: found {'start' if has_start else 'end'} "
+                f"but not {'end' if has_start else 'start'} for scope {scope!r}"
             )
         if not has_start and not has_end:
-            print(
-                f"WARNING: {filepath}: could not find scope {scope!r}",
-                file=sys.stderr,
-            )
+            errors.append(f"{filepath}: could not find scope {scope!r}")
+    if errors:
+        raise RuntimeError(
+            "Proton scope insertion failed. Missing scopes indicate the TTGIR "
+            "patterns have changed (compiler renamed variables?).\n"
+            + "\n".join(f"  - {e}" for e in errors)
+        )
 
 
 def find_and_process_ttgir(dump_dir: str) -> None:
