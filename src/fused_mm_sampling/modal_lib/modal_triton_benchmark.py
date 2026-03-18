@@ -10,6 +10,7 @@ tgt_dir = os.getenv("TGT_DIR")
 case = os.getenv("CASE", "all")
 n_procs = int(os.getenv("N_PROCS", "1"))
 name = os.getenv("NAME") or None
+disable_compile = os.getenv("DISABLE_COMPILE", "0") == "1"
 
 gpu_spec = f"{gpu}:{n_procs}" if n_procs > 1 else gpu
 
@@ -22,5 +23,7 @@ def function(args: Args):
 
 @app.local_entrypoint()
 def main():
-    args = Args(tgt_dir=tgt_dir, case=case, n_procs=n_procs, name=name)
+    args = Args(
+        tgt_dir=tgt_dir, case=case, n_procs=n_procs, name=name, disable_compile=disable_compile
+    )
     function.remote(args=args)

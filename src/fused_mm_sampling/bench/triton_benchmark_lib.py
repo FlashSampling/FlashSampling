@@ -59,6 +59,7 @@ class Args(BaseSettings):
     n_hidden_states: int | None = None
     case: str = "all"
     n_procs: int = 1
+    disable_compile: bool = False
 
     def make_tp(self) -> TPInfo:
         if self.n_procs > 1:
@@ -205,6 +206,8 @@ def run_triton_bechmark(args: Args):
 
 
 def _run_triton_benchmark_impl(args: Args):
+    if args.disable_compile:
+        torch._dynamo.config.disable = True
     tp = args.make_tp()
     cases = _resolve_cases(args.case)
     directory = args.tgt_dir

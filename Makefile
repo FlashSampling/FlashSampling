@@ -10,6 +10,7 @@ POSTFIX :=
 N_PROCS := 1
 CASE := all
 NAME :=
+DISABLE_COMPILE := 0
 # Skip "Multinomial Sampling (Eager)" from plots (it's always slower than Compiled).
 # To include it: make plot-all SKIP_EAGER=
 SKIP_EAGER := 1
@@ -25,7 +26,7 @@ modal-triton-benchmark: modal-create-results-triton-bench modal-get-results-trit
 modal-create-results-triton-bench:
 	mkdir -p $(RESULTS_DIR)
 	GPU=$(GPU) TGT_DIR="/vol-fused-mm-sample/$(BENCH_DIR)" \
-	N_PROCS=$(N_PROCS) CASE=$(CASE) NAME=$(NAME) \
+	N_PROCS=$(N_PROCS) CASE=$(CASE) NAME=$(NAME) DISABLE_COMPILE=$(DISABLE_COMPILE) \
 	modal run \
 		-m src.fused_mm_sampling.modal_lib.modal_triton_benchmark \
 		> $(RESULTS_DIR)/logs.txt
