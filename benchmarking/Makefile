@@ -155,7 +155,7 @@ parse-sweep-ncu:
 	$(PYTHON) parse_ncu_sweep.py --dir $(NCU_SWEEP_DIR) | tee $(NCU_SWEEP_DIR)/summary.txt
 
 parse-sweep-proton:
-	$(PYTHON) parse_proton_intrakernel.py --dir $(PROTON_SWEEP_DIR) | tee $(PROTON_SWEEP_DIR)/summary.txt
+	@echo "TODO: parse proton chrome traces from $(PROTON_SWEEP_DIR)/"
 
 plot-bsz-sweep-runtime:
 	$(PYTHON) plot_bsz_sweep_runtime.py --n_procs $(N_PROCS) --case $(CASE) --fmt pdf --use-name-flashsampling
@@ -189,27 +189,45 @@ ncu-comparison:
 	make ncu-profile-fused-triton N_HIDDEN_STATES=1 NCU_RESULTS_DIR=profiles/ncu-bsz1
 	make ncu-profile-flashinfer N_HIDDEN_STATES=1 NCU_RESULTS_DIR=profiles/ncu-bsz1
 
-PROTON_NAME=fused-triton
-# CUPTI 13.1 libs matching the driver. Triton bundles CUPTI 2025.1.1 which segfaults
-# with the CUDA 13+ driver. Point TRITON_CUPTI_LIB_PATH to the system CUPTI dir.
-CUPTI_LIB_DIR=/usr/local/cuda-13.1/targets/x86_64-linux/lib
+# ── Proton intra-kernel profiling (TTGIR override workflow) ──
+# 3-step process recommended by Triton team:
+#   1. Dump TTGIR (make proton-dump-ttgir)
+#   2. Inject proton.record statements (make proton-inject)
+#   3. Run with TTGIR override (make proton-run)
+# Or run all three steps at once: make proton-profile
+PROTON_TTGIR_DIR=$(PROTON_RESULTS_DIR)/ttgir_dump
+# Override vocab_size for profiling (smaller V → smaller trace file).
+# Empty = use the case's default V.
+PROTON_VOCAB_SIZE=
+PROTON_VOCAB_SIZE_FLAG=$(if $(PROTON_VOCAB_SIZE),--vocab_size=$(PROTON_VOCAB_SIZE))
 
-proton-profile:
-	mkdir -p $(PROTON_RESULTS_DIR)/$(PROTON_NAME)
-	#TRITON_CUPTI_LIB_PATH=$(CUPTI_LIB_DIR) $(PYTHON) ./speed_test.py --n_hidden_states=$(N_HIDDEN_STATES) --use_proton=True --name=fused-triton --n_runs_benchmark=10 --n_runs_warmup=0 --bench_fn=own --case=$(CASE) 2>&1 | tee $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/speed-test.txt
-	#proton-viewer -m num_samples/%,time/s kernel.hatchet -i timing > $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/kernel-by-line.txt
-	#mv kernel.hatchet $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/kernel.hatchet
-	TRITON_CUPTI_LIB_PATH=$(CUPTI_LIB_DIR) TRITON_ALWAYS_COMPILE=1 TRITON_KERNEL_DUMP=1 TRITON_DUMP_DIR=$(PROTON_RESULTS_DIR)/$(PROTON_NAME)/ttgir_dump $(PYTHON) ./speed_test.py --n_hidden_states=$(N_HIDDEN_STATES) --use_proton=True --proton_mode=trace --name=fused-triton --n_runs_benchmark=1 --n_runs_warmup=0 --bench_fn=own --case=$(CASE) --n_procs=$(N_PROCS) 2>&1 | tee $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/speed-test.txt
-	mv kernel.chrome_trace $(PROTON_RESULTS_DIR)/$(PROTON_NAME)/kernel.chrome_trace
+proton-profile: proton-clean proton-dump-ttgir proton-inject proton-run
+
+proton-clean:
+	rm -rf $(PROTON_RESULTS_DIR)
+
+proton-dump-ttgir:
+	mkdir -p $(PROTON_RESULTS_DIR)
+	TRITON_DUMP_DIR=$(PROTON_TTGIR_DIR) ./dump_ttgir.sh $(PYTHON) proton_profile.py --n_hidden_states=$(N_HIDDEN_STATES) $(PROTON_VOCAB_SIZE_FLAG)
+
+proton-inject:
+	$(PYTHON) insert_proton_records.py --dir $(PROTON_TTGIR_DIR)
+
+proton-run:
+	mkdir -p $(PROTON_RESULTS_DIR)
+	TRITON_ALWAYS_COMPILE=1 TRITON_KERNEL_OVERRIDE=1 TRITON_OVERRIDE_DIR=$(PROTON_TTGIR_DIR) \
+		$(PYTHON) proton_profile.py --n_hidden_states=$(N_HIDDEN_STATES) $(PROTON_VOCAB_SIZE_FLAG) \
+		2>&1 | tee $(PROTON_RESULTS_DIR)/proton-run.txt
+	mv kernel.chrome_trace $(PROTON_RESULTS_DIR)/kernel.chrome_trace
+	$(PYTHON) parse_proton_intrakernel.py $(PROTON_RESULTS_DIR)/kernel.chrome_trace | tee $(PROTON_RESULTS_DIR)/breakdown.txt
 
 PROTON_SWEEP_DIR=$(SWEEPS_DIR)/proton/tp$(N_PROCS)/case-$(CASE)
 
 sweep-bsz-proton:
 	@for bsz in $(SWEEP_BSZ); do \
 		echo "=== proton-profile, case=$(CASE), bsz=$$bsz ==="; \
-		$(MAKE) proton-profile N_HIDDEN_STATES=$$bsz PROTON_RESULTS_DIR=$(PROTON_SWEEP_DIR) PROTON_NAME=bsz$$bsz CASE=$(CASE) N_PROCS=$(N_PROCS); \
+		$(MAKE) proton-profile N_HIDDEN_STATES=$$bsz PROTON_RESULTS_DIR=$(PROTON_SWEEP_DIR)/bsz$$bsz CASE=$(CASE); \
 	done
 	@echo "Proton sweep done. Reports in $(PROTON_SWEEP_DIR)/"
-	$(MAKE) parse-sweep-proton
 
 COMPARISON_DIR=profiles/barrier-comparison

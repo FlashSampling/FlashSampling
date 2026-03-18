@@ -53,7 +53,7 @@ def load_data(ncu_dir: Path, proton_dir: Path) -> pd.DataFrame:
             if not path.exists():
                 continue
             kdf = parse_ncu_csv(path)
-            is_matmul = kdf["kernel_name"].str.contains("gemm|fused_mm_sample", case=False)
+            is_matmul = kdf["kernel_name"].str.contains("gemm|gemv|fused_mm_sample", case=False)
             assert is_matmul.iloc[0], (
                 f"First kernel in {path} is not a matmul: {kdf['kernel_name'].iloc[0]}"
             )

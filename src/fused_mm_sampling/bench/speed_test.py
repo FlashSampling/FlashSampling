@@ -1,4 +1,3 @@
-import os
 import timeit
 from dataclasses import dataclass
 from pathlib import Path
@@ -8,12 +7,10 @@ import cuda.bench as nvbench
 import pandas as pd
 import torch
 import triton
-import triton.profiler as proton
 from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 from ..core import (
-    fused_mm_sample_triton_kernel,
     get_sampler,
     sample,
     set_torch_allocator_for_tma_descriptors,
@@ -35,11 +32,6 @@ class Args(BaseSettings):
     n_hidden_states: int = 1
     n_samples: int = 1
     tgt_dir: Path | None = None
-    use_proton: bool = False
-    # "pcsampling": per-line CUPTI PC sampling → kernel.hatchet
-    #   On CUDA 13+ drivers, set TRITON_CUPTI_LIB_PATH to the system CUPTI dir.
-    # "trace": chrome timeline (CUPTI) → kernel.chrome_trace (open in chrome://tracing)
-    proton_mode: Literal["pcsampling", "trace"] = "pcsampling"
     case: str = "small"
     bench_fn: Literal["own", "nvbench", "fi-cupti"] = "fi-cupti"
     top_k: int | None = None
@@ -76,8 +68,6 @@ class Args(BaseSettings):
             n_runs_warmup=self.n_runs_warmup,
             n_hidden_states=self.n_hidden_states,
             n_samples=self.n_samples,
-            use_proton=self.use_proton,
-            proton_mode=self.proton_mode,
             vocab_size=case_config["vocab_size"],
             hidden_size=case_config["hidden_size"],
             top_k=self.top_k,
@@ -106,8 +96,6 @@ class Case:
     n_runs_warmup: int
     n_hidden_states: int
     n_samples: int
-    use_proton: bool
-    proton_mode: str
     vocab_size: int
     hidden_size: int
     top_k: int | None = None
@@ -136,35 +124,6 @@ class Case:
         return kwargs
 
 
-def setup_proton(mode: Literal["pcsampling", "trace"]) -> None:
-    import triton.profiler.language as pl
-
-    print(f"⚙️ Proton profiling enabled (mode={mode})")
-    if mode == "pcsampling":
-        proton.start(name="kernel", hook="triton", backend="cupti", mode="pcsampling")
-    elif mode == "trace":
-        os.environ["USE_PROTON_SCOPES"] = "1"
-        # Enable pl.enter_scope()/pl.exit_scope() annotations in Triton kernels.
-        # hook="triton" instruments the JIT so pl scopes are recorded.
-        # TRITON_ALWAYS_COMPILE=1 forces recompilation with the hooks injected.
-        pl.enable_semantic("triton")
-        proton.start(name="kernel", data="trace", hook="triton", backend="instrumentation")
-    else:
-        raise ValueError(f"Unknown proton_mode: {mode!r}")
-
-    def enter_autotune(args, reset_only=False):
-        if reset_only:
-            return
-        proton.enter_scope("<autotune>")
-
-    def exit_autotune(args, exception):
-        proton.exit_scope()
-
-    fused_mm_sample_triton_kernel.pre_hook = enter_autotune
-    fused_mm_sample_triton_kernel.post_hook = exit_autotune
-
-
-@proton.scope("clear-l2-cache")
 def clear_l2_cache(cache):
     with torch.cuda.nvtx.range("clear-l2-cache"):
         triton.runtime.driver.active.clear_cache(cache)
@@ -183,15 +142,6 @@ def benchmark(case: Case) -> pd.DataFrame:
 
     di = triton.runtime.driver.active.get_device_interface()
 
-    if case.use_proton and case.tp.is_rank0():
-        setup_proton(case.proton_mode)
-
-    # 2026-03-01 Tomas: Not sure we need this separately from the warmup.
-    # with proton.scope("first-run"):
-    #     # Compile, etc.
-    #     fn()
-    #     di.synchronize()
-
     cache = triton.runtime.driver.active.get_empty_cache_for_benchmark()
 
     start_events = [di.Event(enable_timing=True) for _ in range(case.n_runs_benchmark)]
@@ -199,25 +149,18 @@ def benchmark(case: Case) -> pd.DataFrame:
 
     if case.n_runs_warmup > 0:
         case.tp.rank0_print("Warming up...")
-        with proton.scope("warmup"):
-            for _ in range(case.n_runs_warmup):
-                clear_l2_cache(cache)
-                fn()
+        for _ in range(case.n_runs_warmup):
+            clear_l2_cache(cache)
+            fn()
 
     case.tp.rank0_print("Timing...")
-    with proton.scope("timing"):
-        for _, start_event, end_event in zip(
-            range(case.n_runs_benchmark), start_events, end_events
-        ):
-            clear_l2_cache(cache)
-            with torch.cuda.nvtx.range("kernel"):
-                start_event.record()
-                timeit.timeit(fn, number=1)
-                end_event.record()
-        di.synchronize()
-
-    if case.use_proton and case.tp.is_rank0():
-        proton.finalize()
+    for _, start_event, end_event in zip(range(case.n_runs_benchmark), start_events, end_events):
+        clear_l2_cache(cache)
+        with torch.cuda.nvtx.range("kernel"):
+            start_event.record()
+            timeit.timeit(fn, number=1)
+            end_event.record()
+    di.synchronize()
 
     times_ms = [s.elapsed_time(e) for s, e in zip(start_events, end_events)]
 

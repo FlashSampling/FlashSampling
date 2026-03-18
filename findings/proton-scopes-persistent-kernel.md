@@ -1,39 +1,71 @@
-# Proton scopes don't work inside persistent Triton kernels
+# Proton intra-kernel profiling for the persistent FMMS kernel
 
 ## Problem
 
-After converting the FMMS Triton kernel to a persistent kernel (`tl.range` with `flatten=True`), the existing Proton intra-kernel scopes (`pl.enter_scope`/`pl.exit_scope`) stopped working. Two issues:
+DSL-level Proton scopes (`pl.enter_scope`/`pl.exit_scope`) don't work inside persistent Triton kernels.
+The compiler's software pipelining peels the first loop iteration into a prologue, duplicating scope entries.
+Even if names are deduplicated, the compiler reorders operations across the prologue and loop body, breaking scope placement.
 
-1. **Duplicate scope names.** The compiler's software pipelining peels the first loop iteration into a prologue, duplicating the `pl.enter_scope("matmul-tile")` call. Proton's trace backend rejects duplicate start records for the same scope name.
+**Confirmed by Triton engineer (Corbin Robeck, 2026-03-17):** DSL-level scopes inside loops are explicitly disabled because the compiler may hoist them out of the loop entirely. This is by design, not a bug.
 
-2. **Scope placement after compiler rewrites.** Even if names are fixed, the compiler reorders operations across the prologue and loop body. The `end "matmul-tile"` ends up inside a conditional (`scf.if` checking the last inner-loop iteration), while the corresponding `start` is in a different conditional. The scopes no longer bracket the intended operations.
+## Solution: TTGIR-level injection (implemented)
 
-The Triton docs explicitly warn about this: "Triton's higher-level IR undergoes aggressive compiler rewrites (loop pipelining, instruction re-ordering, IR duplication, etc.). These transformations can invalidate naive instrumentation."
+The Triton team recommends injecting `proton.record` statements at the TTGIR level, after compiler rewrites.
+Official tutorial and reference scripts:
 
-## TTGIR override approach (attempted, failed)
+- Example: https://github.com/triton-lang/triton/blob/main/third_party/proton/tutorials/intra_kernel/example_override.py
+- Injection script: https://github.com/triton-lang/triton/blob/main/third_party/proton/tutorials/intra_kernel/insert_proton_records
 
-Triton supports a 3-step TTGIR override workflow:
-1. Dump TTGIR with `TRITON_KERNEL_DUMP=1`
-2. Modify the TTGIR (fix scope names, remove unpaired scopes)
-3. Re-run with `TRITON_KERNEL_OVERRIDE=1`
+### Workflow
 
-A `deduplicate_proton_scopes.py` script was written to rename duplicate scopes (`"matmul-tile"` -> `"matmul-tile:0"`, `"matmul-tile:1"`) and remove unpaired prologue starts.
+Three Makefile targets (`make proton-profile` runs all three):
 
-This partially worked for bsz=1 (single hidden state), but **failed for bsz>=2** because:
+1. **Dump TTGIR** (`make proton-dump-ttgir`): Uses `dump_ttgir.sh` to run the kernel and capture TTGIR.
+2. **Inject proton.record** (`make proton-inject`): `insert_proton_records.py` pattern-matches the TTGIR and inserts scope pairs.
+3. **Run with override** (`make proton-run`): Runs with `TRITON_KERNEL_OVERRIDE=1` so the instrumented TTGIR is used.
 
-- `proton.start(backend="instrumentation")` globally modifies Triton's compilation pipeline, even without `hook="triton"` or `pl.enable_semantic("triton")`.
-- The `_local_reduce` function (stage 2 of FMMS) uses `@torch.compile(fullgraph=True)`, which generates an inductor Triton kernel.
-- This inductor kernel breaks when compiled through the Proton-modified pipeline: `AttributeError: 'KernelMetadata' object has no attribute 'cluster_dims'`.
-- There is no way to selectively enable Proton instrumentation for only our kernel while leaving inductor kernels unaffected.
+### Scopes
 
-Isolating Triton and inductor caches between steps did not help because the corruption happens at compile time within the same process, not from cached artifacts.
+The persistent kernel fuses the D-loop and tile loop into a single `scf.for`.
+Every HIDDEN_SIZE/BLOCK_SIZE_D iterations (e.g. 128), an `scf.if` epilogue fires with masking, sampling, and store.
+We instrument six scopes:
 
-## What works
+| Scope | What it covers | Fires |
+|-------|---------------|-------|
+| `kernel` | Full kernel (tt.func → tt.return) | once |
+| `setup` | Temperature load, grid dims, TMA descriptors, first tile prefetch | once |
+| `mask` | V-masking and temperature scaling | once per tile |
+| `tile-mgmt` | Next-tile coordinate computation (swizzle grouping) | once per tile |
+| `sample` | Gumbel noise generation and argmax reduce | once per tile |
+| `store` | Global index offset, address computation, tt.store | once per tile |
 
-- **Proton `pcsampling` mode** (PC sampling) still works with the persistent kernel. It doesn't use intra-kernel scopes, just samples instruction counters.
-- **Proton `trace` mode without scopes** works but gives no per-phase breakdown (matmul vs sampling).
-- **Gluon DSL kernels** can use Proton scopes inside loops because the Gluon IR doesn't undergo the same aggressive rewrites.
+Matmul time is derived as: `kernel - setup - mask - tile-mgmt - sample - store`.
 
-## Conclusion
+### Key constraints
 
-Proton intra-kernel scopes are incompatible with persistent Triton kernels. The scopes were removed from the kernel. For matmul vs sampling breakdown, NCU profiling (which uses NVTX ranges at the host level) remains the primary tool.
+- **No per-chunk matmul scope possible.** The D-loop is fused into the persistent `scf.for` (not unrolled), so there is only one `tt.dot` instruction in the TTGIR. A scope around it fires 128 times per tile, overflowing the shared buffer (128 slots). Proton's validation also prevents spanning a single scope across multiple loop iterations (start/end must pair within the same iteration).
+- **Scope ordering matters.** When multiple insertions target the same line index, a secondary sort key ensures `end` records appear before `start` records, and the outermost `kernel` scope nests correctly around inner scopes.
+- **Buffer overflow at high bsz.** Each CTA generates 4 (kernel+setup, once) + 8 (mask+tile-mgmt+sample+store, per tile) events. At bsz=256 with ~58 tiles/CTA, that's ~468 events, exceeding the 256-slot shared buffer. Use `BUFFER_TYPE.GLOBAL` (HBM) for high batch sizes, or accept missing kernel/setup scopes with shared buffer.
+- **Warp sampling.** `SAMPLING_STRATEGY.SELECTIVE` with `sampling_options="0"` profiles only warp 0, reducing events per CTA.
+- **HBM vs shared buffer.** Comparison at bsz=1 and bsz=128 shows identical ratios (within noise), so the HBM write overhead is negligible with this few events per tile.
+
+### Results (RTX 3090, V=151936, D=4096)
+
+| bsz | matmul% | sample% | BLOCK_SIZE_H |
+|-----|---------|---------|--------------|
+| 1 | 98.7 | 1.0 | 16 |
+| 4 | 98.7 | 1.1 | 16 |
+| 16 | 97.2 | 2.4 | 16 |
+| 64 | 87.8 | 11.6 | 64 |
+| 128 | 79.6 | 19.9 | 64 |
+| 256 | 76.5 | 23.0 | 64 |
+
+The sampling fraction grows with batch size because BLOCK_SIZE_H increases (16 → 64), making the Gumbel noise + argmax disproportionately expensive.
+At BLOCK_SIZE_H=64, the Philox PRNG operates on 128x64=8192 elements (vs 128x16=2048 at BLOCK_SIZE_H=16).
+NCU confirms massive register spilling at bsz=256 (118M local memory spilling requests, 76% of L1TEX accesses are local memory), which is driven by the sampling phase's register pressure.
+The tensor-core matmul scales efficiently with wider tiles; the ALU/SFU-bound sampling phase does not.
+
+## Inductor conflict
+
+`proton.start(backend="instrumentation")` is process-global and breaks `torch.compile`-generated inductor kernels (`AttributeError: 'KernelMetadata' object has no attribute 'cluster_dims'`).
+The solution is to profile only the FMMS Triton kernel directly (`proton_profile.py`), skipping `_local_reduce` (stage 2).
