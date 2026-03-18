@@ -541,28 +541,18 @@ def fused_mm_sample_triton_kernel(
         for sample_idx in range(num_samples):
             if USE_PROTON_SCOPES:
                 pl.enter_scope("sample")
-            # Note: Creating appropriately sized tensors is tricky because
-            # tl.arange() only accepts tl.constexpr that are powers of 2.
+
             noise_size: tl.constexpr = BLOCK_SIZE_V * BLOCK_SIZE_H
             noise_offsets = tl.arange(0, noise_size).reshape((BLOCK_SIZE_V, BLOCK_SIZE_H))
-
             if not GREEDY_SAMPLING:
-                # Note: Each tile (v, h) and sample needs a different seed,
-                # otherwise they all create the same noise, leading to sampling artifacts.
-                # Compute gumbel noise directly to reduce register pressure
-                gumbel_noise = -tl.log(
-                    -tl.log(
-                        tl.rand(
-                            seed + pid_v_c * 100 + pid_h_c * 1_000 + sample_idx * 10_000,
-                            noise_offsets,
-                        )
-                    )
-                )
                 gumbel_max, gumbel_max_idx_local = tl.max(
-                    logits_blk + gumbel_noise, axis=0, return_indices=True
+                    logits_blk + _gumbel_noise(seed, pid_v_c, pid_h_c, sample_idx, noise_offsets),
+                    axis=0,
+                    return_indices=True,
                 )
             else:
                 gumbel_max, gumbel_max_idx_local = tl.max(logits_blk, axis=0, return_indices=True)
+
             gumbel_max_idx_global = gumbel_max_idx_local + v_start_c
             if USE_PROTON_SCOPES:
                 pl.exit_scope("sample")
@@ -579,6 +569,20 @@ def fused_mm_sample_triton_kernel(
             )
             if USE_PROTON_SCOPES:
                 pl.exit_scope("store")
+
+
+@triton.jit
+def _gumbel_noise(seed, pid_v, pid_h, sample_idx, noise_offsets):
+    # Note: Each tile (v, h) and sample needs a different seed,
+    # otherwise they all create the same noise, leading to sampling artifacts.
+    return -tl.log(
+        -tl.log(
+            tl.rand(
+                seed + pid_v * 100 + pid_h * 1_000 + sample_idx * 10_000,
+                noise_offsets,
+            )
+        )
+    )
 
 
 def set_torch_allocator_for_tma_descriptors():
