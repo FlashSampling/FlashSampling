@@ -197,6 +197,20 @@ At H=256, it is 1.5-2x faster than FlashInfer and 2.5-3.5x faster than Eager.
 
 Compared to the previous NCCL-based TP2 results (see tables above), the symmetric memory approach reduced FMMS TP2 latency at H=1 from 0.304ms to 0.246ms (large) and from 0.329ms to 0.254ms (small).
 
+### Potential follow-ups
+
+**1. Reduce NVLink traffic by exchanging reduced winners instead of per-tile data.**
+Currently `kraken_post_kernel_reduce` reads each remote rank's full per-tile outputs (`[num_samples, grid_size_v, H]`, ~1.3MB per remote rank at H=256) over NVLink, then runs `_local_reduce` on each.
+Instead: run `_local_reduce` locally first, write only the reduced `[H, num_samples]` winners (~2KB) to symmetric memory, barrier, then read remote winners and `_stack_and_select_winner`.
+This cuts NVLink traffic by ~500x while still avoiding NCCL.
+The write would be a simple `tensor.copy_()` to a symmetric memory view.
+
+**2. Fuse `_local_reduce` x world_size + `_stack_and_select_winner` into one compiled kernel.**
+Currently 3 compiled kernel launches for TP2 (2x `_local_reduce` + 1x `_stack_and_select_winner`).
+A single `@torch.compile(fullgraph=True)` function that takes all ranks' buffers and does both reductions in one pass would save kernel launch overhead.
+
+Both are small wins given the reductions are already cheap relative to the matmul.
+
 ### Rejected approach: pre-kernel all_gather of weights
 
 All_gather the weight shards so each GPU has full V, then run the normal TP1 kernel.
