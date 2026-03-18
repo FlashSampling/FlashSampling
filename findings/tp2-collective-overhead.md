@@ -216,3 +216,49 @@ Both are small wins given the reductions are already cheap relative to the matmu
 All_gather the weight shards so each GPU has full V, then run the normal TP1 kernel.
 This eliminates the post-kernel collective but doubles the memory read per GPU (full V instead of V/2).
 At low H the kernel is memory-bound, so reading 2x the weights would roughly double compute time, negating the benefit.
+
+## TP4 results (B200 x4, 2026-03-18)
+
+5 independent runs on Modal. Results show bimodality in absolute times across all providers (runs {1,3} ~20% faster than runs {2,4}, a machine-level effect), so both per-run and median values are reported.
+
+### FMMS speedup vs PyTorch Compiled (median of 5 runs)
+
+| H | TP4 | TP2 | TP1 |
+|---|-----|-----|-----|
+| **Large config** | | | |
+| 1 | 1.26x | 1.89x | 1.43x |
+| 8 | 1.18x | 1.80x | 1.32x |
+| 64 | 1.19x | 1.77x | 1.52x |
+| 128 | 1.18x | 1.97x | 1.44x |
+| 256 | 1.92x | 2.06x | 1.15x |
+| **Small config** | | | |
+| 1 | 1.38x | 2.05x | 1.46x |
+| 8 | 1.22x | 1.90x | 1.53x |
+| 64 | 1.16x | 1.79x | 1.84x |
+| 128 | 1.46x | 2.05x | 1.89x |
+| 256 | 2.26x | 3.08x | 1.58x |
+
+### FMMS is the only provider that regresses at TP4
+
+Comparing TP4 fast-mode runs (1,3) against the full TP2 range to control for machine-level bimodality:
+
+| Provider | H | TP4 fast (ms) | TP2 range (ms) | TP4/TP2 median |
+|----------|---|---------------|----------------|----------------|
+| FMMS | 1 | 0.290 | 0.226-0.309 | 1.25 (slower) |
+| FMMS | 64 | 0.359 | 0.257-0.294 | 1.26 (slower) |
+| FMMS | 256 | 0.352 | 0.380-0.386 | 0.92 (faster) |
+| FI_sampling | 1 | 0.261 | 0.300-0.324 | 0.86 (faster) |
+| FI_sampling | 64 | 0.274 | 0.331-0.337 | 0.82 (faster) |
+| FI_sampling | 256 | 0.506 | 0.582-0.601 | 0.86 (faster) |
+| FI_topk | 1 | 0.303 | 0.341-0.381 | 0.83 (faster) |
+| FI_topk | 64 | 0.333 | 0.387-0.392 | 0.85 (faster) |
+| FI_topk | 256 | 0.626 | 0.696-0.705 | 0.89 (faster) |
+| Compiled | 1 | 0.366 | 0.431-0.561 | 0.83 (faster) |
+| Compiled | 64 | 0.432 | 0.437-0.518 | 0.86 (faster) |
+| Compiled | 256 | 0.714 | 0.774-0.794 | 0.90 (faster) |
+
+All baselines get ~15% faster at TP4 vs TP2 (benefiting from quartering the matmul). FMMS gets ~25% slower for H=1-128. Only at H=256 does FMMS improve at TP4. The cause of the FMMS regression is not yet understood.
+
+### Conclusion
+
+TP2 is the sweet spot for FMMS. At TP4, FMMS's advantage over baselines drops back to roughly TP1 levels (1.2-1.4x) for H < 256.
