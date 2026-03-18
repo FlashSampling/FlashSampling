@@ -11,6 +11,7 @@ from plot_styles import (
     PROVIDER_COLORS,
     PROVIDER_HATCHES,
     PROVIDER_MARKERS,
+    LongNames,
 )
 from pydantic_settings import BaseSettings
 
@@ -444,7 +445,7 @@ def create_and_triton_bench_plots(
 
         bdf = read_triton_bench_csv(csv_path)
         if skip_multinomial_eager:
-            bdf = bdf.drop(columns=["Multinomial Sampling (Eager)"], errors="ignore")
+            bdf = bdf.drop(columns=[LongNames.multinomial_sampling_eager], errors="ignore")
         if use_name_flashsampling:
             bdf = apply_flashsampling_rename(bdf)
         bdf_long = bdf.melt(id_vars=["n_hidden_states"], var_name="provider", value_name="time[ms]")
@@ -479,12 +480,12 @@ def create_and_triton_bench_plots(
                 )
                 plt.close(ax.figure)
 
-        FMMS = "FMMS (Triton)"  # noqa: N806
+        FMMS = LongNames.fmms_triton  # noqa: N806
         if use_name_flashsampling:
             FMMS = FLASHSAMPLING_RENAMES[FMMS]  # noqa: N806
-        NAIVE = "Multinomial Sampling (Compiled)"  # noqa: N806
-        FI_SAMPLE = "flashinfer:sampling_from_logits"  # noqa: N806
-        FI_TOPK = "flashinfer:top_k_top_p_sampling_from_logits"  # noqa: N806
+        NAIVE = LongNames.multinomial_sampling_compiled  # noqa: N806
+        FI_SAMPLE = LongNames.flashinfer_sampling_from_logits  # noqa: N806
+        FI_TOPK = LongNames.flashinfer_top_k_top_p_sampling_from_logits  # noqa: N806
 
         rel_plots = [
             # (1) FMMS vs PyTorch Compiled (baseline)

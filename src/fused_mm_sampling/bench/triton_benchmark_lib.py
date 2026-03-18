@@ -9,6 +9,8 @@ import torch
 import triton
 from pydantic_settings import BaseSettings
 
+from ..alg_names import ShortNames as S
+from ..alg_names import short2long
 from ..core import get_sampler, set_torch_allocator_for_tma_descriptors
 from ..testing import shard_weights
 from ..tp_info import TP1, TPInfo, run_maybe_distributed
@@ -42,6 +44,15 @@ ALL_CASES = list(BENCHMARK_CASES.keys())
 DEFAULT_CASES = ["large", "small"]
 
 
+DEFAULT_PROVIDERS = [
+    S.fused_triton,
+    S.naive_pt,
+    S.naive_compiled,
+    S.flashinfer_top_k_top_p_sampling_from_logits,
+    S.flashinfer_sampling_from_logits,
+]
+
+
 class Args(BaseSettings):
     tgt_dir: Path
     name: str | None = None
@@ -55,26 +66,12 @@ class Args(BaseSettings):
         return TP1
 
     def providers(self) -> list[str]:
-        return self.name.split(",") if self.name is not None else list(provider_names)
+        return self.name.split(",") if self.name is not None else DEFAULT_PROVIDERS
 
 
 class CliArgs(Args, cli_parse_args=True):
     pass
 
-
-provider_names = {
-    "fused-triton": "FMMS (Triton)",
-    # "fused-cuda": "FMMS (CUDA)",
-    # "fused-triton-greedy": "FMMS Greedy (Triton)",
-    # "helion": "FMMS (Helion)",  # autotuning too slow atm. It runs on every bsz change
-    "naive-pt": "Multinomial Sampling (Eager)",
-    "naive-compiled": "Multinomial Sampling (Compiled)",
-    # "sequential-compiled": "Sequential PyTorch Compiled",
-    # "naive-tl-matmul": "Naive Triton Matmul",
-    # "jl-compiled": "JL Compiled",
-    "flashinfer:top_k_top_p_sampling_from_logits": "flashinfer:top_k_top_p_sampling_from_logits",
-    "flashinfer:sampling_from_logits": "flashinfer:sampling_from_logits",
-}
 
 all_styles = [
     ("blue", "-"),
@@ -101,7 +98,7 @@ def create_benchmark(args: Args, case: str):
         x_vals = [1, 2, 4, 8, 16, 32, 64, 128, 256]  # nobody uses 512 or 1024
 
     providers = args.providers()
-    lines_names = [provider_names.get(prov, prov) for prov in providers]
+    lines_names = [short2long.get(prov, prov) for prov in providers]
 
     config = triton.testing.Benchmark(
         x_names=["n_hidden_states"],

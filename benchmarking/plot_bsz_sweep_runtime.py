@@ -18,7 +18,13 @@ import pandas as pd
 import seaborn as sns
 from parse_ncu_sweep import parse_ncu_csv
 from parse_proton_intrakernel import parse_chrome_trace, trace_phase_pcts
-from plot_styles import FLASHSAMPLING_RENAMES, PROVIDER_COLORS, PROVIDER_HATCHES, PROVIDER_MARKERS
+from plot_styles import (
+    FLASHSAMPLING_RENAMES,
+    PROVIDER_COLORS,
+    PROVIDER_HATCHES,
+    PROVIDER_MARKERS,
+    LongNames,
+)
 
 SWEEPS = Path("profiles/sweeps/bsz")
 N_PROCS = 1
@@ -27,9 +33,9 @@ PROTON_DIR = SWEEPS / "proton" / f"tp{N_PROCS}" / f"case-{CASE}"
 
 # Methods: (NCU filename, internal key, is_fmms)
 METHODS = [
-    ("fused-triton.txt", "FMMS (Triton)", True),
-    ("naive-compiled.txt", "Multinomial Sampling (Compiled)", False),
-    ("flashinfer:sampling_from_logits.txt", "flashinfer:sampling_from_logits", False),
+    ("fused-triton.txt", LongNames.fmms_triton, True),
+    ("naive-compiled.txt", LongNames.multinomial_sampling_compiled, False),
+    ("flashinfer:sampling_from_logits.txt", LongNames.flashinfer_sampling_from_logits, False),
 ]
 
 

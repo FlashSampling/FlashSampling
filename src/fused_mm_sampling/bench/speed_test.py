@@ -18,7 +18,7 @@ from ..core import (
 from ..testing import shard_weights
 from ..tp_info import TP1, TPInfo, run_maybe_distributed
 from .sys_metadata import get_gpu_name
-from .triton_benchmark_lib import BENCHMARK_CASES, provider_names
+from .triton_benchmark_lib import BENCHMARK_CASES, DEFAULT_PROVIDERS
 
 device = torch.device("cuda")
 set_torch_allocator_for_tma_descriptors()
@@ -76,7 +76,7 @@ class Args(BaseSettings):
         )
 
     def providers(self) -> list[str]:
-        return self.name.split(",") if self.name is not None else list(provider_names)
+        return self.name.split(",") if self.name is not None else DEFAULT_PROVIDERS
 
     def all_cases(self) -> list["Case"]:
         return [self.as_case(name=provider) for provider in self.providers()]

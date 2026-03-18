@@ -13,6 +13,8 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 
+from fused_mm_sampling.alg_names import FlashSamplingNames
+
 BASELINE_NAME = "vLLM Baseline"
 FMMS_NAME = "vLLM + FMMS"
 FMMS_DIR = "fmms-triton"
@@ -21,11 +23,10 @@ VARIANT_COLORS = {BASELINE_NAME: "#7f7f7f", FMMS_NAME: "#d62728"}
 VARIANT_MARKERS = {BASELINE_NAME: "s", FMMS_NAME: "o"}
 
 # Make the FlashSampling name point to the same color and marker as the FMMS name.
-FLASHSAMPLING_RENAMES = {"vLLM + FMMS": "vLLM + FlashSampling"}
-mappings = [VARIANT_COLORS, VARIANT_MARKERS]
-for mapping in mappings:
-    for old_key, new_key in FLASHSAMPLING_RENAMES.items():
-        mapping[new_key] = mapping[old_key]
+VLLM_FLASHSAMPLING_RENAMES = {FMMS_NAME: FlashSamplingNames.vllm_fmms}
+for _mapping in [VARIANT_COLORS, VARIANT_MARKERS]:
+    for _old_key, _new_key in VLLM_FLASHSAMPLING_RENAMES.items():
+        _mapping[_new_key] = _mapping[_old_key]
 
 MODELS = [
     "Qwen3-1.7B",
@@ -362,7 +363,7 @@ def main():
     )
     args = parser.parse_args()
 
-    fmms_name = FLASHSAMPLING_RENAMES[FMMS_NAME] if args.use_name_flashsampling else FMMS_NAME
+    fmms_name = VLLM_FLASHSAMPLING_RENAMES[FMMS_NAME] if args.use_name_flashsampling else FMMS_NAME
 
     results_dir = args.results_dir
     imgs_dir = results_dir / "imgs"
