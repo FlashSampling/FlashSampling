@@ -47,6 +47,8 @@ rows = []
 for n_hidden_states in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]:
     our_r, our_w = our_method(vocab_size, hidden_size, n_hidden_states)
     naive_r, naive_w = naive_method(vocab_size, hidden_size, n_hidden_states)
+    speedup = (naive_r + naive_w) / (our_r + our_w)
+    pct = (speedup - 1) * 100
     rows.append(
         {
             "n_hidden_states": n_hidden_states,
@@ -54,7 +56,9 @@ for n_hidden_states in [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048]:
             "our_writes": our_w,
             "naive_reads": naive_r,
             "naive_writes": naive_w,
-            "ratio": (our_r + our_w) / (naive_r + naive_w),
+            "predicted_speedup": speedup,
+            "pct_speedup": pct,
+            "approximation": 1 + 2 * n_hidden_states / vocab_size,
         }
     )
 
