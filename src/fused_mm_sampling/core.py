@@ -131,7 +131,6 @@ def apply_top_k_top_p_qitra(
 
 
 @nvtx.annotate()
-@torch.compile(fullgraph=True)
 def greedy_sample(
     weights: torch.Tensor,  # [V, D]
     hidden_states: torch.Tensor,  # [n_hidden_states, D]
@@ -142,7 +141,21 @@ def greedy_sample(
 ) -> torch.Tensor:
     """Baseline: matmul for logits followed by argmax. Returns [n_hidden_states, 1]."""
     logits = hidden_states @ weights.T  # [n_hidden_states, V]
+    if tp.size > 1:
+        logits = _allgather_logits(logits)
     return logits.argmax(dim=-1, keepdim=True)  # [n_hidden_states, 1]
+
+
+_greedy_compiled_fullgraph = torch.compile(greedy_sample, fullgraph=True)
+_greedy_compiled_with_breaks = torch.compile(greedy_sample)
+
+
+@nvtx.annotate()
+@functools.wraps(greedy_sample)
+def greedy_sample_compiled(*args, tp: TPInfo = TP1, **kwargs):
+    if tp.size > 1:
+        return _greedy_compiled_with_breaks(*args, tp=tp, **kwargs)
+    return _greedy_compiled_fullgraph(*args, tp=tp, **kwargs)
 
 
 sample_compiled_fullgraph = torch.compile(sample, fullgraph=True)
@@ -724,9 +737,9 @@ def get_sampler(provider: str, weights: torch.Tensor) -> Sampler:
         case S.flashinfer_sampling_from_logits:
             return SimpleSampler(flashinfer_sampling_from_logits)
         case S.greedy_baseline:
-            return SimpleSampler(greedy_sample)
+            return SimpleSampler(greedy_sample_compiled)
         case _:
-            raise NotImplementedError()
+            raise NotImplementedError(f"Unknown provider: {provider}")
 
 
 def _default_top_k_top_p(kwargs: dict) -> dict:

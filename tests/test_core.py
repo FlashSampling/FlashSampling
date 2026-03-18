@@ -140,6 +140,39 @@ def _run_distributed_testcases() -> None:
             print(msg)
 
 
+@pytest.mark.skipif(
+    not os.environ.get("FMMS_TEST_DISTRIBUTED"),
+    reason="Set FMMS_TEST_DISTRIBUTED=1 to run",
+)
+def test_greedy_tp2() -> None:
+    run_maybe_distributed(_run_greedy_tp2, n_procs=2)
+
+
+def _run_greedy_tp2() -> None:
+    tp = TPInfo.from_world()
+    for vocab_size in [100, 200, 256]:
+        for n_hidden_states in [1, 2]:
+            inputs = make_synthetic_inputs(
+                vocab_size=vocab_size, n_hidden_states=n_hidden_states, tp=tp
+            )
+            sampler = get_sampler("greedy", weights=inputs.weights)
+            sampler.prepare()
+            samples = sampler.sample(
+                weights=inputs.weights,
+                hidden_states=inputs.hidden_states,
+                num_samples=1,
+                temperature=torch.empty((), device="cuda"),
+                tp=tp,
+            )
+            ref_logits = inputs.logits  # [H, V_global] from make_synthetic_inputs
+            expected = ref_logits.argmax(dim=-1)
+            torch.testing.assert_close(samples[:, 0], expected)
+            if tp.rank == 0:
+                print(
+                    f"✅ Passed: greedy vocab_size={vocab_size} n_hidden_states={n_hidden_states}"
+                )
+
+
 @pytest.mark.parametrize("n_hidden_states", [1, 2])
 @pytest.mark.parametrize("vocab_size", [100, 200, 256])
 @pytest.mark.parametrize("provider", ["naive-pt", "naive-compiled", "fused-topk"])
