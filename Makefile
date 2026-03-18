@@ -1,3 +1,10 @@
+BREV_INSTANCE_TYPE := dmz.h100x2.pcie
+BREV_IMAGE := nvidia/cuda:13.0.0-devel-ubuntu22.04
+
+brev-create:  # Then run scripts/brev-bootstrap.sh on the instance
+	brev create h100x2 --type $(BREV_INSTANCE_TYPE) --mode container \
+		--container-image $(BREV_IMAGE) --jupyter=false --detached
+
 pytest-distributed:
 	FMMS_TEST_DISTRIBUTED=1 pytest -s tests/test_core.py::test_sampling_distribution_tp2
 
