@@ -19,6 +19,51 @@ Documentation: https://github.com/triton-lang/triton/tree/main/third_party/proto
 
 **Pitfall: Proton inflates per-launch overhead.** Proton adds fixed instrumentation cost per kernel launch. When comparing approaches with different numbers of launches (e.g. 1 vs 4), the wall-clock difference under Proton is misleading. For example, the barrier vs two-stage comparison showed a ~5ms gap under Proton that doesn't exist in uninstrumented runs (~0.01ms real overhead). Always cross-reference Proton wall-clock with `speed_test.py --use_proton=False`.
 
+## Proton intra-kernel profiling (TTGIR override)
+
+DSL-level scopes (`pl.enter_scope`/`pl.exit_scope`) are disabled inside persistent kernel loops by design (the compiler may hoist them out). The workaround is to inject `proton.record` statements at the TTGIR level after compilation. Confirmed by Triton engineer (Corbin Robeck).
+
+### Workflow
+
+```bash
+make proton-profile N_HIDDEN_STATES=1    # dump → inject → run, prints breakdown table
+make sweep-bsz-proton                    # runs proton-profile per bsz (1,4,16,64,128,256)
+```
+
+Three steps (individual targets: `proton-dump-ttgir`, `proton-inject`, `proton-run`):
+
+1. `dump_ttgir.sh` runs the kernel with `TRITON_DUMP_DIR` to capture TTGIR.
+2. `insert_proton_records.py` pattern-matches the TTGIR and injects `proton.record start/end` pairs for six scopes.
+3. The kernel runs again with `TRITON_KERNEL_OVERRIDE=1` so the instrumented TTGIR is loaded.
+
+### Scopes
+
+The persistent kernel fuses the D-loop and tile loop into one `scf.for`. Every 128 iterations, an `scf.if` epilogue fires.
+
+| Scope | What | Fires |
+|-------|------|-------|
+| kernel | Full kernel (tt.func → tt.return) | once |
+| setup | Temperature load, grid dims, TMA descriptors, first prefetch | once |
+| mask | V-masking and temperature scaling | per tile |
+| tile-mgmt | Next-tile coordinate computation (swizzle grouping) | per tile |
+| sample | Gumbel noise + argmax reduce | per tile |
+| store | Global index offset, address computation, tt.store | per tile |
+
+Matmul time = kernel - setup - mask - tile-mgmt - sample - store.
+
+### Key constraints
+
+- **No per-chunk matmul scope.** The D-loop is fused (not unrolled), so there's one `tt.dot` in the TTGIR. A scope around it fires 128x per tile, overflowing the buffer. Proton also rejects start/end spanning different loop iterations.
+- **Shared buffer overflow at high bsz.** Each CTA generates 4 + 8/tile events. At bsz>=256 (~58 tiles/CTA → ~468 events), the 256-slot shared buffer overflows, dropping kernel/setup scopes. Use `BUFFER_TYPE.GLOBAL` (HBM) for those.
+- **HBM vs SMEM buffer.** Comparison shows identical ratios (within noise), so HBM write overhead is negligible with few events per tile.
+- **Warp sampling.** `SAMPLING_STRATEGY.SELECTIVE` with `sampling_options="0"` profiles only warp 0.
+- **Inductor conflict.** `proton.start(backend="instrumentation")` is process-global and breaks `torch.compile`-generated kernels. `proton_profile.py` calls the Triton kernel directly, skipping `_local_reduce`.
+- **Insertion ordering.** When multiple `proton.record` ops target the same line index, the sort key in `insert_proton_records.py` ensures `end` appears before `start` and `kernel` is the outermost scope.
+
+### Output
+
+`parse_proton_intrakernel.py` reads the chrome trace and prints a markdown breakdown table. It can also be used as a library (`parse_chrome_trace`, `trace_phase_pcts`) by the batch-size sweep plotting script.
+
 ## NCU (Nsight Compute) batch-size sweep
 
 `benchmarking/parse_ncu_sweep.py` parses per-kernel GPU time from NCU CSV exports across batch sizes. It expects a directory layout like:

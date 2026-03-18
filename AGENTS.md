@@ -5,10 +5,11 @@
 - to plot all plots use `make plot-all`.
 - to test the distributed code works use `make pytest-distributed`.
 - when benchmarking many combinations, don't run the bench in parallel, since they will contend for the same resources. Instead launch them sequentially. On modal, you can launch benchmarks in parallel, since each job should get its own resources. When launching many parallel Modal benchmarks with an empty Triton autotune cache, consider running a single warmup job first to populate the cache on the volume. Otherwise every parallel job will autotune independently, wasting GPU time and risking inconsistent config selection.
-- use the hugging face cli when appropriate.
+- available CLIs: hugging face, brev, github
 - The blog post is in `~/code/tomasruizt.github.io/tomas-blog/posts/07_fused-mm-sample/index.qmd`.
 - The paper is in `~/code/papers/flashsampling-paper/`.
 - The FMMS Triton kernel is in `src/fused_mm_sampling/core.py`.
+
 
 Development notes and lessons learned while building this project.
 
@@ -89,6 +90,7 @@ The `findings/` directory contains detailed write-ups of bugs, workarounds, and 
 - `tma-cache-modifiers.md` — Analysis of using L2 cache modifiers (`evict_first`/`evict_last`) for FMMS Triton kernel loads. Hidden states should be kept warm (reused across V tiles), weights should stream through (no reuse at low batch sizes). Conclusion: TMA `desc.load()` does not support cache modifiers (the PTX `cp.async.bulk.tensor` instruction lacks those fields), and switching to regular `tl.load()` to get them would lose TMA's async prefetch pipeline. The tile swizzling (GROUP_SIZE_V=4) already provides the main L2 benefit, and hidden states are too small relative to L2 (0.03% at H=1) to be evicted.
 - `torch-compile-overhead-tp2.md` — torch.compile adds 0.05-0.13ms overhead at TP2 that hurts all baselines at low batch sizes (up to 1.43x for multinomial, 1.23x for FlashInfer on small config). FMMS is the exception: its compiled `_local_reduce`/`_stack_and_select_winner` are small enough that compile helps. The effect is weaker for large config. At H>=64 compile wins for all providers.
 - `register-spilling-bsz256.md` — At H=256 the kernel spills 118 MB due to three [128, 64] f32 tensors being live simultaneously (persistent loop iter_arg + scaled logits + Gumbel noise). Fix: raise `maxnreg` from 128 to 255 (1.74x speedup on RTX 3090). Fusing noise into the matmul accumulator eliminates spilling but breaks D-loop software pipelining (30% regression). Datacenter GPUs keep `maxnreg=128` because warp specialization adds warps that exceed the register file at 255.
+- `proton-scopes-persistent-kernel.md` — DSL-level Proton scopes don't work inside persistent kernels (by design). Solution: TTGIR-level injection via `insert_proton_records.py`. Six scopes (kernel, setup, mask, tile-mgmt, sample, store); matmul derived by subtraction. Includes buffer overflow constraints, warp sampling, HBM vs SMEM comparison, and per-bsz results showing sampling grows from 1% (bsz=1) to 23% (bsz=256) due to BLOCK_SIZE_H increase and register spilling.
 
 ## Architecture
 
@@ -131,6 +133,26 @@ These names are defined in `provider_names` in `src/fused_mm_sampling/bench/trit
 ## Profiling (Proton, NCU, nsys)
 
 See [docs/profiling.md](docs/profiling.md).
+
+### Proton intra-kernel profiling (TTGIR override)
+
+DSL-level scopes (`pl.enter_scope`) don't work in persistent kernels (compiler hoists them out of loops).
+Instead, `insert_proton_records.py` injects `proton.record` ops directly into the TTGIR after compilation.
+See `findings/proton-scopes-persistent-kernel.md` for full details.
+
+Key files:
+- `benchmarking/proton_profile.py` — standalone profiling script (calls kernel directly, skips `_local_reduce` to avoid inductor conflict)
+- `benchmarking/insert_proton_records.py` — injects six scopes into TTGIR: kernel, setup, mask, tile-mgmt, sample, store
+- `benchmarking/parse_proton_intrakernel.py` — parses chrome traces, derives matmul = kernel - setup - mask - tile-mgmt - sample - store
+- `benchmarking/dump_ttgir.sh` — dumps TTGIR via `TRITON_DUMP_DIR`
+
+Makefile targets: `make proton-profile` (all-in-one), `make sweep-bsz-proton` (per-bsz sweep).
+
+Constraints:
+- The persistent kernel's D-loop is fused (not unrolled), so per-chunk matmul scopes are impossible without overflowing the 128-slot shared buffer.
+- At high bsz (>=256), the buffer overflows even with the current 6 scopes. Use `BUFFER_TYPE.GLOBAL` (HBM) for those. HBM vs SMEM gives identical ratios.
+- `SAMPLING_STRATEGY.SELECTIVE` with `sampling_options="0"` profiles only warp 0 to reduce event count.
+- When multiple proton.record ops share a line index, the sort key in `insert_proton_records.py` ensures correct nesting (end before start, kernel outermost).
 
 ## vLLM integration
 
