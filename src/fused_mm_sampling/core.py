@@ -388,13 +388,15 @@ def get_autotuning_configs() -> list[triton.Config]:
     cc = torch.cuda.get_device_capability()
     is_dev_machine: bool = cc == (8, 6)  # RTX 3090 config
     if is_dev_machine:
-        # Single config to avoid register spilling
         return [
             triton.Config(
                 {"BLOCK_SIZE_V": MIN_BLOCK_SIZE_V, "BLOCK_SIZE_D": 32, "GROUP_SIZE_V": 4},
                 num_warps=4,
                 num_stages=2,
-                maxnreg=128,
+                # Persistent kernel: grid = NUM_SMS, so only 1 block per SM.
+                # No occupancy benefit from limiting registers, so let ptxas
+                # use the full register file instead of spilling to local memory.
+                maxnreg=255,
             )
         ]
     return [
@@ -407,7 +409,8 @@ def get_autotuning_configs() -> list[triton.Config]:
         for bsz_v in [MIN_BLOCK_SIZE_V, 2 * MIN_BLOCK_SIZE_V]
         for bsz_d in [64, 128]
         for num_warps in [8]  # Default 4
-        for maxnreg in [128]  # Previously 255, not sure either is better
+        # Can't use 255: warp specialization adds warps (8+4=384 threads), 255*384 > 65536 reg file
+        for maxnreg in [128]
         for num_stages in [4]  # 4 outperforms 2, and 3
     ]
 
@@ -525,6 +528,7 @@ def fused_mm_sample_triton_kernel(
         # Later we will take max over logits + noise, but rows outside the mask
         # should not be considered. Setting them to -inf achieves this.
         logits_blk = tl.where(mask_v[:, None], logits_blk, -float("inf"))
+
         if not GREEDY_SAMPLING:
             logits_blk = logits_blk / temperature  # [Vblk, n_hidden_states]
 
