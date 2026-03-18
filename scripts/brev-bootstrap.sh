@@ -35,7 +35,7 @@ REPO_DIR="$HOME/code/fused-mm-sample"
 if [ ! -d "$REPO_DIR" ]; then
     echo "Cloning repo..."
     mkdir -p "$HOME/code"
-    git clone git@github.com:tomasruizt/fmms-kernel.git "$REPO_DIR"
+    git clone https://github.com/tomasruizt/fmms-kernel.git "$REPO_DIR"
 else
     echo "Repo already exists at $REPO_DIR, pulling latest..."
     git -C "$REPO_DIR" pull --ff-only
