@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from itertools import product
 
 import numpy as np
 import torch
 from scipy.stats import chisquare
 
-from .core import get_sampler
+from .core import get_sampler, set_torch_allocator_for_tma_descriptors
 from .tp_info import TP1, TPInfo
 
 
@@ -59,6 +60,7 @@ def make_synthetic_inputs(
         offset=float(vocab_size),
     )
 
+    weights_bf16, hidden_states_bf16 = pad_to_tma_alignment(weights_bf16, hidden_states_bf16)
     weights_bf16 = shard_weights(weights_bf16, tp)
 
     return SyntheticInputs(
@@ -66,8 +68,27 @@ def make_synthetic_inputs(
         hidden_states=hidden_states_bf16,
         logits=logits,
         vocab_size=vocab_size,
-        hidden_size=hidden_size + 1,
+        hidden_size=weights_bf16.shape[1],
     )
+
+
+def pad_to_tma_alignment(
+    weights: torch.Tensor, hidden_states: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Pad D to 16-byte alignment for TMA on SM 90+ (H100, B200, etc.).
+
+    TMA requires the innermost tensor dimension to be 16-byte aligned.
+    For bf16 (2 bytes), D must be a multiple of 8. After shift_logits_negative
+    adds a bias column (D = hidden_size + 1), D=11 is not aligned. Zero-padding
+    extra columns preserves logits (they contribute nothing to the matmul).
+    """
+    d = weights.shape[1]
+    aligned_d = (d + 7) & ~7  # next multiple of 8 bf16 elements = 16 bytes
+    if aligned_d > d:
+        pad = aligned_d - d
+        weights = torch.nn.functional.pad(weights, (0, pad))
+        hidden_states = torch.nn.functional.pad(hidden_states, (0, pad))
+    return weights, hidden_states
 
 
 def shard_weights(weights: torch.Tensor, tp: TPInfo) -> torch.Tensor:
@@ -134,6 +155,44 @@ def assert_sampling_distribution(
             f"Sampling distribution mismatch for seq {seq_idx}: p={p_value:.6f}. "
             f"{provider} does not match the expected softmax distribution."
         )
+
+
+def run_sampling_distribution_tp2() -> None:
+    """Worker function for TP2 sampling distribution tests (passed to run_maybe_distributed)."""
+    set_torch_allocator_for_tma_descriptors()
+    tp = TPInfo.from_world()
+    providers = [
+        "fused-triton",
+        "naive-pt",
+        "naive-compiled",
+        "flashinfer:sampling_from_logits",
+        "flashinfer:top_k_top_p_sampling_from_logits",
+    ]
+    for provider, vocab_size, n_hidden_states in product(providers, [100, 200, 256], [1, 2]):
+        assert_sampling_distribution(provider, vocab_size, n_hidden_states, tp=tp)
+        tp.rank0_print(f"✅ Passed: {provider} V={vocab_size} H={n_hidden_states}")
+
+
+def run_greedy_tp2() -> None:
+    """Worker function for TP2 greedy tests (passed to run_maybe_distributed)."""
+    set_torch_allocator_for_tma_descriptors()
+    tp = TPInfo.from_world()
+    for vocab_size, n_hidden_states in product([100, 200, 256], [1, 2]):
+        inputs = make_synthetic_inputs(
+            vocab_size=vocab_size, n_hidden_states=n_hidden_states, tp=tp
+        )
+        sampler = get_sampler("greedy", weights=inputs.weights)
+        sampler.prepare()
+        samples = sampler.sample(
+            weights=inputs.weights,
+            hidden_states=inputs.hidden_states,
+            num_samples=1,
+            temperature=torch.empty((), device="cuda"),
+            tp=tp,
+        )
+        expected = inputs.logits.argmax(dim=-1)
+        torch.testing.assert_close(samples[:, 0], expected)
+        tp.rank0_print(f"✅ Passed: greedy V={vocab_size} H={n_hidden_states}")
 
 
 def shift_logits_negative(

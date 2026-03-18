@@ -10,6 +10,7 @@
 - The paper is in `~/code/papers/flashsampling-paper/`.
 - The FMMS Triton kernel is in `src/fused_mm_sampling/core.py`.
 - Despite locally having only single GPU, the distributed code can be unit tested because it uses the `gloo` backend.
+- Generally speaking, do imports at the top of the file, not inside functions.
 
 
 Development notes and lessons learned while building this project.

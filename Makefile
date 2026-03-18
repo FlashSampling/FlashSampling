@@ -8,6 +8,9 @@ brev-create:  # Then run scripts/brev-bootstrap.sh on the instance
 pytest-distributed:
 	FMMS_TEST_DISTRIBUTED=1 pytest -s tests/test_core.py::test_sampling_distribution_tp2
 
+modal-pytest-distributed:
+	GPU=$(GPU) modal run -m src.fused_mm_sampling.modal_lib.modal_pytest_distributed
+
 update-deps:
 	uv lock --upgrade  # Re-resolve all deps to latest compatible versions
 	uv sync --all-extras  # Install exact versions from lockfile, including optional groups

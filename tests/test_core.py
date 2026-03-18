@@ -1,5 +1,4 @@
 import os
-from itertools import product
 from pathlib import Path
 
 os.environ.setdefault("HELION_AUTOTUNE_EFFORT", "none")
@@ -11,8 +10,12 @@ from scipy.stats import chisquare
 
 from fused_mm_sampling.bench.speed_test import Args, run_speed_test
 from fused_mm_sampling.core import JLSampler, bsz_h, fused_mm_sample_triton, get_sampler
-from fused_mm_sampling.testing import assert_sampling_distribution, make_synthetic_inputs
-from fused_mm_sampling.tp_info import TPInfo, run_maybe_distributed
+from fused_mm_sampling.testing import (
+    make_synthetic_inputs,
+    run_greedy_tp2,
+    run_sampling_distribution_tp2,
+)
+from fused_mm_sampling.tp_info import run_maybe_distributed
 
 device = torch.device("cuda")
 
@@ -118,26 +121,7 @@ def test_sampling_distribution(provider, vocab_size, n_hidden_states):
     reason="Set FMMS_TEST_DISTRIBUTED=1 to run",
 )
 def test_sampling_distribution_tp2() -> None:
-    run_maybe_distributed(_run_distributed_testcases, n_procs=2)
-
-
-def _run_distributed_testcases() -> None:
-    tp = TPInfo.from_world()
-    providers = [
-        "fused-triton",
-        "naive-pt",
-        "naive-compiled",
-        "flashinfer:sampling_from_logits",
-        "flashinfer:top_k_top_p_sampling_from_logits",
-    ]
-    vocab_sizes = [100, 200, 256]
-    n_hidden_states_list = [1, 2]
-    combinations = product(providers, vocab_sizes, n_hidden_states_list)
-    for provider, vocab_size, n_hidden_states in combinations:
-        assert_sampling_distribution(provider, vocab_size, n_hidden_states, tp=tp)
-        if tp.rank == 0:
-            msg = f"✅ Passed: {provider} vocab_size={vocab_size} n_hidden_states={n_hidden_states}"
-            print(msg)
+    run_maybe_distributed(run_sampling_distribution_tp2, n_procs=2)
 
 
 @pytest.mark.skipif(
@@ -145,32 +129,7 @@ def _run_distributed_testcases() -> None:
     reason="Set FMMS_TEST_DISTRIBUTED=1 to run",
 )
 def test_greedy_tp2() -> None:
-    run_maybe_distributed(_run_greedy_tp2, n_procs=2)
-
-
-def _run_greedy_tp2() -> None:
-    tp = TPInfo.from_world()
-    for vocab_size in [100, 200, 256]:
-        for n_hidden_states in [1, 2]:
-            inputs = make_synthetic_inputs(
-                vocab_size=vocab_size, n_hidden_states=n_hidden_states, tp=tp
-            )
-            sampler = get_sampler("greedy", weights=inputs.weights)
-            sampler.prepare()
-            samples = sampler.sample(
-                weights=inputs.weights,
-                hidden_states=inputs.hidden_states,
-                num_samples=1,
-                temperature=torch.empty((), device="cuda"),
-                tp=tp,
-            )
-            ref_logits = inputs.logits  # [H, V_global] from make_synthetic_inputs
-            expected = ref_logits.argmax(dim=-1)
-            torch.testing.assert_close(samples[:, 0], expected)
-            if tp.rank == 0:
-                print(
-                    f"✅ Passed: greedy vocab_size={vocab_size} n_hidden_states={n_hidden_states}"
-                )
+    run_maybe_distributed(run_greedy_tp2, n_procs=2)
 
 
 @pytest.mark.parametrize("n_hidden_states", [1, 2])
