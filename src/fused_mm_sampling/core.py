@@ -1,9 +1,5 @@
-# import os
-
-# os.environ["TRITON_INTERPRET"] = "1"
 import functools
 import math
-import os
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Callable, NamedTuple, Protocol
@@ -14,7 +10,6 @@ import torch
 import torch.distributed as dist
 import triton
 import triton.language as tl
-import triton.profiler.language as pl
 
 from .alg_names import ShortNames as S
 from .tl_matmul import matmul
@@ -266,7 +261,6 @@ def fused_mm_sample_triton(
         NUM_SMS=NUM_SMS,
         GREEDY_SAMPLING=greedy_sampling,
         RETURN_LOGITS=return_logits,
-        USE_PROTON_SCOPES=os.environ.get("USE_PROTON_SCOPES", "0") == "1",
     )
 
     assert grid_size["v"] is not None
@@ -459,15 +453,12 @@ def fused_mm_sample_triton_kernel(
     NUM_SMS: tl.constexpr,  # noqa: N803
     GREEDY_SAMPLING: tl.constexpr,  # noqa: N803
     RETURN_LOGITS: tl.constexpr,  # noqa: N803
-    USE_PROTON_SCOPES: tl.constexpr,  # noqa: N803
 ):
     """Persistent kernel for fused matmul + Gumbel-max sampling.
 
     Each SM processes multiple tiles in a loop, staying persistent on the SM
     rather than exiting after processing a single tile.
     """
-    if USE_PROTON_SCOPES:
-        pl.enter_scope("setup")
     if not GREEDY_SAMPLING:
         temperature = tl.load(temperature_ptr)
     start_pid = tl.program_id(axis=0)
@@ -501,8 +492,6 @@ def fused_mm_sample_triton_kernel(
         strides=[max_grid_size_v * n_hidden_states, n_hidden_states, 1],
         block_shape=[1, 1, BLOCK_SIZE_H],
     )
-    if USE_PROTON_SCOPES:
-        pl.exit_scope("setup")
     # tile_id_c is used in the epilogue to break the dependency between
     # the prologue and the epilogue (workaround for Blackwell pipelining bug)
     tile_id_c = start_pid - NUM_SMS
@@ -523,16 +512,12 @@ def fused_mm_sample_triton_kernel(
         logits_blk = tl.zeros((BLOCK_SIZE_V, BLOCK_SIZE_H), dtype=tl.float32)
 
         # Compute a block of logits logits_blk
-        if USE_PROTON_SCOPES:
-            pl.enter_scope("matmul-tile")
         for d_start in range(0, hidden_size, BLOCK_SIZE_D):
             # load weights tile [BLOCK_SIZE_V, BLOCK_SIZE_D]
             w_blk = w_desc.load([v_start, d_start])
             # load hidden_states tile [BLOCK_SIZE_H, BLOCK_SIZE_D]
             hidden_states_blk = hidden_states_desc.load([h_start, d_start])
             logits_blk = tl.dot(w_blk, hidden_states_blk.T, acc=logits_blk)
-        if USE_PROTON_SCOPES:
-            pl.exit_scope("matmul-tile")
 
         # Optionally store raw logits to GMEM before masking and temperature.
         if RETURN_LOGITS:
@@ -555,9 +540,6 @@ def fused_mm_sample_triton_kernel(
         h_start_c = pid_h_c * BLOCK_SIZE_H
 
         for sample_idx in range(num_samples):
-            if USE_PROTON_SCOPES:
-                pl.enter_scope("sample")
-
             noise_size: tl.constexpr = BLOCK_SIZE_V * BLOCK_SIZE_H
             noise_offsets = tl.arange(0, noise_size).reshape((BLOCK_SIZE_V, BLOCK_SIZE_H))
             if not GREEDY_SAMPLING:
@@ -570,11 +552,7 @@ def fused_mm_sample_triton_kernel(
                 gumbel_max, gumbel_max_idx_local = tl.max(logits_blk, axis=0, return_indices=True)
 
             gumbel_max_idx_global = gumbel_max_idx_local + v_start_c
-            if USE_PROTON_SCOPES:
-                pl.exit_scope("sample")
 
-            if USE_PROTON_SCOPES:
-                pl.enter_scope("store")
             max_desc.store(
                 [sample_idx, pid_v_c, h_start_c],
                 gumbel_max[None, None, :],
@@ -583,8 +561,6 @@ def fused_mm_sample_triton_kernel(
                 [sample_idx, pid_v_c, h_start_c],
                 gumbel_max_idx_global[None, None, :],
             )
-            if USE_PROTON_SCOPES:
-                pl.exit_scope("store")
 
 
 @triton.jit
