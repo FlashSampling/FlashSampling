@@ -1,4 +1,5 @@
 """Symmetric-memory TP reduction (replaces NCCL all_gather).
+Inspired from https://github.com/meta-pytorch/kraken
 
 The kernel's output buffers (maxs, maxs_idx) are allocated in symmetric memory
 so the kernel's existing TMA stores write directly to NVLink-mapped addresses.
