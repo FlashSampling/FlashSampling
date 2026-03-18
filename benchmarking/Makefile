@@ -150,9 +150,13 @@ sweep-bsz-ncu:
 	done
 	@echo "NCU sweep done. Reports in $(NCU_SWEEP_DIR)/"
 	$(MAKE) parse-sweep-ncu
+	$(MAKE) plot-sweep-ncu
 
 parse-sweep-ncu:
 	$(PYTHON) parse_ncu_sweep.py --dir $(NCU_SWEEP_DIR) | tee $(NCU_SWEEP_DIR)/summary.txt
+
+plot-sweep-ncu:
+	$(PYTHON) plot_ncu_kernel_breakdown.py --dir $(NCU_SWEEP_DIR)
 
 parse-sweep-proton:
 	@echo "TODO: parse proton chrome traces from $(PROTON_SWEEP_DIR)/"
