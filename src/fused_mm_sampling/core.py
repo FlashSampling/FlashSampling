@@ -16,6 +16,7 @@ import triton
 import triton.language as tl
 import triton.profiler.language as pl
 
+from .alg_names import ShortNames as S
 from .tl_matmul import matmul
 from .tp_info import TP1, TPInfo
 
@@ -131,6 +132,21 @@ def apply_top_k_top_p_qitra(
     )
     logits = apply_top_k_top_p_triton(logits, k, p)
     return logits.softmax(dim=-1)
+
+
+@nvtx.annotate()
+@torch.compile(fullgraph=True)
+def greedy_sample(
+    weights: torch.Tensor,  # [V, D]
+    hidden_states: torch.Tensor,  # [n_hidden_states, D]
+    num_samples: int,  # ignored (always returns 1 sample per row)
+    temperature: torch.Tensor,  # ignored (greedy)
+    tp: "TPInfo" = TP1,
+    **_kwargs,
+) -> torch.Tensor:
+    """Baseline: matmul for logits followed by argmax. Returns [n_hidden_states, 1]."""
+    logits = hidden_states @ weights.T  # [n_hidden_states, V]
+    return logits.argmax(dim=-1, keepdim=True)  # [n_hidden_states, 1]
 
 
 sample_compiled_fullgraph = torch.compile(sample, fullgraph=True)
@@ -683,52 +699,54 @@ def optimal_k(n: int, epsilon: float) -> int:
 
 def get_sampler(provider: str, weights: torch.Tensor) -> Sampler:
     match provider:
-        case "fused-triton":
+        case S.fused_triton:
             return SimpleSampler(lambda **kwargs: fused_mm_sample_triton(**{"seed": 0, **kwargs}))
-        case "fused-triton-ret-logits":
+        case S.fused_triton_ret_logits:
             return SimpleSampler(
                 lambda **kwargs: fused_mm_sample_triton(
                     **{"seed": 0, "return_logits": True, **kwargs}
                 )[0]
             )
-        case "fused-triton-greedy":
+        case S.fused_triton_greedy:
             return SimpleSampler(
                 lambda **kwargs: fused_mm_sample_triton(
                     **{"seed": 0, "greedy_sampling": True, **kwargs}
                 )
             )
-        case "naive-pt":
+        case S.naive_pt:
             return SimpleSampler(sample)
-        case "naive-compiled":
+        case S.naive_compiled:
             return SimpleSampler(sample_compiled)
-        case "pt-qitra":
+        case S.pt_qitra:
             return SimpleSampler(lambda **kwargs: sample(**kwargs, use_qitra=True))
-        case "sequential-compiled":
+        case S.sequential_compiled:
             return SimpleSampler(sequential_sample_pt)
-        case "naive-tl-matmul":
+        case S.naive_tl_matmul:
             return SimpleSampler(lambda **kwargs: sample_compiled(**kwargs, tl_matmul=True))
-        case "jl-compiled":
+        case S.jl_compiled:
             return JLSampler.from_weights(weights)
-        case "fused-topk":
+        case S.fused_topk:
             from .tl_fused_mm_topk import fused_mm_topk_and_sample
 
             return SimpleSampler(fused_mm_topk_and_sample)
-        case "flashinfer:top_k_top_p_sampling_from_logits":
+        case S.flashinfer_top_k_top_p_sampling_from_logits:
             return SimpleSampler(
                 lambda **kwargs: flashinfer_top_k_top_p_sampling_from_logits(
                     **_default_top_k_top_p(kwargs),
                 )
             )
-        case "fused-cuda":
+        case S.fused_cuda:
             from .cuda_impl import fused_mm_sample_cuda
 
             return SimpleSampler(lambda **kwargs: fused_mm_sample_cuda(**kwargs, seed=0))
-        case "helion":
+        case S.helion:
             from .helion_impl import fused_mm_sample_helion
 
             return SimpleSampler(fused_mm_sample_helion)
-        case "flashinfer:sampling_from_logits":
+        case S.flashinfer_sampling_from_logits:
             return SimpleSampler(flashinfer_sampling_from_logits)
+        case S.greedy_baseline:
+            return SimpleSampler(greedy_sample)
         case _:
             raise NotImplementedError()
 

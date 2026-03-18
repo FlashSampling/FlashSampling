@@ -16,6 +16,7 @@ PROVIDER_COLORS: dict[str, str] = {
     L.multinomial_sampling_eager: "#bcbd22",  # olive
     L.flashinfer_top_k_top_p_sampling_from_logits: "#1f77b4",  # muted blue
     L.flashinfer_sampling_from_logits: "#aec7e8",  # light blue
+    L.greedy_baseline: "#2ca02c",  # green
 }
 
 # Distinct markers so lines are distinguishable without color.
@@ -27,6 +28,7 @@ PROVIDER_MARKERS: dict[str, str] = {
     L.multinomial_sampling_eager: "P",
     L.flashinfer_top_k_top_p_sampling_from_logits: "X",
     L.flashinfer_sampling_from_logits: "v",
+    L.greedy_baseline: "d",
 }
 
 # Hatch patterns for bar plots.
@@ -38,6 +40,7 @@ PROVIDER_HATCHES: dict[str, str] = {
     L.multinomial_sampling_eager: "\\\\",
     L.flashinfer_top_k_top_p_sampling_from_logits: "xxx",
     L.flashinfer_sampling_from_logits: "...",
+    L.greedy_baseline: "++",
 }
 
 # Make the FlashSampling names point to the same colors, markers, and hatches as the FMMS names.

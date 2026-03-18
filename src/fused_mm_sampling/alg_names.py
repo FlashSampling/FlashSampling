@@ -19,6 +19,7 @@ class ShortNames:
     pt_qitra = "pt-qitra"
     flashinfer_top_k_top_p_sampling_from_logits = "flashinfer:top_k_top_p_sampling_from_logits"
     flashinfer_sampling_from_logits = "flashinfer:sampling_from_logits"
+    greedy_baseline = "greedy"
 
 
 class LongNames:
@@ -36,6 +37,7 @@ class LongNames:
     pt_qitra = "Qitra"
     flashinfer_top_k_top_p_sampling_from_logits = "flashinfer:top_k_top_p_sampling_from_logits"
     flashinfer_sampling_from_logits = "flashinfer:sampling_from_logits"
+    greedy_baseline = "Greedy Baseline"
 
 
 class FlashSamplingNames:
@@ -72,4 +74,5 @@ short2long: dict[str, str] = {
     S.pt_qitra: L.pt_qitra,
     S.flashinfer_top_k_top_p_sampling_from_logits: L.flashinfer_top_k_top_p_sampling_from_logits,
     S.flashinfer_sampling_from_logits: L.flashinfer_sampling_from_logits,
+    S.greedy_baseline: L.greedy_baseline,
 }
