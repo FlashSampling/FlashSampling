@@ -17,6 +17,7 @@ def make_image():
         "nvtx",
         "llnl-hatchet",
         "scipy",
+        "cuda-bench[cu13]",
     ]
     return img.uv_pip_install(deps)
 
