@@ -12,7 +12,7 @@ REPORT_PATH = f"{REPORT_DIR}/report"
 nsys_image = make_image().apt_install("cuda-nsight-systems-13-0")
 
 
-@app.function(gpu="B200", image=nsys_image, volumes=make_volumes(), timeout=5 * 60)
+@app.function(gpu="B200", image=nsys_image, volumes=make_volumes())
 def nsys_test():
     os.makedirs(REPORT_DIR, exist_ok=True)
 

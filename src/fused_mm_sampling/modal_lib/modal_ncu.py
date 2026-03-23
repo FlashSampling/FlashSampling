@@ -3,19 +3,15 @@ import subprocess
 
 import modal
 
-from .utils import add_library_code, make_app, make_image, make_volumes, set_volume_caches, volume_path
+from .utils import ModalEnvConfig, add_library_code, make_app, make_image, make_volumes, set_volume_caches, volume_path
 
+
+class Config(ModalEnvConfig):
+    ncu_mode: str = "export"
+
+
+cfg = Config()
 app = make_app()
-
-gpu = os.getenv("GPU", "B200")
-name = os.getenv("NAME", "fused-triton")
-n_hidden_states = os.getenv("N_HIDDEN_STATES", "1")
-case = os.getenv("CASE", "small")
-n_procs = int(os.getenv("N_PROCS", "1"))
-mode = os.getenv("NCU_MODE", "export")  # "export" (text to stdout) or "profile" (.ncu-rep to volume)
-
-gpu_spec = f"{gpu}:{n_procs}" if n_procs > 1 else gpu
-
 
 ncu_image = add_library_code(make_image()).run_commands(
     "apt-get update && apt-get install -y cuda-nsight-compute-13-2",
@@ -24,7 +20,7 @@ ncu_image = add_library_code(make_image()).run_commands(
 )
 
 
-@app.function(gpu=gpu_spec, image=ncu_image, volumes=make_volumes(), timeout=15 * 60)
+@app.function(gpu=cfg.gpu_spec, image=ncu_image, volumes=make_volumes(), timeout=cfg.timeout)
 def ncu_run(name: str, n_hidden_states: str, case: str, n_procs: int, mode: str, gpu_name: str):
     set_volume_caches()
     cmd = [
@@ -75,10 +71,10 @@ def ncu_run(name: str, n_hidden_states: str, case: str, n_procs: int, mode: str,
 @app.local_entrypoint()
 def main():
     ncu_run.remote(
-        name=name,
-        n_hidden_states=n_hidden_states,
-        case=case,
-        n_procs=n_procs,
-        mode=mode,
-        gpu_name=gpu,
+        name=cfg.name,
+        n_hidden_states=str(cfg.n_hidden_states),
+        case=cfg.case,
+        n_procs=cfg.n_procs,
+        mode=cfg.ncu_mode,
+        gpu_name=cfg.gpu,
     )
