@@ -1,7 +1,14 @@
 from pathlib import Path
 
 from ..bench.speed_test import Args, run_speed_test
-from .utils import ModalEnvConfig, make_app, make_image, make_volumes, set_volume_caches, volume_path
+from .utils import (
+    ModalEnvConfig,
+    make_app,
+    make_image,
+    make_volumes,
+    set_volume_caches,
+    volume_path,
+)
 
 cfg = ModalEnvConfig()
 app = make_app()
