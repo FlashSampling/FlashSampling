@@ -3,7 +3,7 @@
 The Brev cloud GPU environment (shadeform) has several non-standard behaviors:
 
 - **`$HOME` is unset** in non-login shells. Always pass `HOME=/home/shadeform` explicitly when running `make` or scripts that depend on `~` expansion. The Makefile's `$(HOME)` resolves to empty string otherwise.
-- **Single global venv at `/home/shadeform/.venv/`**, not per-project. Both vLLM and fused-mm-sampling are installed there. The project's `.venv/` (referenced in the Makefile as `$(HOME)/code/fused-mm-sample/.venv/`) and vLLM's `venv/` (`$(HOME)/code/vllm/venv/`) do not exist.
+- **Single global venv at `/home/shadeform/.venv/`**, not per-project. Both vLLM and fused-mm-sampling are installed there. The project's `.venv/` (referenced in the Makefile as `$(HOME)/code/FlashSampling/.venv/`) and vLLM's `venv/` (`$(HOME)/code/vllm/venv/`) do not exist.
 - **vLLM binary**: `/home/shadeform/.venv/bin/vllm` (not `~/code/vllm/venv/bin/vllm`).
 - **Python**: `/home/shadeform/.venv/bin/python` (Python 3.10.12).
 - **GPU**: 1x NVIDIA H100 PCIe, 81,559 MiB VRAM, CUDA 13.0.

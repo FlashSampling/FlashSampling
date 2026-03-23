@@ -337,7 +337,7 @@ tensor inside the Triton kernel's inner loop).
 ### Install `fused-mm-sampling` in the vLLM venv
 
 ```bash
-cd ~/code/vllm && pip install -e ~/code/fused-mm-sample
+cd ~/code/vllm && pip install -e ~/code/FlashSampling
 ```
 
 Both kernels become available since they're registered in `get_sampler()`.
@@ -385,7 +385,7 @@ The integration is complete and benchmarked on the `feature/fmms-sampler` branch
 ### Install fused-mm-sampling in the vLLM venv
 
 ```bash
-cd ~/code/vllm && uv pip install -e ~/code/fused-mm-sample --python venv/bin/python
+cd ~/code/vllm && uv pip install -e ~/code/FlashSampling --python venv/bin/python
 ```
 
 ## Benchmark results

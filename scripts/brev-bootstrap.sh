@@ -4,7 +4,7 @@
 #   HOME=/home/shadeform bash brev-bootstrap.sh
 set -euo pipefail
 
-echo "=== Brev bootstrap for fused-mm-sample ==="
+echo "=== Brev bootstrap for FlashSampling ==="
 
 # ── 1. CUDA toolkit (needed for ncu + nvcc JIT compilation) ──
 # Auto-detect the highest CUDA version installed under /usr/local/cuda-*.
@@ -31,7 +31,7 @@ export PATH="$CUDA_HOME/bin:$PATH"
 echo "Using CUDA_HOME=$CUDA_HOME ($(nvcc --version 2>/dev/null | grep release || echo 'nvcc not found'))"
 
 # ── 2. Clone repo ──
-REPO_DIR="$HOME/code/fused-mm-sample"
+REPO_DIR="$HOME/code/FlashSampling"
 if [ ! -d "$REPO_DIR" ]; then
     echo "Cloning repo..."
     mkdir -p "$HOME/code"
