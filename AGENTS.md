@@ -11,7 +11,7 @@
 - The FMMS Triton kernel is in `src/fused_mm_sampling/core.py`.
 - Despite locally having only single GPU, the distributed code can be unit tested because it uses the `gloo` backend.
 - Generally speaking, do imports at the top of the file, not inside functions.
-
+- Do no speculate blindly about why code is slow. Causal statements need to be backed by empirical evidence. Choose appropriate language to hedge, e.g. "Possibly", "Potentially", and point out what data would let us clear the uncertainty and make confident claims.
 
 Development notes and lessons learned while building this project.
 
