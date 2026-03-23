@@ -18,8 +18,9 @@ update-deps:
 GPU := b200
 POSTFIX :=
 N_PROCS := 1
+N_HIDDEN_STATES := 1
 CASE := all
-NAME :=
+NAME := fused-triton
 DISABLE_COMPILE := 0
 # Skip "Multinomial Sampling (Eager)" from plots (it's always slower than Compiled).
 # To include it: make plot-all SKIP_EAGER=
@@ -29,12 +30,45 @@ RESULTS_DIR := benchmarking/modal-results/$(BENCH_DIR)
 PLOT_EXTRA_FLAGS := $(if $(SKIP_EAGER),--skip_multinomial_eager=1,)
 
 modal-speed-test:
-	modal run -m src.fused_mm_sampling.modal_lib.modal_speed_test
+	GPU=$(GPU) N_PROCS=$(N_PROCS) NAME=$(NAME) N_HIDDEN_STATES=$(N_HIDDEN_STATES) \
+		modal run -m src.fused_mm_sampling.modal_lib.modal_speed_test
 
 modal-triton-benchmark: modal-create-results-triton-bench modal-get-results-triton-bench modal-plot-triton-bench
 
 modal-ncu-test:
 	modal run -m src.fused_mm_sampling.modal_lib.modal_ncu_test
+
+modal-nsys-test:
+	modal run -m src.fused_mm_sampling.modal_lib.modal_nsys_test
+	mkdir -p benchmarking/modal-results
+	modal volume get fused-mm-sample nsys-test benchmarking/modal-results
+
+N_RUNS_BENCHMARK := 5
+NSYS_VOL_DIR := nsys-profiles/$(GPU)/tp$(N_PROCS)/case-small/bsz$(N_HIDDEN_STATES)$(POSTFIX)
+NSYS_DIR := benchmarking/modal-results/$(NSYS_VOL_DIR)
+modal-nsys-profile:
+	mkdir -p $(NSYS_DIR)
+	GPU=$(GPU) NAME=$(NAME) N_HIDDEN_STATES=$(N_HIDDEN_STATES) CASE=small N_PROCS=$(N_PROCS) \
+	POSTFIX=$(POSTFIX) N_RUNS_BENCHMARK=$(N_RUNS_BENCHMARK) \
+	modal run -m src.fused_mm_sampling.modal_lib.modal_nsys \
+		> $(NSYS_DIR)/$(NAME).txt 2>&1
+	modal volume get --force fused-mm-sample $(NSYS_VOL_DIR) benchmarking/modal-results/nsys-profiles/$(GPU)/tp$(N_PROCS)/case-small
+
+NCU_REP_VOL_DIR := ncu-rep/$(GPU)/tp$(N_PROCS)/case-small/bsz$(N_HIDDEN_STATES)
+NCU_REP_DIR := benchmarking/modal-results/$(NCU_REP_VOL_DIR)
+modal-ncu-profile:
+	mkdir -p $(NCU_REP_DIR)
+	GPU=$(GPU) NAME=$(NAME) N_HIDDEN_STATES=$(N_HIDDEN_STATES) CASE=small N_PROCS=$(N_PROCS) NCU_MODE=profile \
+	modal run -m src.fused_mm_sampling.modal_lib.modal_ncu \
+		> $(NCU_REP_DIR)/$(NAME).txt 2>&1
+	modal volume get fused-mm-sample $(NCU_REP_VOL_DIR)/$(NAME).ncu-rep $(NCU_REP_DIR)/
+
+NCU_TXT_DIR := benchmarking/modal-results/ncu-txt/$(GPU)/tp$(N_PROCS)/case-small/bsz$(N_HIDDEN_STATES)
+modal-ncu-export:
+	mkdir -p $(NCU_TXT_DIR)
+	GPU=$(GPU) NAME=$(NAME) N_HIDDEN_STATES=$(N_HIDDEN_STATES) CASE=small N_PROCS=$(N_PROCS) NCU_MODE=export \
+	modal run -m src.fused_mm_sampling.modal_lib.modal_ncu \
+		> $(NCU_TXT_DIR)/$(NAME).txt 2>&1
 
 modal-create-results-triton-bench:
 	mkdir -p $(RESULTS_DIR)
