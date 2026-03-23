@@ -3,7 +3,15 @@ import subprocess
 
 import modal
 
-from .utils import ModalEnvConfig, add_library_code, make_app, make_image, make_volumes, set_volume_caches, volume_path
+from .utils import (
+    ModalEnvConfig,
+    add_library_code,
+    make_app,
+    make_image,
+    make_volumes,
+    set_volume_caches,
+    volume_path,
+)
 
 
 class Config(ModalEnvConfig):
@@ -19,8 +27,13 @@ nsys_image = add_library_code(make_image()).apt_install("cuda-nsight-systems-13-
 
 @app.function(gpu=cfg.gpu_spec, image=nsys_image, volumes=make_volumes(), timeout=cfg.timeout)
 def nsys_profile(
-    name: str, n_hidden_states: str, case: str, n_procs: int, gpu_name: str,
-    postfix: str, n_runs_benchmark: str,
+    name: str,
+    n_hidden_states: str,
+    case: str,
+    n_procs: int,
+    gpu_name: str,
+    postfix: str,
+    n_runs_benchmark: str,
 ):
     set_volume_caches()
     report_dir = f"{volume_path}/nsys-profiles/{gpu_name}/tp{n_procs}/case-{case}/bsz{n_hidden_states}{postfix}"
@@ -28,17 +41,25 @@ def nsys_profile(
     report_path = f"{report_dir}/{name}"
 
     cmd = [
-        "nsys", "profile",
-        "-o", report_path,
+        "nsys",
+        "profile",
+        "-o",
+        report_path,
         "--force-overwrite=true",
         "--capture-range=cudaProfilerApi",
         "--cuda-memory-usage=true",
-        "--env-var", "FMMS_CUDA_PROFILER=1",
-        "python", "/opt/fmms/speed_test.py",
-        "--name", name,
-        "--n_hidden_states", n_hidden_states,
-        "--n_runs_warmup", "3",
-        "--n_runs_benchmark", n_runs_benchmark,
+        "--env-var",
+        "FMMS_CUDA_PROFILER=1",
+        "python",
+        "/opt/fmms/speed_test.py",
+        "--name",
+        name,
+        "--n_hidden_states",
+        n_hidden_states,
+        "--n_runs_warmup",
+        "3",
+        "--n_runs_benchmark",
+        n_runs_benchmark,
         "--bench_fn=own",
         f"--case={case}",
         f"--n_procs={n_procs}",

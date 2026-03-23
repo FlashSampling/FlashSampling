@@ -3,7 +3,15 @@ import subprocess
 
 import modal
 
-from .utils import ModalEnvConfig, add_library_code, make_app, make_image, make_volumes, set_volume_caches, volume_path
+from .utils import (
+    ModalEnvConfig,
+    add_library_code,
+    make_app,
+    make_image,
+    make_volumes,
+    set_volume_caches,
+    volume_path,
+)
 
 
 class Config(ModalEnvConfig):
@@ -25,8 +33,10 @@ def ncu_run(name: str, n_hidden_states: str, case: str, n_procs: int, mode: str,
     set_volume_caches()
     cmd = [
         "ncu",
-        "--set", "full",
-        "--target-processes", "all",
+        "--set",
+        "full",
+        "--target-processes",
+        "all",
     ]
     if n_procs > 1:
         # Symmetric memory breaks kernel replay (can't save/restore memory).
@@ -34,8 +44,10 @@ def ncu_run(name: str, n_hidden_states: str, case: str, n_procs: int, mode: str,
         # filter by kernel name instead of NVTX (NVTX ranges aren't stable
         # across application re-runs due to autotuning).
         cmd += [
-            "--replay-mode", "application",
-            "-k", "fused_mm_sample_triton_kernel",
+            "--replay-mode",
+            "application",
+            "-k",
+            "fused_mm_sample_triton_kernel",
         ]
     else:
         cmd += ["--nvtx", "--nvtx-include", "kernel/"]
@@ -44,15 +56,22 @@ def ncu_run(name: str, n_hidden_states: str, case: str, n_procs: int, mode: str,
         out_path = f"{ncu_dir}/{name}"
         os.makedirs(ncu_dir, exist_ok=True)
         cmd += [
-            "--source-folders", "/opt/fmms/src/fused_mm_sampling",
-            "--import-source", "yes",
-            "-fo", out_path,
+            "--source-folders",
+            "/opt/fmms/src/fused_mm_sampling",
+            "--import-source",
+            "yes",
+            "-fo",
+            out_path,
         ]
     cmd += [
-        "python", "/opt/fmms/speed_test.py",
-        "--name", name,
-        "--n_hidden_states", n_hidden_states,
-        "--n_runs_benchmark", "1",
+        "python",
+        "/opt/fmms/speed_test.py",
+        "--name",
+        name,
+        "--n_hidden_states",
+        n_hidden_states,
+        "--n_runs_benchmark",
+        "1",
         "--bench_fn=own",
         f"--case={case}",
         f"--n_procs={n_procs}",

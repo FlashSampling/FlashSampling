@@ -98,8 +98,10 @@ def parse_sweep_log(path: Path) -> list[BenchRun]:
 def summarize(runs: list[BenchRun]) -> pd.DataFrame:
     rows = []
     for run in runs:
-        s = pd.DataFrame(run.stats) if run.stats else pd.DataFrame(
-            {"running": [], "waiting": [], "kv_cache_pct": []}
+        s = (
+            pd.DataFrame(run.stats)
+            if run.stats
+            else pd.DataFrame({"running": [], "waiting": [], "kv_cache_pct": []})
         )
         rows.append(
             {
