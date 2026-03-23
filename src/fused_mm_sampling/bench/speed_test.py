@@ -310,6 +310,7 @@ def _print_and_dump_own_results(df: pd.DataFrame, args: Args) -> None:
 
     total_runtimes = df.groupby(["name", "total[s]"], as_index=False).size()
     print(total_runtimes.sort_values("total[s]").round(2).to_markdown())
+    print()
 
     time_distribution = df.groupby("name")["time[ms]"].describe().sort_values("50%")
     print(time_distribution.round(2).to_markdown())
