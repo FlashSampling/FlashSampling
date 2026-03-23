@@ -56,9 +56,14 @@ def make_volumes():
 
 
 def set_volume_caches():
-    """Point XDG_CACHE_HOME to the Modal volume so caches (Triton, flashinfer,
-    torch.compile, etc.) persist across runs."""
+    """Point cache env vars to the Modal volume so caches persist across runs.
+
+    XDG_CACHE_HOME: used by flashinfer, torch.compile, etc.
+    TRITON_CACHE_DIR: used by Triton for compiled kernels and autotune results.
+    Triton ignores XDG_CACHE_HOME and reads TRITON_CACHE_DIR (or TRITON_HOME) instead.
+    """
     os.environ["XDG_CACHE_HOME"] = f"{volume_path}/cache"
+    os.environ["TRITON_CACHE_DIR"] = f"{volume_path}/cache/triton"
 
 
 def add_library_code(image: modal.Image) -> modal.Image:
