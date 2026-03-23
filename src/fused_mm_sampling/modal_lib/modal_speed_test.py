@@ -26,6 +26,7 @@ def main():
         n_hidden_states=cfg.n_hidden_states,
         n_procs=cfg.n_procs,
         name=cfg.name,
+        bench_fn=cfg.bench_fn,
         tgt_dir=Path(volume_path) / "speed-test",
     )
     speed_test.remote(args=args)

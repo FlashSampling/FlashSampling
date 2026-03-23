@@ -19,6 +19,7 @@ class ModalEnvConfig(BaseSettings):
     name: str | None = None
     n_hidden_states: int = 1
     case: str = "small"
+    bench_fn: str = "fi-cupti"
 
     timeout: int = 20 * 60
 
