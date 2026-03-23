@@ -33,6 +33,9 @@ modal-speed-test:
 
 modal-triton-benchmark: modal-create-results-triton-bench modal-get-results-triton-bench modal-plot-triton-bench
 
+modal-ncu-test:
+	modal run -m src.fused_mm_sampling.modal_lib.modal_ncu_test
+
 modal-create-results-triton-bench:
 	mkdir -p $(RESULTS_DIR)
 	GPU=$(GPU) TGT_DIR="/vol-fused-mm-sample/$(BENCH_DIR)" \
