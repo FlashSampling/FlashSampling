@@ -1,15 +1,12 @@
-import os
-
 from ..testing import run_greedy_tp2, run_sampling_distribution_tp2
 from ..tp_info import run_maybe_distributed
-from .utils import make_app, make_image, make_volumes, set_volume_caches
+from .utils import ModalEnvConfig, make_app, make_image, make_volumes, set_volume_caches
 
+cfg = ModalEnvConfig(n_procs=2)
 app = make_app()
 
-gpu = os.getenv("GPU", "b200")
 
-
-@app.function(gpu=f"{gpu}:2", image=make_image(), volumes=make_volumes(), timeout=10 * 60)
+@app.function(gpu=cfg.gpu_spec, image=make_image(), volumes=make_volumes(), timeout=cfg.timeout)
 def modal_pytest_distributed():
     set_volume_caches()
     print("=== test_sampling_distribution_tp2 ===")

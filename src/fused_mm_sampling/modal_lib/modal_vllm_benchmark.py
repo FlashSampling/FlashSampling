@@ -8,7 +8,7 @@ from pathlib import Path
 
 import modal
 
-from .utils import make_app, make_volumes, set_volume_caches, volume_path
+from .utils import ModalEnvConfig, make_app, make_volumes, set_volume_caches, volume_path
 
 _repo_root = Path(__file__).resolve().parents[3]
 _bench_params_dir = _repo_root / "benchmarking" / "vllm"
@@ -77,16 +77,19 @@ class Args:
     bench_params_json: str = ""  # JSON string with bench params (read from file locally)
 
 
+class Config(ModalEnvConfig):
+    model: str = "openai/gpt-oss-120b"
+    sweep: str = "quick"
+    tgt_dir: str = "/vol-fused-mm-sample/vllm-bench"
+    variants: str = ""
+
+
+cfg = Config()
 app = make_app()
-gpu = os.getenv("GPU", "b200")
-model = os.getenv("MODEL", "openai/gpt-oss-120b")
-sweep = os.getenv("SWEEP", "quick")
-tgt_dir = os.getenv("TGT_DIR", "/vol-fused-mm-sample/vllm-bench")
-variants = os.getenv("VARIANTS", "")
 
 
 @app.function(
-    gpu=gpu,
+    gpu=cfg.gpu_spec,
     image=make_vllm_image(),
     volumes=make_volumes(),
     secrets=[modal.Secret.from_dict({"HF_TOKEN": os.environ["HF_TOKEN"]})],
@@ -157,13 +160,13 @@ def function(args: Args):
 
 @app.local_entrypoint()
 def main():
-    params_file = "quick-bench-params.json" if sweep == "quick" else "bench-params.json"
+    params_file = "quick-bench-params.json" if cfg.sweep == "quick" else "bench-params.json"
     bench_params_json = (_bench_params_dir / params_file).read_text()
     args = Args(
-        model=model,
-        sweep=sweep,
-        tgt_dir=tgt_dir,
-        variants=variants,
+        model=cfg.model,
+        sweep=cfg.sweep,
+        tgt_dir=cfg.tgt_dir,
+        variants=cfg.variants,
         bench_params_json=bench_params_json,
     )
     function.remote(args=args)

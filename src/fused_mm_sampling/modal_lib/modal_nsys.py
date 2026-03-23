@@ -3,24 +3,21 @@ import subprocess
 
 import modal
 
-from .utils import add_library_code, make_app, make_image, make_volumes, set_volume_caches, volume_path
+from .utils import ModalEnvConfig, add_library_code, make_app, make_image, make_volumes, set_volume_caches, volume_path
 
+
+class Config(ModalEnvConfig):
+    postfix: str = ""
+    n_runs_benchmark: int = 5
+
+
+cfg = Config()
 app = make_app()
-
-gpu = os.getenv("GPU", "B200")
-name = os.getenv("NAME", "fused-triton")
-n_hidden_states = os.getenv("N_HIDDEN_STATES", "1")
-case = os.getenv("CASE", "small")
-n_procs = int(os.getenv("N_PROCS", "1"))
-postfix = os.getenv("POSTFIX", "")
-n_runs_benchmark = os.getenv("N_RUNS_BENCHMARK", "5")
-
-gpu_spec = f"{gpu}:{n_procs}" if n_procs > 1 else gpu
 
 nsys_image = add_library_code(make_image()).apt_install("cuda-nsight-systems-13-0")
 
 
-@app.function(gpu=gpu_spec, image=nsys_image, volumes=make_volumes(), timeout=15 * 60)
+@app.function(gpu=cfg.gpu_spec, image=nsys_image, volumes=make_volumes(), timeout=cfg.timeout)
 def nsys_profile(
     name: str, n_hidden_states: str, case: str, n_procs: int, gpu_name: str,
     postfix: str, n_runs_benchmark: str,
@@ -66,11 +63,11 @@ def nsys_profile(
 @app.local_entrypoint()
 def main():
     nsys_profile.remote(
-        name=name,
-        n_hidden_states=n_hidden_states,
-        case=case,
-        n_procs=n_procs,
-        gpu_name=gpu,
-        postfix=postfix,
-        n_runs_benchmark=n_runs_benchmark,
+        name=cfg.name,
+        n_hidden_states=str(cfg.n_hidden_states),
+        case=cfg.case,
+        n_procs=cfg.n_procs,
+        gpu_name=cfg.gpu,
+        postfix=cfg.postfix,
+        n_runs_benchmark=str(cfg.n_runs_benchmark),
     )

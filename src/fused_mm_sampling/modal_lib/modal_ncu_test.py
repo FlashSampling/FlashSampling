@@ -5,7 +5,7 @@ from .utils import make_app, make_image
 app = make_app()
 
 
-@app.function(gpu="B200", image=make_image(), timeout=5 * 60)
+@app.function(gpu="B200", image=make_image())
 def ncu_test():
     script = """
 import torch

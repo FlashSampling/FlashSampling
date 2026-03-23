@@ -2,8 +2,29 @@ import os
 from pathlib import Path
 
 import modal
+from pydantic_settings import BaseSettings
 
 _repo_root = Path(__file__).resolve().parents[3]
+
+
+class ModalEnvConfig(BaseSettings):
+    """Common env-var config shared by Modal benchmark scripts.
+
+    Fields are read from same-named env vars (case-insensitive).
+    Subclass to add script-specific fields or override defaults.
+    """
+
+    gpu: str = "b200"
+    n_procs: int = 1
+    name: str | None = None
+    n_hidden_states: int = 1
+    case: str = "small"
+
+    timeout: int = 20 * 60
+
+    @property
+    def gpu_spec(self) -> str:
+        return f"{self.gpu}:{self.n_procs}" if self.n_procs > 1 else self.gpu
 
 
 def make_app():
