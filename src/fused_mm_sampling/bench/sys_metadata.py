@@ -6,6 +6,7 @@ def gather_system_metadata() -> dict:
     return {
         "gpu_name": get_gpu_name(),
         "device_count": torch.cuda.device_count(),
+        "gpu_topology": _gpu_topology(),
         "python.version": _python_version(),
         "torch.version": torch.__version__,
         "triton.version": triton.__version__,
@@ -35,3 +36,14 @@ def _system_cuda_version() -> str | None:
     except FileNotFoundError:
         pass
     return None
+
+
+def _gpu_topology() -> str | None:
+    import subprocess
+
+    if torch.cuda.device_count() < 2:
+        return None
+    try:
+        return subprocess.check_output(["nvidia-smi", "topo", "-m"], text=True).strip()
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        return "error"
