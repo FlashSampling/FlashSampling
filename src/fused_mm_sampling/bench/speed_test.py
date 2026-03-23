@@ -46,7 +46,12 @@ class Args(BaseSettings):
                 "Distributed benchmarking is not supported with --bench_fn=nvbench. "
                 "nvbench controls iteration counts internally, which causes collective op "
                 "deadlocks when ranks run different numbers of iterations. "
-                "Use --bench_fn=own or --bench_fn=fi-cupti instead."
+                "Use --bench_fn=own instead."
+            )
+        if self.n_procs > 1 and self.bench_fn == "fi-cupti":
+            raise ValueError(
+                "Distributed benchmarking is not supported with --bench_fn=fi-cupti. "
+                "fi-cupti hangs with multiple processes. Use --bench_fn=own instead."
             )
         return self
 
@@ -304,10 +309,10 @@ def _print_and_dump_own_results(df: pd.DataFrame, args: Args) -> None:
     print(f"{args.n_samples=}")
 
     total_runtimes = df.groupby(["name", "total[s]"], as_index=False).size()
-    print(total_runtimes.sort_values("total[s]").round(2))
+    print(total_runtimes.sort_values("total[s]").round(2).to_markdown())
 
     time_distribution = df.groupby("name")["time[ms]"].describe().sort_values("50%")
-    print(time_distribution.round(2))
+    print(time_distribution.round(2).to_markdown())
 
     if args.tgt_dir is not None:
         args.tgt_dir.mkdir(parents=True, exist_ok=True)

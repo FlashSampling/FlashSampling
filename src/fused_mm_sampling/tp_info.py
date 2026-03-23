@@ -36,6 +36,8 @@ def run_maybe_distributed(fn: Callable, n_procs: int, *args) -> None:
     if n_procs > 1:
         import torch.multiprocessing as mp
 
+        print(f"Running {fn.__name__} with {n_procs} processes")
+
         mp.spawn(
             _distributed_worker,
             args=(n_procs, _find_free_port(), fn, args),
@@ -43,6 +45,7 @@ def run_maybe_distributed(fn: Callable, n_procs: int, *args) -> None:
             join=True,
         )
     else:
+        print(f"Running {fn.__name__} single-process")
         fn(*args)
 
 

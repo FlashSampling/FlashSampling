@@ -29,8 +29,9 @@ BENCH_DIR := triton-bench-$(GPU)$(POSTFIX)/tp$(N_PROCS)
 RESULTS_DIR := benchmarking/modal-results/$(BENCH_DIR)
 PLOT_EXTRA_FLAGS := $(if $(SKIP_EAGER),--skip_multinomial_eager=1,)
 
+BENCH_FN := fi-cupti
 modal-speed-test:
-	GPU=$(GPU) N_PROCS=$(N_PROCS) NAME=$(NAME) N_HIDDEN_STATES=$(N_HIDDEN_STATES) \
+	GPU=$(GPU) N_PROCS=$(N_PROCS) NAME=$(NAME) N_HIDDEN_STATES=$(N_HIDDEN_STATES) BENCH_FN=$(BENCH_FN) \
 		modal run -m src.fused_mm_sampling.modal_lib.modal_speed_test
 
 modal-triton-benchmark: modal-create-results-triton-bench modal-get-results-triton-bench modal-plot-triton-bench
