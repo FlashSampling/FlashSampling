@@ -1,6 +1,9 @@
 import os
+from pathlib import Path
 
 import modal
+
+_repo_root = Path(__file__).resolve().parents[3]
 
 
 def make_app():
@@ -34,3 +37,27 @@ def set_volume_caches():
     """Point XDG_CACHE_HOME to the Modal volume so caches (Triton, flashinfer,
     torch.compile, etc.) persist across runs."""
     os.environ["XDG_CACHE_HOME"] = f"{volume_path}/cache"
+
+
+def add_library_code(image: modal.Image) -> modal.Image:
+    """Add the fused_mm_sampling source and benchmarking scripts to the image,
+    then pip-install the package so subprocess-based tools (e.g. ncu) can import it."""
+    return (
+        image.add_local_dir(
+            str(_repo_root / "src"),
+            remote_path="/opt/fmms/src",
+            copy=True,
+            ignore=["__pycache__", "*.pyc"],
+        )
+        .add_local_file(
+            str(_repo_root / "pyproject.toml"),
+            remote_path="/opt/fmms/pyproject.toml",
+            copy=True,
+        )
+        .add_local_file(
+            str(_repo_root / "benchmarking" / "speed_test.py"),
+            remote_path="/opt/fmms/speed_test.py",
+            copy=True,
+        )
+        .run_commands("cd /opt/fmms && pip install --break-system-packages -e .")
+    )

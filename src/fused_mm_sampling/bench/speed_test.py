@@ -1,3 +1,4 @@
+import os
 import timeit
 from dataclasses import dataclass
 from pathlib import Path
@@ -154,6 +155,9 @@ def benchmark(case: Case) -> pd.DataFrame:
             fn()
 
     case.tp.rank0_print("Timing...")
+    profiling = os.environ.get("FMMS_CUDA_PROFILER", "0") == "1"
+    if profiling:
+        torch.cuda.cudart().cudaProfilerStart()
     for _, start_event, end_event in zip(range(case.n_runs_benchmark), start_events, end_events):
         clear_l2_cache(cache)
         with torch.cuda.nvtx.range("kernel"):
@@ -161,6 +165,8 @@ def benchmark(case: Case) -> pd.DataFrame:
             timeit.timeit(fn, number=1)
             end_event.record()
     di.synchronize()
+    if profiling:
+        torch.cuda.cudart().cudaProfilerStop()
 
     times_ms = [s.elapsed_time(e) for s, e in zip(start_events, end_events)]
 
