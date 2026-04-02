@@ -331,15 +331,6 @@ def _local_reduce(
     return samples.T.contiguous(), max_values.T.contiguous()  # [H, num_samples]
 
 
-@torch.compile(fullgraph=True)
-def _stack_and_select_winner(all_max_values, all_samples) -> torch.Tensor:  # [H, num_samples]
-    stacked_values = torch.stack(all_max_values)  # [world_size, H, num_samples]
-    stacked_samples = torch.stack(all_samples)  # [world_size, H, num_samples]
-    winner_rank = stacked_values.argmax(dim=0)  # [H, num_samples]
-    samples = stacked_samples.gather(0, winner_rank.unsqueeze(0)).squeeze(0)
-    return samples  # [H, num_samples]
-
-
 def clip(low, high, x):
     return min(max(x, low), high)
 
