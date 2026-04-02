@@ -1,4 +1,7 @@
+import os
 import socket
+import subprocess
+import warnings
 from dataclasses import dataclass
 from typing import Callable
 
@@ -53,6 +56,13 @@ def _distributed_worker(rank: int, world_size: int, port: int, fn: Callable, arg
     import torch
     import torch.distributed as dist
 
+    if rank == 0:
+        _print_gpu_topology()
+    print(
+        f"Rank {rank}: available CPUs (before NUMA bind): {sorted(os.sched_getaffinity(0))}",
+        flush=True,
+    )
+    _numa_bind(rank)
     torch.cuda.set_device(rank % torch.cuda.device_count())
     backend = "nccl" if torch.cuda.device_count() >= world_size else "gloo"
     if rank == 0:
@@ -68,6 +78,32 @@ def _distributed_worker(rank: int, world_size: int, port: int, fn: Callable, arg
         fn(*args)
     finally:
         dist.destroy_process_group()
+
+
+def _print_gpu_topology() -> None:
+    try:
+        topo = subprocess.check_output(["nvidia-smi", "topo", "-m"], text=True).strip()
+        print(f"GPU topology:\n{topo}")
+    except (FileNotFoundError, subprocess.CalledProcessError) as e:
+        warnings.warn(f"Failed to get GPU topology: {e}", stacklevel=2)
+
+
+def _numa_bind(rank: int) -> None:
+    """Pin this process to the CPU cores on the same NUMA node as the GPU."""
+    try:
+        from torch.numa.binding import (
+            AffinityMode,
+            NumaOptions,
+            _apply_numa_binding_to_current_thread,
+        )
+
+        _apply_numa_binding_to_current_thread(
+            gpu_index=rank,
+            numa_options=NumaOptions(affinity_mode=AffinityMode.NODE),
+        )
+        print(f"Rank {rank}: NUMA-bound to CPUs {sorted(os.sched_getaffinity(0))}", flush=True)
+    except Exception as e:
+        warnings.warn(f"Rank {rank}: NUMA binding failed: {e}", stacklevel=2)
 
 
 def _find_free_port() -> int:

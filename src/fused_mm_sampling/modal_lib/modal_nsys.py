@@ -69,7 +69,7 @@ def nsys_profile(
     print("=== stdout ===")
     print(result.stdout)
     print("=== stderr ===")
-    print(result.stderr[-5000:] if len(result.stderr) > 5000 else result.stderr)
+    print(result.stderr)
     print(f"=== returncode: {result.returncode} ===")
 
     report_file = f"{report_path}.nsys-rep"

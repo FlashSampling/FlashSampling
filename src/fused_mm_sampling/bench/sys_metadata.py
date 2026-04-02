@@ -6,7 +6,7 @@ def gather_system_metadata() -> dict:
     return {
         "gpu_name": get_gpu_name(),
         "device_count": torch.cuda.device_count(),
-        "gpu_topology": _gpu_topology(),
+        "gpu_topology": gpu_topology(),
         "python.version": _python_version(),
         "torch.version": torch.__version__,
         "triton.version": triton.__version__,
@@ -38,7 +38,7 @@ def _system_cuda_version() -> str | None:
     return None
 
 
-def _gpu_topology() -> str | None:
+def gpu_topology() -> str | None:
     import subprocess
 
     if torch.cuda.device_count() < 2:
