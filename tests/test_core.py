@@ -120,6 +120,10 @@ def test_sampling_distribution(provider, vocab_size, n_hidden_states):
     not os.environ.get("FMMS_TEST_DISTRIBUTED"),
     reason="Set FMMS_TEST_DISTRIBUTED=1 to run",
 )
+@pytest.mark.skipif(
+    torch.cuda.device_count() < 2,
+    reason="Requires >= 2 GPUs (symmetric memory needs NVLink)",
+)
 def test_sampling_distribution_tp2() -> None:
     run_maybe_distributed(run_sampling_distribution_tp2, n_procs=2)
 
@@ -127,6 +131,10 @@ def test_sampling_distribution_tp2() -> None:
 @pytest.mark.skipif(
     not os.environ.get("FMMS_TEST_DISTRIBUTED"),
     reason="Set FMMS_TEST_DISTRIBUTED=1 to run",
+)
+@pytest.mark.skipif(
+    torch.cuda.device_count() < 2,
+    reason="Requires >= 2 GPUs (symmetric memory needs NVLink)",
 )
 def test_greedy_tp2() -> None:
     run_maybe_distributed(run_greedy_tp2, n_procs=2)
