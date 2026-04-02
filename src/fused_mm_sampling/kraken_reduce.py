@@ -69,18 +69,18 @@ def kraken_post_kernel_reduce(
     memory, this function:
     1. Barriers to ensure all ranks' kernel writes are visible.
     2. Reads each rank's per-tile outputs from symmetric memory.
-    3. Runs _local_reduce per rank (reduce across V-tiles, adjust to global indices).
-    4. Picks the global winner via _stack_and_select_winner.
+    3. Concatenates all ranks' tiles (adjusting indices to global vocab space).
+    4. Runs a single _local_reduce to pick the global winner.
     """
-    from .core import _local_reduce, _stack_and_select_winner
+    from .core import _local_reduce
 
     symm_mem_hdl.barrier()
 
     world_size = symm_mem_hdl.world_size
     full_shape = (num_samples, max_grid_size_v, H)
 
-    all_max_values = []
-    all_samples = []
+    all_maxs = []
+    all_maxs_idx = []
     for r in range(world_size):
         maxs_r = symm_mem_hdl.get_buffer(r, full_shape, torch.bfloat16, storage_offset=0)
         maxs_idx_r = symm_mem_hdl.get_buffer(
@@ -90,15 +90,10 @@ def kraken_post_kernel_reduce(
             storage_offset=storage_offset_maxs_idx,
         )
         # Slice to actual grid size (max_grid_size_v may be larger)
-        maxs_r = maxs_r[:, :grid_size_v, :]
-        maxs_idx_r = maxs_idx_r[:, :grid_size_v, :]
-        vocab_start_index = r * vocab_size_per_rank
-        samples_r, max_values_r = _local_reduce(maxs_r, maxs_idx_r, vocab_start_index)
-        all_max_values.append(max_values_r)
-        all_samples.append(samples_r)
+        all_maxs.append(maxs_r[:, :grid_size_v, :])
+        all_maxs_idx.append(maxs_idx_r[:, :grid_size_v, :] + r * vocab_size_per_rank)
 
-    return _stack_and_select_winner(all_max_values, all_samples)
-
-
-def _ceildiv(a: int, b: int) -> int:
-    return (a + b - 1) // b
+    maxs = torch.cat(all_maxs, dim=1)
+    maxs_idx = torch.cat(all_maxs_idx, dim=1)
+    samples, _ = _local_reduce(maxs, maxs_idx, vocab_start_index=0)
+    return samples
