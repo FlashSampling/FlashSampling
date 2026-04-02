@@ -68,23 +68,36 @@ def set_volume_caches():
 
 def add_library_code(image: modal.Image) -> modal.Image:
     """Add the fused_mm_sampling source and benchmarking scripts to the image,
-    then pip-install the package so subprocess-based tools (e.g. ncu) can import it."""
+    then pip-install the package so subprocess-based tools (e.g. ncu) can import it.
+
+    Layer order matters for caching: pyproject.toml (rarely changes) and dep
+    install go first so that source-only changes don't re-run pip.
+    """
     return (
-        image.add_local_dir(
+        image
+        # 1. Install deps (cached as long as pyproject.toml is unchanged).
+        .add_local_file(
+            str(_repo_root / "pyproject.toml"),
+            remote_path="/opt/fmms/pyproject.toml",
+            copy=True,
+        )
+        .run_commands(
+            "mkdir -p /opt/fmms/src/fused_mm_sampling"
+            " && touch /opt/fmms/src/fused_mm_sampling/__init__.py"
+            " && cd /opt/fmms && pip install --break-system-packages -e ."
+        )
+        # 2. Copy source files (changes frequently, but deps layer is cached).
+        #    The editable install points to /opt/fmms/src, so the real files
+        #    are picked up at runtime.
+        .add_local_dir(
             str(_repo_root / "src"),
             remote_path="/opt/fmms/src",
             copy=True,
             ignore=["__pycache__", "*.pyc"],
         )
         .add_local_file(
-            str(_repo_root / "pyproject.toml"),
-            remote_path="/opt/fmms/pyproject.toml",
-            copy=True,
-        )
-        .add_local_file(
             str(_repo_root / "benchmarking" / "speed_test.py"),
             remote_path="/opt/fmms/speed_test.py",
             copy=True,
         )
-        .run_commands("cd /opt/fmms && pip install --break-system-packages -e .")
     )
