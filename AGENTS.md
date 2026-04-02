@@ -3,13 +3,12 @@
 - the speed test runner is in `benchmarking/speed_test.py`, and the triton benchmark runner is in `benchmarking/triton_benchmark.py`. There are useful commands to run benchs in `./benchmarking/Makefile`.
 - equivalent commands for modal can be found in `./Makefile`.
 - to plot all plots use `make plot-all`.
-- to test the distributed code works use `make pytest-distributed`.
+- to test the distributed code works use `make modal-pytest-distributed` (requires >= 2 GPUs with NVLink for symmetric memory). `make pytest-distributed` also works but auto-skips on single-GPU machines.
 - when benchmarking many combinations, don't run the bench in parallel, since they will contend for the same resources. Instead launch them sequentially. On modal, you can launch benchmarks in parallel, since each job should get its own resources. When launching many parallel Modal benchmarks with an empty Triton autotune cache, consider running a single warmup job first to populate the cache on the volume. Otherwise every parallel job will autotune independently, wasting GPU time and risking inconsistent config selection.
 - available CLIs: hugging face, brev, github
 - The blog post is in `~/code/tomasruizt.github.io/tomas-blog/posts/07_fused-mm-sample/index.qmd`.
 - The paper is in `~/code/papers/flashsampling-paper/`.
 - The FMMS Triton kernel is in `src/fused_mm_sampling/core.py`.
-- Despite locally having only single GPU, the distributed code can be unit tested because it uses the `gloo` backend.
 - Generally speaking, do imports at the top of the file, not inside functions.
 - Do no speculate blindly about why code is slow. Causal statements need to be backed by empirical evidence. Choose appropriate language to hedge, e.g. "Possibly", "Potentially", and point out what data would let us clear the uncertainty and make confident claims.
 
