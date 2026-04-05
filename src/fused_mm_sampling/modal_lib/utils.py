@@ -100,4 +100,9 @@ def add_library_code(image: modal.Image) -> modal.Image:
             remote_path="/opt/fmms/speed_test.py",
             copy=True,
         )
+        .add_local_file(
+            str(_repo_root / "benchmarking" / "nsys_wrapper.py"),
+            remote_path="/opt/fmms/nsys_wrapper.py",
+            copy=True,
+        )
     )
