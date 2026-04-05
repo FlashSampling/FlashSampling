@@ -1,7 +1,7 @@
 import timeit
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Literal
 
 import cuda.bench as nvbench
 import pandas as pd
@@ -136,7 +136,7 @@ def clear_l2_cache(cache):
         triton.runtime.driver.active.clear_cache(cache)
 
 
-def _prepare_case(case: Case) -> tuple[Callable, triton.runtime.driver.Cache]:
+def _prepare_case(case: Case):
     """Set up sampler, fn, and L2 cache for a benchmark case."""
     case.tp.rank0_print("=" * 80)
     case.tp.rank0_print(f"Benchmarking {case.name}...")

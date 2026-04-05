@@ -53,7 +53,7 @@ def nsys_profile(
         "--bench_fn=own",
         f"--case={case}",
         f"--n_procs={n_procs}",
-        "--nsys_profile",
+        "--nsys_profile=true",
     ]
 
     if n_procs > 1:
