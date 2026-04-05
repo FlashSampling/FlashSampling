@@ -168,10 +168,16 @@ Requires: NVLink-connected GPUs, PyTorch >= 2.6, CUDA >= 12.4. See `findings/tp2
 ## Distributed process launching (torchrun vs mp.spawn)
 
 `run_maybe_distributed()` in `src/fused_mm_sampling/tp_info.py` supports two backends:
-- **torchrun** (preferred for profiling): Detected automatically via `RANK`/`WORLD_SIZE` env vars. Uses `init_method="env://"`. NUMA binding is handled by torchrun's `--numa-binding=node` flag. No parent process overhead.
+- **torchrun** (preferred for profiling): Detected automatically via `RANK`/`WORLD_SIZE` env vars. Uses `init_method="env://"`. No parent process overhead.
 - **mp.spawn** (fallback): Used when torchrun env vars are absent. Manual NUMA binding, `tcp://` init method, parent process polls child sentinels.
 
 `modal-nsys-profile` uses torchrun for TP>1 runs, with per-rank nsys instances via `benchmarking/nsys_wrapper.py`. Each rank gets its own `.nsys-rep` file. This is necessary because nsys cannot capture both devices when wrapping torchrun from outside (the `--capture-range=cudaProfilerApi` only captures the first child process's CUDA context). The dispatch asymmetry persists with torchrun (see `findings/tp2-dispatch-asymmetry.md`), confirming it is not an mp.spawn artifact. Other distributed callers (triton benchmark, pytest) still use mp.spawn.
+
+**Speed test modes**: `speed_test.py` has two separate code paths controlled by `--nsys_profile=true`:
+- `benchmark()`: timing with CUDA events, no profiler API. Used for speed measurements.
+- `nsys_profile()`: `cudaProfilerStart/Stop`, `dist.barrier()` for rank sync, NVTX ranges. Used for nsys capture. No timing events.
+
+The `--nsys_profile` flag is a pydantic-settings `bool` field. On the CLI, pass `--nsys_profile=true` (not just `--nsys_profile`, which fails with "expected one argument").
 
 ## vLLM integration
 

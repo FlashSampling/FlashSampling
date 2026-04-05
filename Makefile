@@ -44,13 +44,12 @@ modal-nsys-test:
 	mkdir -p benchmarking/modal-results
 	modal volume get fused-mm-sample nsys-test benchmarking/modal-results
 
-N_RUNS_BENCHMARK := 5
 NSYS_VOL_DIR := nsys-profiles/$(GPU)/tp$(N_PROCS)/case-small/bsz$(N_HIDDEN_STATES)$(POSTFIX)
 NSYS_DIR := benchmarking/modal-results/$(NSYS_VOL_DIR)
 modal-nsys-profile:
 	mkdir -p $(NSYS_DIR)
 	GPU=$(GPU) NAME=$(NAME) N_HIDDEN_STATES=$(N_HIDDEN_STATES) CASE=small N_PROCS=$(N_PROCS) \
-	POSTFIX=$(POSTFIX) N_RUNS_BENCHMARK=$(N_RUNS_BENCHMARK) \
+	POSTFIX=$(POSTFIX) N_RUNS_BENCHMARK=10 \
 	modal run -m src.fused_mm_sampling.modal_lib.modal_nsys \
 		> $(NSYS_DIR)/$(NAME).txt 2>&1
 	modal volume get --force fused-mm-sample $(NSYS_VOL_DIR) benchmarking/modal-results/nsys-profiles/$(GPU)/tp$(N_PROCS)/case-small
