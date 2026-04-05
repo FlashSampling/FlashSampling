@@ -1,12 +1,12 @@
-import os
 import timeit
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Literal
 
 import cuda.bench as nvbench
 import pandas as pd
 import torch
+import torch.distributed as dist
 import triton
 from pydantic import model_validator
 from pydantic_settings import BaseSettings
@@ -35,6 +35,7 @@ class Args(BaseSettings):
     tgt_dir: Path | None = None
     case: str = "small"
     bench_fn: Literal["own", "nvbench", "fi-cupti"] = "fi-cupti"
+    nsys_profile: bool = False
     top_k: int | None = None
     top_p: float | None = None
     n_procs: int = 1
@@ -135,8 +136,8 @@ def clear_l2_cache(cache):
         triton.runtime.driver.active.clear_cache(cache)
 
 
-def benchmark(case: Case) -> pd.DataFrame:
-    """Inspired by triton.testing.do_bench"""
+def _prepare_case(case: Case) -> tuple[Callable, triton.runtime.driver.Cache]:
+    """Set up sampler, fn, and L2 cache for a benchmark case."""
     case.tp.rank0_print("=" * 80)
     case.tp.rank0_print(f"Benchmarking {case.name}...")
     kwargs = case.make_fn_kwargs()
@@ -146,35 +147,43 @@ def benchmark(case: Case) -> pd.DataFrame:
     def fn():
         return sampler.sample(**kwargs)
 
-    di = triton.runtime.driver.active.get_device_interface()
-
     cache = triton.runtime.driver.active.get_empty_cache_for_benchmark()
+    return fn, cache
 
-    start_events = [di.Event(enable_timing=True) for _ in range(case.n_runs_benchmark)]
-    end_events = [di.Event(enable_timing=True) for _ in range(case.n_runs_benchmark)]
 
+def _warmup(case: Case, fn, cache):
     if case.n_runs_warmup > 0:
         case.tp.rank0_print("Warming up...")
         for _ in range(case.n_runs_warmup):
             clear_l2_cache(cache)
             fn()
 
+
+def benchmark(case: Case) -> pd.DataFrame:
+    """Time kernel execution using CUDA events."""
+    fn, cache = _prepare_case(case)
+    _warmup(case, fn, cache)
+
+    di = triton.runtime.driver.active.get_device_interface()
+    start_events = [di.Event(enable_timing=True) for _ in range(case.n_runs_benchmark)]
+    end_events = [di.Event(enable_timing=True) for _ in range(case.n_runs_benchmark)]
+
     case.tp.rank0_print("Timing...")
-    profiling = os.environ.get("FMMS_CUDA_PROFILER", "0") == "1"
-    if profiling:
-        torch.cuda.cudart().cudaProfilerStart()
+    if case.tp.size > 1:
+        dist.barrier()
+
     for _, start_event, end_event in zip(range(case.n_runs_benchmark), start_events, end_events):
         clear_l2_cache(cache)
-        with torch.cuda.nvtx.range("kernel"):
-            start_event.record()
-            timeit.timeit(fn, number=1)
-            end_event.record()
-    di.synchronize()
-    if profiling:
-        torch.cuda.cudart().cudaProfilerStop()
+        start_event.record()
+        timeit.timeit(fn, number=1)
+        end_event.record()
+
+    if case.tp.size > 1:
+        dist.barrier()
+    else:
+        di.synchronize()
 
     times_ms = [s.elapsed_time(e) for s, e in zip(start_events, end_events)]
-
     results = {
         "name": case.name,
         "total[s]": sum(times_ms) / 1_000,
@@ -182,8 +191,26 @@ def benchmark(case: Case) -> pd.DataFrame:
         "time[ms]": times_ms,
         "time[µs]": [t * 1_000 for t in times_ms],
     }
-    df = pd.DataFrame(results)
-    return df
+    return pd.DataFrame(results)
+
+
+def nsys_profile(case: Case) -> None:
+    """Run under nsys: warmup, sync ranks, then profile timed iterations."""
+    di = triton.runtime.driver.active.get_device_interface()
+    fn, cache = _prepare_case(case)
+    _warmup(case, fn, cache)
+
+    torch.cuda.cudart().cudaProfilerStart()
+    if case.tp.size > 1:
+        dist.barrier()
+    for _ in range(case.n_runs_benchmark):
+        clear_l2_cache(cache)
+        with torch.cuda.nvtx.range("kernel"):
+            fn()
+    di.synchronize()
+    if case.tp.size > 1:
+        dist.barrier()
+    torch.cuda.cudart().cudaProfilerStop()
 
 
 def benchmark_all(cases: list[Case]) -> pd.DataFrame:
@@ -300,9 +327,13 @@ def _print_and_dump_cupti_results(rows: list[dict], args: Args) -> None:
 def run_own_benchmark(args: Args) -> None:
     tp = args.make_tp()
     cases: list[Case] = args.all_cases()
-    df = benchmark_all(cases)
-    if tp.is_rank0():
-        _print_and_dump_own_results(df, args)
+    if args.nsys_profile:
+        for case in cases:
+            nsys_profile(case)
+    else:
+        df = benchmark_all(cases)
+        if tp.is_rank0():
+            _print_and_dump_own_results(df, args)
 
 
 def _print_and_dump_own_results(df: pd.DataFrame, args: Args) -> None:

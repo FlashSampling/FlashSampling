@@ -9,11 +9,13 @@ visible, then each rank reads all ranks' per-tile outputs and reduces locally.
 Requires: NVLink-connected GPUs, PyTorch >= 2.6, CUDA >= 12.4.
 """
 
+import nvtx
 import torch
 import torch.distributed as dist
 import torch.distributed._symmetric_memory as symm_mem
 
 
+@nvtx.annotate()
 def allocate_symm_mem_outputs(
     num_samples: int,
     max_grid_size_v: int,
