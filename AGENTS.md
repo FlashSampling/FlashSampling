@@ -93,7 +93,7 @@ The `findings/` directory contains detailed write-ups of bugs, workarounds, and 
 - `register-spilling-bsz256.md` — At H=256 the kernel spills 118 MB due to three [128, 64] f32 tensors being live simultaneously (persistent loop iter_arg + scaled logits + Gumbel noise). Fix: raise `maxnreg` from 128 to 255 (1.74x speedup on RTX 3090). Fusing noise into the matmul accumulator eliminates spilling but breaks D-loop software pipelining (30% regression). Datacenter GPUs keep `maxnreg=128` because warp specialization adds warps that exceed the register file at 255.
 - `proton-scopes-persistent-kernel.md` — DSL-level Proton scopes don't work inside persistent kernels (by design). Solution: TTGIR-level injection via `insert_proton_records.py`. Six scopes (kernel, setup, mask, tile-mgmt, sample, store); matmul derived by subtraction. Includes buffer overflow constraints, warp sampling, HBM vs SMEM comparison, and per-bsz results showing sampling grows from 1% (bsz=1) to 23% (bsz=256) due to BLOCK_SIZE_H increase and register spilling.
 - `tp2-collective-overhead.md` — FMMS TP2 collective overhead was ~0.12-0.20ms from NCCL latency. Fixed by allocating kernel outputs in symmetric memory (direct NVLink writes, no NCCL). Reduced H=1 latency from 0.304ms to 0.246ms (large) and 0.329ms to 0.254ms (small) on B200 x2.
-- `tp2-dispatch-asymmetry.md` — Device 1 has 50-250us idle gaps between kernel launches that device 0 doesn't have. NUMA is ruled out (same gaps on same-NUMA-node GPUs). Likely caused by mp.spawn process model or OS scheduling. Open investigation.
+- `tp2-dispatch-asymmetry.md` — One rank dispatches kernels 300-700us slower per iteration than the other. Which rank is slow varies by run. Likely caused by OS CPU scheduling noise on shared cloud hardware. NUMA binding reduces but does not eliminate the asymmetry (median 364us unbound vs 277us bound). Affects all providers (fused-triton, naive-compiled, flashinfer). mp.spawn and torchrun both exhibit the asymmetry. CPU sampling not available on Modal (gVisor blocks perf_event_open). `modal-nsys-profile` uses per-rank nsys via `benchmarking/nsys_wrapper.py` to capture both devices.
 
 ## Architecture
 
@@ -164,6 +164,14 @@ Constraints:
 Flow: the kernel output buffers (`maxs`, `maxs_idx`) are allocated in symmetric memory via `get_symm_mem_workspace`, so the kernel's existing TMA stores write directly to NVLink-mapped addresses. After the kernel completes, a host-side barrier ensures all ranks' writes are visible. Each rank then reads all ranks' per-tile outputs from symmetric memory, runs `_local_reduce` per rank, and picks the global winner via `_stack_and_select_winner`.
 
 Requires: NVLink-connected GPUs, PyTorch >= 2.6, CUDA >= 12.4. See `findings/tp2-collective-overhead.md` for motivation and analysis.
+
+## Distributed process launching (torchrun vs mp.spawn)
+
+`run_maybe_distributed()` in `src/fused_mm_sampling/tp_info.py` supports two backends:
+- **torchrun** (preferred for profiling): Detected automatically via `RANK`/`WORLD_SIZE` env vars. Uses `init_method="env://"`. NUMA binding is handled by torchrun's `--numa-binding=node` flag. No parent process overhead.
+- **mp.spawn** (fallback): Used when torchrun env vars are absent. Manual NUMA binding, `tcp://` init method, parent process polls child sentinels.
+
+`modal-nsys-profile` uses torchrun for TP>1 runs, with per-rank nsys instances via `benchmarking/nsys_wrapper.py`. Each rank gets its own `.nsys-rep` file. This is necessary because nsys cannot capture both devices when wrapping torchrun from outside (the `--capture-range=cudaProfilerApi` only captures the first child process's CUDA context). The dispatch asymmetry persists with torchrun (see `findings/tp2-dispatch-asymmetry.md`), confirming it is not an mp.spawn artifact. Other distributed callers (triton benchmark, pytest) still use mp.spawn.
 
 ## vLLM integration
 
