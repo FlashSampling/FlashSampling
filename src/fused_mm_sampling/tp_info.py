@@ -5,6 +5,10 @@ import warnings
 from dataclasses import dataclass
 from typing import Callable
 
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+
 
 @dataclass(frozen=True)
 class TPInfo:
@@ -22,8 +26,6 @@ class TPInfo:
 
     @classmethod
     def from_world(cls) -> "TPInfo":
-        import torch.distributed as dist
-
         return cls(rank=dist.get_rank(), size=dist.get_world_size())
 
 
@@ -35,10 +37,13 @@ def run_maybe_distributed(fn: Callable, n_procs: int, *args) -> None:
 
     fn and args must be picklable (top-level functions, dataclasses, etc.)
     because mp.spawn serializes them across processes. Do not pass lambdas.
-    """
-    if n_procs > 1:
-        import torch.multiprocessing as mp
 
+    If the process was launched by torchrun (RANK env var is set), skips
+    mp.spawn and uses the torchrun-provided environment directly.
+    """
+    if _is_torchrun():
+        _torchrun_worker(fn, args)
+    elif n_procs > 1:
         print(f"Running {fn.__name__} with {n_procs} processes")
 
         mp.spawn(
@@ -52,10 +57,31 @@ def run_maybe_distributed(fn: Callable, n_procs: int, *args) -> None:
         fn(*args)
 
 
-def _distributed_worker(rank: int, world_size: int, port: int, fn: Callable, args: tuple) -> None:
-    import torch
-    import torch.distributed as dist
+def _is_torchrun() -> bool:
+    """Check if the current process was launched by torchrun."""
+    return "RANK" in os.environ and "WORLD_SIZE" in os.environ
 
+
+def _torchrun_worker(fn: Callable, args: tuple) -> None:
+    rank = int(os.environ["RANK"])
+    local_rank = int(os.environ["LOCAL_RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+
+    if rank == 0:
+        _print_gpu_topology()
+    torch.cuda.set_device(local_rank)
+    backend = "nccl" if torch.cuda.device_count() >= world_size else "gloo"
+    if rank == 0:
+        print(f"Using distributed backend: '{backend}' (torchrun)")
+
+    dist.init_process_group(backend=backend, init_method="env://")
+    try:
+        fn(*args)
+    finally:
+        dist.destroy_process_group()
+
+
+def _distributed_worker(rank: int, world_size: int, port: int, fn: Callable, args: tuple) -> None:
     if rank == 0:
         _print_gpu_topology()
     print(
