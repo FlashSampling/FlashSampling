@@ -31,8 +31,9 @@ PLOT_EXTRA_FLAGS := $(if $(SKIP_EAGER),--skip_multinomial_eager=1,)
 
 BENCH_FN := fi-cupti
 modal-speed-test:
+	mkdir -p benchmarking/modal-results/speed-test/$(GPU)/tp$(N_PROCS)
 	GPU=$(GPU) N_PROCS=$(N_PROCS) NAME=$(NAME) N_HIDDEN_STATES=$(N_HIDDEN_STATES) BENCH_FN=$(BENCH_FN) \
-		modal run -m src.fused_mm_sampling.modal_lib.modal_speed_test
+		modal run -m src.fused_mm_sampling.modal_lib.modal_speed_test 2>&1 | tee benchmarking/modal-results/speed-test/$(GPU)/tp$(N_PROCS)/bsz$(N_HIDDEN_STATES).txt
 
 modal-triton-benchmark: modal-create-results-triton-bench modal-get-results-triton-bench modal-plot-triton-bench
 
