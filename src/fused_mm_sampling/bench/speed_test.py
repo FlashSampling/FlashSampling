@@ -49,11 +49,6 @@ class Args(BaseSettings):
                 "deadlocks when ranks run different numbers of iterations. "
                 "Use --bench_fn=own instead."
             )
-        if self.n_procs > 1 and self.bench_fn == "fi-cupti":
-            raise ValueError(
-                "Distributed benchmarking is not supported with --bench_fn=fi-cupti. "
-                "fi-cupti hangs with multiple processes. Use --bench_fn=own instead."
-            )
         return self
 
     def make_tp(self) -> TPInfo:
@@ -163,15 +158,14 @@ def benchmark(case: Case) -> pd.DataFrame:
     """Time kernel execution using CUDA events."""
     fn, cache = _prepare_case(case)
     _warmup(case, fn, cache)
+    if case.tp.size > 1:
+        dist.barrier()
 
     di = triton.runtime.driver.active.get_device_interface()
     start_events = [di.Event(enable_timing=True) for _ in range(case.n_runs_benchmark)]
     end_events = [di.Event(enable_timing=True) for _ in range(case.n_runs_benchmark)]
 
     case.tp.rank0_print("Timing...")
-    if case.tp.size > 1:
-        dist.barrier()
-
     for _, start_event, end_event in zip(range(case.n_runs_benchmark), start_events, end_events):
         clear_l2_cache(cache)
         start_event.record()
@@ -199,6 +193,8 @@ def nsys_profile(case: Case) -> None:
     di = triton.runtime.driver.active.get_device_interface()
     fn, cache = _prepare_case(case)
     _warmup(case, fn, cache)
+    if case.tp.size > 1:  # warmup barrier
+        dist.barrier()
 
     torch.cuda.cudart().cudaProfilerStart()
     if case.tp.size > 1:
