@@ -65,16 +65,15 @@ def _is_torchrun() -> bool:
 def _torchrun_worker(fn: Callable, args: tuple) -> None:
     rank = int(os.environ["RANK"])
     local_rank = int(os.environ["LOCAL_RANK"])
-    world_size = int(os.environ["WORLD_SIZE"])
 
     if rank == 0:
         _print_gpu_topology()
     torch.cuda.set_device(local_rank)
-    backend = "nccl" if torch.cuda.device_count() >= world_size else "gloo"
+    backend = "nccl"
     if rank == 0:
         print(f"Using distributed backend: '{backend}' (torchrun)")
 
-    dist.init_process_group(backend=backend, init_method="env://")
+    dist.init_process_group(backend=backend, init_method="env://", device_id=local_rank)
     try:
         fn(*args)
     finally:
@@ -89,7 +88,8 @@ def _distributed_worker(rank: int, world_size: int, port: int, fn: Callable, arg
         flush=True,
     )
     _numa_bind(rank)
-    torch.cuda.set_device(rank % torch.cuda.device_count())
+    device_id = rank % torch.cuda.device_count()
+    torch.cuda.set_device(device_id)
     backend = "nccl" if torch.cuda.device_count() >= world_size else "gloo"
     if rank == 0:
         print(f"Using distributed backend: '{backend}'")
@@ -99,6 +99,7 @@ def _distributed_worker(rank: int, world_size: int, port: int, fn: Callable, arg
         init_method=f"tcp://localhost:{port}",
         rank=rank,
         world_size=world_size,
+        device_id=device_id,
     )
     try:
         fn(*args)
