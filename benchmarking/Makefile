@@ -21,6 +21,7 @@ NCU_RESULTS_DIR=profiles/ncu/tp$(N_PROCS)
 NCU_TXT_DIR=profiles/ncu-txt/tp$(N_PROCS)
 CASE=small
 N_PROCS=1
+BENCH_FN=fi-cupti
 PROTON_RESULTS_DIR=profiles/proton
 
 speed-test-topp-topk:
@@ -166,12 +167,12 @@ plot-bsz-sweep-runtime:
 
 sweep-bsz-all: sweep-bsz-ncu sweep-bsz-proton plot-bsz-sweep-runtime
 
-TRITON_BENCH_DIR=profiles/triton-bench/tp$(N_PROCS)
+TRITON_BENCH_DIR=profiles/triton-bench/$(BENCH_FN)/tp$(N_PROCS)
 
 triton-benchmark:
 	@if [ -d $(TRITON_BENCH_DIR) ]; then rm -rf $(TRITON_BENCH_DIR); fi
 	mkdir -p $(TRITON_BENCH_DIR)
-	PYTHONUNBUFFERED=1 $(PYTHON) triton_benchmark.py --tgt_dir $(TRITON_BENCH_DIR) --case $(CASE) --n_procs $(N_PROCS) $(if $(NAME),--name $(NAME)) 2>&1 | tee $(TRITON_BENCH_DIR)/logs.txt
+	PYTHONUNBUFFERED=1 $(PYTHON) triton_benchmark.py --tgt_dir $(TRITON_BENCH_DIR) --case $(CASE) --n_procs $(N_PROCS) --bench_fn $(BENCH_FN) $(if $(NAME),--name $(NAME)) 2>&1 | tee $(TRITON_BENCH_DIR)/logs.txt
 	$(PYTHON) plot-triton-bench.py --tgt_dir $(TRITON_BENCH_DIR)
 	$(PYTHON) plot-triton-bench.py --tgt_dir $(TRITON_BENCH_DIR) --fmt pdf
 

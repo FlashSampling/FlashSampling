@@ -28,6 +28,7 @@ def main():
         n_procs=cfg.n_procs,
         name=cfg.name,
         bench_fn=cfg.bench_fn,
+        case=cfg.case,
         tgt_dir=Path(volume_path) / "speed-test",
     )
     speed_test.remote(args=args)

@@ -1,13 +1,16 @@
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Callable, Literal
 
 os.environ["TRITON_PRINT_AUTOTUNING"] = "1"
 
 import json
 
+import numpy as np
 import torch
+import torch.distributed as dist
 import triton
+from flashinfer.testing import bench_gpu_time
 from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
@@ -141,13 +144,17 @@ def create_benchmark(args: Args, case: str):
         )
         weights = torch.randn((vocab_size, hidden_size), dtype=torch.bfloat16, device=device)
         weights = shard_weights(weights, tp)
-        return _run_benchmark(hidden_states, weights, provider, tp)
+        return _run_benchmark(hidden_states, weights, provider, tp, bench_fn=args.bench_fn)
 
     return benchmark
 
 
 def _run_benchmark(
-    hidden_states: torch.Tensor, weights: torch.Tensor, provider: str, tp: TPInfo = TP1
+    hidden_states: torch.Tensor,
+    weights: torch.Tensor,
+    provider: str,
+    tp: TPInfo = TP1,
+    bench_fn: Literal["own", "fi-cupti"] = "fi-cupti",
 ) -> float:
     """Common benchmark logic for all modes."""
     tp.rank0_print(f"Running benchmark for provider: {provider}")
@@ -166,51 +173,86 @@ def _run_benchmark(
     def fn():
         return sampler.sample(**kwargs)
 
+    is_distributed = tp.size > 1
+    match bench_fn:
+        case "fi-cupti":
+            times_ms = bench_cupti(fn, is_distributed=is_distributed)
+        case "own":
+            times_ms = bench_cuda_events(fn, is_distributed=is_distributed)
+
     quantiles = [0.5, 0.1, 0.9]  # perf_report unpacks as [center, min, max]
-    if tp.size > 1:
-        return _do_bench_fixed_iters(fn, quantiles=quantiles)
-    return triton.testing.do_bench(fn, quantiles=quantiles)
+    return [np.quantile(times_ms, q) for q in quantiles]
 
 
-def _do_bench_fixed_iters(
-    fn,
+def bench_cupti(
+    fn: Callable,
     warmup_iters: int = 25,
     rep_iters: int = 100,
-    quantiles: list[float] | None = None,
-):
-    """Like triton.testing.do_bench but with fixed iteration counts.
+    is_distributed: bool = False,
+) -> list[float]:
+    """Time a callable using FlashInfer's CUPTI-based bench_gpu_time.
 
-    triton.testing.do_bench calibrates iteration counts by wall-clock time,
-    so different distributed ranks can run different numbers of iterations,
-    causing collective mismatches (https://github.com/triton-lang/triton/issues/9683).
-    This version uses fixed counts instead.
-
-    Follows the same L2 cache flushing strategy as triton.testing.do_bench
-    (https://github.com/triton-lang/triton/blob/dacfe7ad8939/python/triton/testing.py#L152-L182):
-    a 256 MB buffer is zeroed before each timed iteration to evict stale L2
-    cache lines, ensuring consistent cold-cache measurements.
+    Returns per-iteration times in milliseconds.
     """
-    cache = torch.empty(256 * 1024 * 1024 // 4, dtype=torch.int, device="cuda")
+    bench_kwargs: dict = dict(fn=fn, cold_l2_cache=True, enable_cupti=True)
+    if is_distributed:
+        bench_kwargs["dry_run_iters"] = warmup_iters
+        bench_kwargs["repeat_iters"] = rep_iters
+    return bench_gpu_time(**bench_kwargs)
 
+
+def bench_cuda_events(
+    fn: Callable,
+    warmup_iters: int = 25,
+    rep_iters: int = 100,
+    is_distributed: bool = False,
+) -> list[float]:
+    """Time a callable using CUDA events with L2 cache flushing.
+
+    Returns per-iteration times in milliseconds.
+
+    Uses fixed iteration counts (not adaptive wall-clock calibration) to
+    avoid collective mismatches in distributed runs where different ranks
+    would otherwise run different numbers of iterations
+    (https://github.com/triton-lang/triton/issues/9683).
+    """
+    cache = create_l2_cache()
     for _ in range(warmup_iters):
         fn()
-    torch.cuda.synchronize()
+    synchronize(is_distributed)
 
     start_events = [torch.cuda.Event(enable_timing=True) for _ in range(rep_iters)]
     end_events = [torch.cuda.Event(enable_timing=True) for _ in range(rep_iters)]
     for i in range(rep_iters):
-        cache.zero_()
+        clear_l2_cache(cache)
         start_events[i].record()
         fn()
         end_events[i].record()
-    torch.cuda.synchronize()
+    synchronize(is_distributed)
 
-    times = [s.elapsed_time(e) for s, e in zip(start_events, end_events)]
-    if quantiles is not None:
-        import numpy as np
+    return [s.elapsed_time(e) for s, e in zip(start_events, end_events)]
 
-        return [np.quantile(times, q) for q in quantiles]
-    return float(torch.tensor(times).median())
+
+def create_l2_cache() -> torch.Tensor:
+    """Allocate a 256 MB buffer for L2 cache flushing.
+
+    Follows the same strategy as triton.testing.do_bench: the buffer is zeroed
+    before each timed iteration to evict stale L2 cache lines, ensuring
+    consistent cold-cache measurements.
+    """
+    return torch.empty(256 * 1024 * 1024 // 4, dtype=torch.int, device="cuda")
+
+
+@torch.cuda.nvtx.range("clear-l2-cache")
+def clear_l2_cache(cache: torch.Tensor) -> None:
+    cache.zero_()
+
+
+def synchronize(is_distributed: bool) -> None:
+    if is_distributed:
+        dist.barrier()
+    else:
+        torch.cuda.synchronize()
 
 
 def _resolve_cases(case: str) -> list[str]:
