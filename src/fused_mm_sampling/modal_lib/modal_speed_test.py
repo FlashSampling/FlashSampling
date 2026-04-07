@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from ..bench.speed_test import Args, run_speed_test
+from ..bench.speed_test import run_speed_test
+from ..bench.triton_benchmark_lib import Args
 from .utils import (
     ModalEnvConfig,
     make_app,

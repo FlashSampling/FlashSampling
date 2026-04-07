@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+from typing import Literal
 
 os.environ["TRITON_PRINT_AUTOTUNING"] = "1"
 
@@ -7,6 +8,7 @@ import json
 
 import torch
 import triton
+from pydantic import model_validator
 from pydantic_settings import BaseSettings
 
 from ..alg_names import ShortNames as S
@@ -54,12 +56,30 @@ DEFAULT_PROVIDERS = [
 
 
 class Args(BaseSettings):
-    tgt_dir: Path
+    tgt_dir: Path | None = None
     name: str | None = None
     n_hidden_states: int | None = None
     case: str = "all"
     n_procs: int = 1
     disable_compile: bool = False
+    n_runs_warmup: int = 25
+    n_runs_benchmark: int = 100
+    n_samples: int = 1
+    bench_fn: Literal["own", "nvbench", "fi-cupti"] = "fi-cupti"
+    nsys_profile: bool = False
+    top_k: int | None = None
+    top_p: float | None = None
+
+    @model_validator(mode="after")
+    def _validate_distributed_bench_fn(self) -> "Args":
+        if self.n_procs > 1 and self.bench_fn == "nvbench":
+            raise ValueError(
+                "Distributed benchmarking is not supported with --bench_fn=nvbench. "
+                "nvbench controls iteration counts internally, which causes collective op "
+                "deadlocks when ranks run different numbers of iterations. "
+                "Use --bench_fn=own instead."
+            )
+        return self
 
     def make_tp(self) -> TPInfo:
         if self.n_procs > 1:

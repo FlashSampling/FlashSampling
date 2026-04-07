@@ -8,7 +8,8 @@ import pytest
 import torch
 from scipy.stats import chisquare
 
-from fused_mm_sampling.bench.speed_test import Args, run_speed_test
+from fused_mm_sampling.bench.speed_test import run_speed_test
+from fused_mm_sampling.bench.triton_benchmark_lib import Args
 from fused_mm_sampling.core import JLSampler, bsz_h, fused_mm_sample_triton, get_sampler
 from fused_mm_sampling.testing import (
     make_synthetic_inputs,
@@ -279,5 +280,5 @@ def test_greedy_sampling(vocab_size, n_hidden_states):
 
 def test_speed_test_smoke():
     # name=None means all providers are tested
-    args = Args(name=None, n_runs_warmup=1, n_runs_benchmark=1, case="small")
+    args = Args(name=None, n_runs_warmup=1, n_runs_benchmark=1, case="small", n_hidden_states=1)
     run_speed_test(args)
