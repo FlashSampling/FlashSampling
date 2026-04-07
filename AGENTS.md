@@ -192,7 +192,11 @@ Shared timing primitives live in `triton_benchmark_lib.py`:
 - **`bench_cuda_events(fn, ...)`**: CUDA event timing with L2 cache flushing via `create_l2_cache()`/`clear_l2_cache()`. Fixed iteration counts always.
 - **`synchronize(is_distributed)`**: `dist.barrier()` for distributed, `torch.cuda.synchronize()` for TP1.
 
-Both return `list[float]` (per-iteration times in ms). The `bench_fn` parameter (`"fi-cupti"` or `"own"`) selects which one to use. Empirical comparison (b200, h200, h100!, TP1) shows the two methods produce equivalent results (mean diff 1.46%, within noise).
+Both return `list[float]` (per-iteration times in ms). The `bench_fn` parameter (`"fi-cupti"` or `"own"`) selects which one to use. Empirical comparison (b200, h200, h100!, TP1) shows the two methods produce equivalent results (mean diff 1.46%, within noise). At TP2, `own` reports systematically higher latencies than `fi-cupti` (mean +7.3% on h100!), so the methods are not interchangeable for distributed runs.
+
+### fi-cupti + TP2 SIGSEGV (non-deterministic)
+
+`bench_fn=fi-cupti` with TP2 causes non-deterministic SIGSEGV crashes in the NCCL watchdog thread (`cudaSetDevice` inside `c10d::ProcessGroupNCCL::Watchdog`). Observed on b200 and h200, not on h100!. The crash occurs in `triton_benchmark` (which calls `bench_cupti` repeatedly across 9 batch sizes in the `perf_report` loop) but not in `speed_test` (which calls it once per provider). However, it also crashed with a single provider and all batch sizes, and succeeded on retry, so the trigger is non-deterministic. Possibly CUPTI instrumentation corrupts NCCL internal state during repeated init/teardown cycles within one `mp.spawn` process. Workaround: use `bench_fn=own` for TP2 benchmarks.
 
 ## Modal benchmarking
 
@@ -204,4 +208,4 @@ Modal triton-bench results are organized as: `modal-results/triton-bench/{bench_
 
 ### Makefile variable passing
 
-Makefile variables use `:=` assignment, so environment variables do NOT override them. Always pass overrides as make arguments (`make FOO=bar target`), not env vars (`FOO=bar make target`). The `NAME` variable defaults to empty (all providers). It is conditionally passed to Modal via `$(if $(NAME),NAME=$(NAME))` to avoid sending an empty string to pydantic (which would be interpreted as `""` instead of `None`).
+Makefile variables use `:=` assignment, so environment variables do NOT override them. Always pass overrides as make arguments (`make FOO=bar target`), not env vars (`FOO=bar make target`). The `NAME` variable defaults to `default` (all providers). `Args.providers()` treats both `None` and `"default"` as the sentinel for `DEFAULT_PROVIDERS`.
