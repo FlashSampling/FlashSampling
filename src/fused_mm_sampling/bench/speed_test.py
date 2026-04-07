@@ -1,15 +1,12 @@
 import timeit
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Literal
 
 import cuda.bench as nvbench
 import pandas as pd
 import torch
 import torch.distributed as dist
 import triton
-from pydantic import model_validator
-from pydantic_settings import BaseSettings
+from flashinfer.testing import bench_gpu_time
 
 from ..core import (
     get_sampler,
@@ -19,76 +16,45 @@ from ..core import (
 from ..testing import shard_weights
 from ..tp_info import TP1, TPInfo, run_maybe_distributed
 from .sys_metadata import get_gpu_name
-from .triton_benchmark_lib import BENCHMARK_CASES, DEFAULT_PROVIDERS
+from .triton_benchmark_lib import BENCHMARK_CASES, Args
 
 device = torch.device("cuda")
 set_torch_allocator_for_tma_descriptors()
 
 
-class Args(BaseSettings):
-    name: str | None = None
-    n_runs_warmup: int = 25
-    n_runs_benchmark: int = 100
-
-    n_hidden_states: int = 1
-    n_samples: int = 1
-    tgt_dir: Path | None = None
-    case: str = "small"
-    bench_fn: Literal["own", "nvbench", "fi-cupti"] = "fi-cupti"
-    nsys_profile: bool = False
-    top_k: int | None = None
-    top_p: float | None = None
-    n_procs: int = 1
-
-    @model_validator(mode="after")
-    def _validate_distributed_bench_fn(self) -> "Args":
-        if self.n_procs > 1 and self.bench_fn == "nvbench":
-            raise ValueError(
-                "Distributed benchmarking is not supported with --bench_fn=nvbench. "
-                "nvbench controls iteration counts internally, which causes collective op "
-                "deadlocks when ranks run different numbers of iterations. "
-                "Use --bench_fn=own instead."
-            )
-        return self
-
-    def make_tp(self) -> TPInfo:
-        if self.n_procs > 1:
-            return TPInfo.from_world()
-        return TP1
-
-    def as_case(self, name: str) -> "Case":
-        assert self.n_runs_warmup is not None
-        assert self.n_runs_benchmark is not None
-        if self.case not in BENCHMARK_CASES:
-            raise ValueError(
-                f"Unknown case: {self.case!r}. Choose from: {list(BENCHMARK_CASES.keys())}"
-            )
-        case_config = BENCHMARK_CASES[self.case]
-        return Case(
-            name=name,
-            n_runs_benchmark=self.n_runs_benchmark,
-            n_runs_warmup=self.n_runs_warmup,
-            n_hidden_states=self.n_hidden_states,
-            n_samples=self.n_samples,
-            vocab_size=case_config["vocab_size"],
-            hidden_size=case_config["hidden_size"],
-            top_k=self.top_k,
-            top_p=self.top_p,
-            tp=self.make_tp(),
-        )
-
-    def providers(self) -> list[str]:
-        return self.name.split(",") if self.name is not None else DEFAULT_PROVIDERS
-
-    def all_cases(self) -> list["Case"]:
-        return [self.as_case(name=provider) for provider in self.providers()]
-
-
 class CliArgs(Args, cli_parse_args=True):
-    pass
+    case: str = "small"
+    n_hidden_states: int = 1
 
 
 sample_compiled = torch.compile(sample)
+
+
+def as_case(args: Args, name: str) -> "Case":
+    assert args.n_hidden_states is not None
+    assert args.n_runs_warmup is not None
+    assert args.n_runs_benchmark is not None
+    if args.case not in BENCHMARK_CASES:
+        raise ValueError(
+            f"Unknown case: {args.case!r}. Choose from: {list(BENCHMARK_CASES.keys())}"
+        )
+    case_config = BENCHMARK_CASES[args.case]
+    return Case(
+        name=name,
+        n_runs_benchmark=args.n_runs_benchmark,
+        n_runs_warmup=args.n_runs_warmup,
+        n_hidden_states=args.n_hidden_states,
+        n_samples=args.n_samples,
+        vocab_size=case_config["vocab_size"],
+        hidden_size=case_config["hidden_size"],
+        top_k=args.top_k,
+        top_p=args.top_p,
+        tp=args.make_tp(),
+    )
+
+
+def all_cases(args: Args) -> list["Case"]:
+    return [as_case(args, name=provider) for provider in args.providers()]
 
 
 @dataclass
@@ -219,7 +185,7 @@ def run_nvbench(args: Args) -> None:
 
     def nvbench_kernel(state: "nvbench.State"):
         provider = state.get_string("Provider")
-        case = args.as_case(name=provider)
+        case = as_case(args, provider)
         kwargs = case.make_fn_kwargs()
         sampler = get_sampler(provider, weights=kwargs["weights"])
         sampler.prepare()
@@ -265,12 +231,11 @@ def _as_torch_stream(cs: "nvbench.CudaStream") -> torch.cuda.ExternalStream:
 
 def run_cupti(args: Args) -> None:
     """Run benchmarks using FlashInfer's CUPTI-based bench_gpu_time."""
-    from flashinfer.testing import bench_gpu_time
 
     tp = args.make_tp()
     rows = []
     for provider in args.providers():
-        case = args.as_case(name=provider)
+        case = as_case(args, provider)
         kwargs = case.make_fn_kwargs()
         sampler = get_sampler(provider, weights=kwargs["weights"])
         sampler.prepare()
@@ -322,7 +287,7 @@ def _print_and_dump_cupti_results(rows: list[dict], args: Args) -> None:
 
 def run_own_benchmark(args: Args) -> None:
     tp = args.make_tp()
-    cases: list[Case] = args.all_cases()
+    cases: list[Case] = all_cases(args)
     if args.nsys_profile:
         for case in cases:
             nsys_profile(case)
