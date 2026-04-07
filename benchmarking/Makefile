@@ -84,7 +84,7 @@ nsight-profile-naive-pt:
 		--force-overwrite true \
 		-o $(NSIGHT_RESULTS_DIR)/naive-pt $(PYTHON) ./speed_test.py --name naive-pt --n_hidden_states $(N_HIDDEN_STATES) --n_runs_benchmark $(N_RUNS_BENCHMARK)
 
-NAME :=
+NAME := default
 NCU_METRICS=--set full
 NCU_OUTPUT_FLAGS=
 ncu-export:

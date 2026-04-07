@@ -2,6 +2,7 @@
 
 - the speed test runner is in `benchmarking/speed_test.py`, and the triton benchmark runner is in `benchmarking/triton_benchmark.py`. There are useful commands to run benchs in `./benchmarking/Makefile`.
 - equivalent commands for modal can be found in `./Makefile`.
+- The shared `Args` class for both speed_test and triton_benchmark lives in `triton_benchmark_lib.py`. speed_test's `CliArgs` overrides defaults (`case="small"`, `n_hidden_states=1`).
 - to plot all plots use `make plot-all`.
 - to test the distributed code works use `make modal-pytest-distributed` (requires >= 2 GPUs with NVLink for symmetric memory). `make pytest-distributed` also works but auto-skips on single-GPU machines.
 - when benchmarking many combinations, don't run the bench in parallel, since they will contend for the same resources. Instead launch them sequentially. On modal, you can launch benchmarks in parallel, since each job should get its own resources. When launching many parallel Modal benchmarks with an empty Triton autotune cache, consider running a single warmup job first to populate the cache on the volume. Otherwise every parallel job will autotune independently, wasting GPU time and risking inconsistent config selection.
@@ -183,6 +184,24 @@ The `--nsys_profile` flag is a pydantic-settings `bool` field. On the CLI, pass 
 
 See [docs/vllm-integration.md](docs/vllm-integration.md). Covers: sampler wrapper, env vars, local benchmarking, `.item()` sync bug, autotuning fix.
 
+## Benchmark timing functions
+
+Shared timing primitives live in `triton_benchmark_lib.py`:
+
+- **`bench_cupti(fn, ...)`**: FlashInfer's CUPTI-based `bench_gpu_time`. Uses hardware counters. Adaptive iteration count for TP1, fixed counts for distributed (to avoid collective mismatches).
+- **`bench_cuda_events(fn, ...)`**: CUDA event timing with L2 cache flushing via `create_l2_cache()`/`clear_l2_cache()`. Fixed iteration counts always.
+- **`synchronize(is_distributed)`**: `dist.barrier()` for distributed, `torch.cuda.synchronize()` for TP1.
+
+Both return `list[float]` (per-iteration times in ms). The `bench_fn` parameter (`"fi-cupti"` or `"own"`) selects which one to use. Empirical comparison (b200, h200, h100!, TP1) shows the two methods produce equivalent results (mean diff 1.46%, within noise).
+
 ## Modal benchmarking
 
 See [docs/modal-benchmarking.md](docs/modal-benchmarking.md). Covers: Modal profiles, volume management, triton-bench pipeline, vllm-bench pipeline, image build, caching.
+
+### Directory structure
+
+Modal triton-bench results are organized as: `modal-results/triton-bench/{bench_fn}/{gpu}/tp{N}/`. Custom plots go into `custom-plots/case-{small,large}/` subdirectories within each tp directory. The `BENCH_FN` make variable (default: `fi-cupti`) controls which timing method and directory to use.
+
+### Makefile variable passing
+
+Makefile variables use `:=` assignment, so environment variables do NOT override them. Always pass overrides as make arguments (`make FOO=bar target`), not env vars (`FOO=bar make target`). The `NAME` variable defaults to empty (all providers). It is conditionally passed to Modal via `$(if $(NAME),NAME=$(NAME))` to avoid sending an empty string to pydantic (which would be interpreted as `""` instead of `None`).

@@ -20,7 +20,7 @@ POSTFIX :=
 N_PROCS := 1
 N_HIDDEN_STATES := 1
 CASE := all
-NAME :=
+NAME := default
 DISABLE_COMPILE := 0
 BENCH_FN := fi-cupti
 # Skip "Multinomial Sampling (Eager)" from plots (it's always slower than Compiled).
@@ -31,7 +31,7 @@ RESULTS_DIR := benchmarking/modal-results/$(BENCH_DIR)
 PLOT_EXTRA_FLAGS := $(if $(SKIP_EAGER),--skip_multinomial_eager=1,)
 modal-speed-test:
 	mkdir -p benchmarking/modal-results/speed-test/$(GPU)/tp$(N_PROCS)
-	GPU=$(GPU) N_PROCS=$(N_PROCS) $(if $(NAME),NAME=$(NAME)) N_HIDDEN_STATES=$(N_HIDDEN_STATES) BENCH_FN=$(BENCH_FN) \
+	GPU=$(GPU) N_PROCS=$(N_PROCS) NAME=$(NAME) N_HIDDEN_STATES=$(N_HIDDEN_STATES) BENCH_FN=$(BENCH_FN) \
 		modal run -m src.fused_mm_sampling.modal_lib.modal_speed_test 2>&1 | tee benchmarking/modal-results/speed-test/$(GPU)/tp$(N_PROCS)/bsz$(N_HIDDEN_STATES).txt
 
 modal-triton-benchmark: modal-create-results-triton-bench modal-get-results-triton-bench modal-plot-triton-bench
@@ -73,7 +73,7 @@ modal-ncu-export:
 modal-create-results-triton-bench:
 	mkdir -p $(RESULTS_DIR)
 	GPU=$(GPU) TGT_DIR="/vol-fused-mm-sample/$(BENCH_DIR)" \
-	N_PROCS=$(N_PROCS) CASE=$(CASE) $(if $(NAME),NAME=$(NAME)) DISABLE_COMPILE=$(DISABLE_COMPILE) BENCH_FN=$(BENCH_FN) \
+	N_PROCS=$(N_PROCS) CASE=$(CASE) NAME=$(NAME) DISABLE_COMPILE=$(DISABLE_COMPILE) BENCH_FN=$(BENCH_FN) \
 	modal run \
 		-m src.fused_mm_sampling.modal_lib.modal_triton_benchmark \
 		> $(RESULTS_DIR)/logs.txt
