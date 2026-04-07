@@ -90,7 +90,9 @@ class Args(BaseSettings):
         return TP1
 
     def providers(self) -> list[str]:
-        return self.name.split(",") if self.name is not None else DEFAULT_PROVIDERS
+        if self.name is None or self.name == "default":
+            return DEFAULT_PROVIDERS
+        return self.name.split(",")
 
 
 class CliArgs(Args, cli_parse_args=True):
