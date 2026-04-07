@@ -1,12 +1,8 @@
-import timeit
 from dataclasses import dataclass
 
 import cuda.bench as nvbench
 import pandas as pd
 import torch
-import torch.distributed as dist
-import triton
-from flashinfer.testing import bench_gpu_time
 
 from ..core import (
     get_sampler,
@@ -16,7 +12,15 @@ from ..core import (
 from ..testing import shard_weights
 from ..tp_info import TP1, TPInfo, run_maybe_distributed
 from .sys_metadata import get_gpu_name
-from .triton_benchmark_lib import BENCHMARK_CASES, Args
+from .triton_benchmark_lib import (
+    BENCHMARK_CASES,
+    Args,
+    bench_cuda_events,
+    bench_cupti,
+    clear_l2_cache,
+    create_l2_cache,
+    synchronize,
+)
 
 device = torch.device("cuda")
 set_torch_allocator_for_tma_descriptors()
@@ -92,13 +96,8 @@ class Case:
         return kwargs
 
 
-def clear_l2_cache(cache):
-    with torch.cuda.nvtx.range("clear-l2-cache"):
-        triton.runtime.driver.active.clear_cache(cache)
-
-
 def _prepare_case(case: Case):
-    """Set up sampler, fn, and L2 cache for a benchmark case."""
+    """Set up sampler and fn for a benchmark case."""
     case.tp.rank0_print("=" * 80)
     case.tp.rank0_print(f"Benchmarking {case.name}...")
     kwargs = case.make_fn_kwargs()
@@ -108,42 +107,19 @@ def _prepare_case(case: Case):
     def fn():
         return sampler.sample(**kwargs)
 
-    cache = triton.runtime.driver.active.get_empty_cache_for_benchmark()
-    return fn, cache
-
-
-def _warmup(case: Case, fn, cache):
-    if case.n_runs_warmup > 0:
-        case.tp.rank0_print("Warming up...")
-        for _ in range(case.n_runs_warmup):
-            clear_l2_cache(cache)
-            fn()
+    return fn
 
 
 def benchmark(case: Case) -> pd.DataFrame:
     """Time kernel execution using CUDA events."""
-    fn, cache = _prepare_case(case)
-    _warmup(case, fn, cache)
-    if case.tp.size > 1:
-        dist.barrier()
-
-    di = triton.runtime.driver.active.get_device_interface()
-    start_events = [di.Event(enable_timing=True) for _ in range(case.n_runs_benchmark)]
-    end_events = [di.Event(enable_timing=True) for _ in range(case.n_runs_benchmark)]
-
-    case.tp.rank0_print("Timing...")
-    for _, start_event, end_event in zip(range(case.n_runs_benchmark), start_events, end_events):
-        clear_l2_cache(cache)
-        start_event.record()
-        timeit.timeit(fn, number=1)
-        end_event.record()
-
-    if case.tp.size > 1:
-        dist.barrier()
-    else:
-        di.synchronize()
-
-    times_ms = [s.elapsed_time(e) for s, e in zip(start_events, end_events)]
+    fn = _prepare_case(case)
+    is_distributed = case.tp.size > 1
+    times_ms = bench_cuda_events(
+        fn,
+        warmup_iters=case.n_runs_warmup,
+        rep_iters=case.n_runs_benchmark,
+        is_distributed=is_distributed,
+    )
     results = {
         "name": case.name,
         "total[s]": sum(times_ms) / 1_000,
@@ -156,22 +132,23 @@ def benchmark(case: Case) -> pd.DataFrame:
 
 def nsys_profile(case: Case) -> None:
     """Run under nsys: warmup, sync ranks, then profile timed iterations."""
-    di = triton.runtime.driver.active.get_device_interface()
-    fn, cache = _prepare_case(case)
-    _warmup(case, fn, cache)
-    if case.tp.size > 1:  # warmup barrier
-        dist.barrier()
+    fn = _prepare_case(case)
+    cache = create_l2_cache()
+    is_distributed = case.tp.size > 1
+    for _ in range(case.n_runs_warmup):
+        clear_l2_cache(cache)
+        fn()
+    synchronize(is_distributed)
 
     torch.cuda.cudart().cudaProfilerStart()
-    if case.tp.size > 1:
-        dist.barrier()
+    synchronize(is_distributed)
+
     for _ in range(case.n_runs_benchmark):
         clear_l2_cache(cache)
         with torch.cuda.nvtx.range("kernel"):
             fn()
-    di.synchronize()
-    if case.tp.size > 1:
-        dist.barrier()
+
+    synchronize(is_distributed)
     torch.cuda.cudart().cudaProfilerStop()
 
 
@@ -231,33 +208,20 @@ def _as_torch_stream(cs: "nvbench.CudaStream") -> torch.cuda.ExternalStream:
 
 def run_cupti(args: Args) -> None:
     """Run benchmarks using FlashInfer's CUPTI-based bench_gpu_time."""
-
     tp = args.make_tp()
+    is_distributed = tp.size > 1
     rows = []
     for provider in args.providers():
         case = as_case(args, provider)
-        kwargs = case.make_fn_kwargs()
-        sampler = get_sampler(provider, weights=kwargs["weights"])
-        sampler.prepare()
-
-        # Warmup (compile, autotune, etc.)
-        sampler.sample(**kwargs)
-        torch.cuda.synchronize()
+        fn = _prepare_case(case)
 
         tp.rank0_print(f"Benchmarking {provider}...")
-        bench_kwargs = dict(
-            fn=lambda s=sampler: s.sample(**kwargs),
-            cold_l2_cache=True,
-            enable_cupti=True,
+        times_ms = bench_cupti(
+            fn,
+            warmup_iters=args.n_runs_warmup,
+            rep_iters=args.n_runs_benchmark,
+            is_distributed=is_distributed,
         )
-        if args.n_procs > 1:
-            tp.rank0_print("Reading bench iteration counts from Args")
-            bench_kwargs["dry_run_iters"] = args.n_runs_warmup
-            bench_kwargs["repeat_iters"] = args.n_runs_benchmark
-        else:
-            tp.rank0_print("Using adaptive bench iteration counts")
-
-        times_ms = bench_gpu_time(**bench_kwargs)
         times_md = pd.Series(times_ms)
         rows.append(
             {

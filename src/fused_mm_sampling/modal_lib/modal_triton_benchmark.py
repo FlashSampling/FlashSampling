@@ -25,5 +25,6 @@ def main():
         n_procs=cfg.n_procs,
         name=cfg.name,
         disable_compile=cfg.disable_compile,
+        bench_fn=cfg.bench_fn,
     )
     function.remote(args=args)
