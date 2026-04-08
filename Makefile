@@ -76,7 +76,7 @@ modal-create-results-triton-bench:
 	N_PROCS=$(N_PROCS) CASE=$(CASE) NAME=$(NAME) DISABLE_COMPILE=$(DISABLE_COMPILE) BENCH_FN=$(BENCH_FN) \
 	modal run \
 		-m src.fused_mm_sampling.modal_lib.modal_triton_benchmark \
-		> $(RESULTS_DIR)/logs.txt
+		> $(RESULTS_DIR)/logs.txt 2>&1
 
 modal-plot-triton-bench:
 	python benchmarking/plot-triton-bench.py --tgt_dir $(RESULTS_DIR) $(PLOT_EXTRA_FLAGS)
