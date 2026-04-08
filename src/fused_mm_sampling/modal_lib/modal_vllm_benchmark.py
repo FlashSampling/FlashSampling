@@ -30,22 +30,31 @@ ALL_VARIANTS = {
     "fmms-triton": {"VLLM_USE_FMMS_SAMPLER": "1", "VLLM_FMMS_PROVIDER": "fused-triton"},
 }
 
+VLLM_FORK_BRANCH = "feature/fmms-sampler"
+VLLM_FORK_SHA = "3170fdf3da4e09a76031fa515698c86d1fcbc699"
+
 
 def make_vllm_image() -> modal.Image:
     return (
-        modal.Image.from_registry("pytorch/pytorch:2.10.0-cuda13.0-cudnn9-devel")
+        # Base image must match vLLM's pinned torch version (see requirements/cuda.txt
+        # in the fork: torch==2.11.0). cuda13.0 is the newest CUDA tag pytorch/pytorch
+        # publishes for 2.11.0. Because vLLM pins torch without a local version, uv
+        # treats the base image's torch==2.11.0+cu130 as satisfying the pin and skips
+        # reinstalling, so we keep cu13 throughout and the precompiled .so stays ABI-
+        # compatible.
+        modal.Image.from_registry("pytorch/pytorch:2.11.0-cuda13.0-cudnn9-devel")
         .apt_install("git", "curl")
         .run_commands("pip install --break-system-packages uv")
         .run_commands(
-            "git clone --depth 1 -b feature/fmms-sampler"
-            " https://github.com/tomasruizt/vllm.git /opt/vllm",
-            # Pin torch to match the precompiled .so (built for torch 2.10.0+cu130).
-            # Without the constraint, uv downgrades torch to 2.9.1, causing ABI mismatch.
+            f"git clone --depth 1 -b {VLLM_FORK_BRANCH}"
+            " https://github.com/tomasruizt/vllm.git /opt/vllm"
+            " && cd /opt/vllm"
+            f" && git fetch --depth 1 origin {VLLM_FORK_SHA}"
+            f" && git checkout {VLLM_FORK_SHA}",
+            # Let vLLM's resolver pick the torch version that matches the precompiled .so.
+            # Earlier we pinned torch==2.10.0 to match a 2.10.0+cu130 .so, but the upstream
+            # precompiled wheel is now built against torch 2.11.0, so any pin breaks the ABI.
             "cd /opt/vllm && VLLM_USE_PRECOMPILED=1 uv pip install --system -e '.[bench]'",
-            # The precompiled .so is built for torch 2.10.0+cu130 but vLLM metadata
-            # pins torch==2.9.1, causing an ABI mismatch. Reinstall the base image's
-            # torch after vLLM is installed.
-            "uv pip install --system 'torch==2.10.0' 'torchvision>=0.25' 'torchaudio>=2.10'",
         )
         .add_local_dir(
             str(_repo_root / "src"),
