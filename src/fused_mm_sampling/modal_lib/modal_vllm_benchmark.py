@@ -84,6 +84,7 @@ class Args:
     num_runs: int = 5
     variants: str = ""  # comma-separated, e.g. "baseline,fmms-triton". Empty = all.
     bench_params_json: str = ""  # JSON string with bench params (read from file locally)
+    resume_experiment: str = ""  # if set, --resume into <out_dir>/<this name>
 
 
 class Config(ModalEnvConfig):
@@ -91,6 +92,7 @@ class Config(ModalEnvConfig):
     sweep: str = "quick"
     tgt_dir: str = "/vol-fused-mm-sample/vllm-bench"
     variants: str = ""
+    resume_experiment: str = ""
 
 
 cfg = Config()
@@ -135,6 +137,10 @@ def function(args: Args):
             else:
                 serve_cmd = f"vllm serve {args.model} {SERVE_FLAGS} {enforce_eager}"
 
+            resume_flags = ""
+            if args.resume_experiment:
+                resume_flags = f' --resume --experiment-name "{args.resume_experiment}"'
+
             cmd = (
                 f"vllm bench sweep serve"
                 f' --serve-cmd "{serve_cmd}"'
@@ -144,6 +150,7 @@ def function(args: Args):
                 f" --num-runs {num_runs} --show-stdout"
                 f" --server-ready-timeout 1200"
                 f' -o "{out_dir}"'
+                f"{resume_flags}"
             )
 
             print(f"\n{'=' * 60}")
@@ -177,5 +184,6 @@ def main():
         tgt_dir=cfg.tgt_dir,
         variants=cfg.variants,
         bench_params_json=bench_params_json,
+        resume_experiment=cfg.resume_experiment,
     )
     function.remote(args=args)

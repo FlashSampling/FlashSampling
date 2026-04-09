@@ -93,9 +93,27 @@ make modal-collect-results-vllm-bench GPU=b200 VLLM_MODEL=...  # runs collect_re
 - `VLLM_MODEL` — HuggingFace model ID (default: `openai/gpt-oss-120b`)
 - `VLLM_SWEEP` — `quick` (1 concurrency, 1 run, `--enforce-eager`) or `all` (full sweep, 5 runs)
 - `VLLM_VARIANTS` — comma-separated variant filter, e.g. `baseline` or `fmms-triton`. Empty = all variants.
+- `VLLM_RESUME_EXPERIMENT` — if set to a previous experiment dir name (e.g. `20260409_101524`), passes `--resume --experiment-name <name>` to `vllm bench sweep serve` so it picks up where the previous run left off, skipping any `(concurrency, run)` combos that already have a `run=N.json` on the modal volume. See "Resuming a partial sweep" below.
 - `POSTFIX` — suffix for result directory (for A/B comparisons)
 
 **Logs**: Timestamped per-model in `<model_slug>/logs/<YYYYMMDD_HHMMSS>.txt`. Multiple parallel runs won't collide.
+
+### Resuming a partial sweep
+
+`vllm bench sweep serve` writes one `run=N.json` per (concurrency, run) combo and a final `summary.csv` after all combos complete. If the sweep is interrupted (e.g. by a transient HF Hub 5xx error or a kernel crash mid-sweep), the partial state on the modal volume contains the JSONs for the completed combos but no `summary.csv`. Re-running the same `make modal-vllm-benchmark` from scratch would start over with a fresh experiment-name and re-run everything.
+
+To pick up where it left off, pass `VLLM_RESUME_EXPERIMENT=<experiment-name>`:
+
+```bash
+make modal-vllm-benchmark \
+    GPU=b200 VLLM_MODEL=Qwen/Qwen3-1.7B VLLM_SWEEP=all \
+    VLLM_VARIANTS=fmms-triton \
+    VLLM_RESUME_EXPERIMENT=20260409_101524
+```
+
+The sweep tool will print `Found existing results.` for each already-complete combo and only execute the missing ones. After completion, it writes the canonical `summary.csv`. The downloaded local results then look identical to a fresh complete run.
+
+The experiment-name is the timestamp directory under `<model>/<variant>/` on the modal volume (e.g. `vllm-bench-b200/Qwen3-1.7B/fmms-triton/20260409_101524/`). It is **not** the same as the local log file timestamp under `<model_slug>/logs/`, which is set independently when `make` runs.
 
 ### Modal vLLM image build
 
