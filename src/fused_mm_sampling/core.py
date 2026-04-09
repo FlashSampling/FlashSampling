@@ -236,6 +236,12 @@ def fused_mm_sample_triton(
             f"hidden_states second dimension ({D2}) must match weights second dimension ({D})"
         )
 
+    # The kernel uses TMA descriptors which need a runtime allocator. Some
+    # autotuner configs (notably the ones picked on B200/sm_100) request global
+    # scratch from this allocator; without it Triton raises a RuntimeError at
+    # launch. set_allocator is idempotent, so calling it on every launch is fine.
+    set_torch_allocator_for_tma_descriptors()
+
     NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count  # noqa: N806
 
     max_grid_size_v = triton.cdiv(V, MIN_BLOCK_SIZE_V)
@@ -473,7 +479,15 @@ def fused_mm_sample_triton_kernel(
     num_tiles = num_pid_v * num_pid_h
     num_pid_in_group = GROUP_SIZE_V * num_pid_h
 
-    # Create tensor descriptors outside the tile loop (they describe full tensors)
+    # TMA descriptors are used for the matmul LOADS (where the bandwidth wins
+    # really matter) but NOT for the small per-tile output stores. The output
+    # stores were originally TMA descriptors with shape=[num_samples, V_tiles,
+    # H] and block_shape=[1, 1, BLOCK_SIZE_H]. That 3D-with-two-singleton-dims
+    # pattern silently no-ops most stores on Blackwell (sm_100): only 2/1187
+    # V-tile slots get written, leaving the rest uninitialized. The Triton
+    # tutorial 09-persistent-matmul only uses TMA stores in the canonical 2D
+    # form, so we sidestep the issue by switching the output stores to plain
+    # tl.store with computed offsets.
     w_desc = tl.make_tensor_descriptor(
         weights_ptr,
         shape=[vocab_size, hidden_size],
@@ -485,18 +499,6 @@ def fused_mm_sample_triton_kernel(
         shape=[n_hidden_states, hidden_size],
         strides=[hidden_size, 1],
         block_shape=[BLOCK_SIZE_H, BLOCK_SIZE_D],
-    )
-    max_desc = tl.make_tensor_descriptor(
-        max_out_ptr,
-        shape=[num_samples, max_grid_size_v, n_hidden_states],
-        strides=[max_grid_size_v * n_hidden_states, n_hidden_states, 1],
-        block_shape=[1, 1, BLOCK_SIZE_H],
-    )
-    max_idx_desc = tl.make_tensor_descriptor(
-        max_out_idx_ptr,
-        shape=[num_samples, max_grid_size_v, n_hidden_states],
-        strides=[max_grid_size_v * n_hidden_states, n_hidden_states, 1],
-        block_shape=[1, 1, BLOCK_SIZE_H],
     )
     # tile_id_c is used in the epilogue to break the dependency between
     # the prologue and the epilogue (workaround for Blackwell pipelining bug)
@@ -559,14 +561,17 @@ def fused_mm_sample_triton_kernel(
 
             gumbel_max_idx_global = gumbel_max_idx_local + v_start_c
 
-            max_desc.store(
-                [sample_idx, pid_v_c, h_start_c],
-                gumbel_max[None, None, :],
+            # Plain tl.store (no TMA) for the small per-tile outputs. See note
+            # above the descriptor block.
+            offsets_h_out = h_start_c + tl.arange(0, BLOCK_SIZE_H)
+            mask_h_out = offsets_h_out < n_hidden_states
+            base_offset = (
+                sample_idx * max_grid_size_v * n_hidden_states
+                + pid_v_c * n_hidden_states
+                + offsets_h_out
             )
-            max_idx_desc.store(
-                [sample_idx, pid_v_c, h_start_c],
-                gumbel_max_idx_global[None, None, :],
-            )
+            tl.store(max_out_ptr + base_offset, gumbel_max, mask=mask_h_out)
+            tl.store(max_out_idx_ptr + base_offset, gumbel_max_idx_global, mask=mask_h_out)
 
 
 @triton.jit
