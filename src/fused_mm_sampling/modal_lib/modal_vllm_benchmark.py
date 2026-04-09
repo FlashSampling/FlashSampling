@@ -27,7 +27,13 @@ AFTER_BENCH = (
 
 ALL_VARIANTS = {
     "baseline": {},
-    "fmms-triton": {"VLLM_USE_FMMS_SAMPLER": "1", "VLLM_FMMS_PROVIDER": "fused-triton"},
+    "fmms-triton": {
+        "VLLM_USE_FMMS_SAMPLER": "1",
+        "VLLM_FMMS_PROVIDER": "fused-triton",
+        # Log every Triton autotune so we can see how many distinct B values
+        # vLLM hits (it varies per decode step and triggers per-shape autotune).
+        "TRITON_PRINT_AUTOTUNING": "1",
+    },
 }
 
 VLLM_FORK_BRANCH = "feature/fmms-sampler"

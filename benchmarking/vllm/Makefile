@@ -113,7 +113,7 @@ nsys-baseline:
 	$(call run_nsys,env,baseline,$(NSYS_SINGLE_FLAGS))
 
 nsys-fmms-triton:
-	$(call run_nsys,env VLLM_USE_FMMS_SAMPLER=1 VLLM_FMMS_PROVIDER=fused-triton,fmms-triton,$(NSYS_SINGLE_FLAGS))
+	$(call run_nsys,env VLLM_USE_FMMS_SAMPLER=1 VLLM_FMMS_PROVIDER=fused-triton TRITON_PRINT_AUTOTUNING=1,fmms-triton,$(NSYS_SINGLE_FLAGS))
 
 nsys-fmms-flashinfer:
 	$(call run_nsys,env VLLM_USE_FMMS_SAMPLER=1 VLLM_FMMS_PROVIDER=flashinfer:top_k_top_p_sampling_from_logits,fmms-flashinfer,$(NSYS_SINGLE_FLAGS))
@@ -131,7 +131,7 @@ nsys-compare-qwen3-8b-baseline:
 	$(call run_nsys,env,baseline-c$(NSYS_CONCURRENCY),$(NSYS_CONCURRENCY_FLAGS))
 
 nsys-compare-qwen3-8b-fmms-triton:
-	$(call run_nsys,env VLLM_USE_FMMS_SAMPLER=1 VLLM_FMMS_PROVIDER=fused-triton,fmms-triton-c$(NSYS_CONCURRENCY),$(NSYS_CONCURRENCY_FLAGS))
+	$(call run_nsys,env VLLM_USE_FMMS_SAMPLER=1 VLLM_FMMS_PROVIDER=fused-triton TRITON_PRINT_AUTOTUNING=1,fmms-triton-c$(NSYS_CONCURRENCY),$(NSYS_CONCURRENCY_FLAGS))
 
 nsys-compare-qwen3-32b:
 	$(MAKE) NSYS_MODEL=Qwen/Qwen3-32B nsys-compare-qwen3-32b-baseline nsys-compare-qwen3-32b-fmms-triton
@@ -140,7 +140,7 @@ nsys-compare-qwen3-32b-baseline:
 	$(call run_nsys,env,baseline-c$(NSYS_CONCURRENCY),$(NSYS_CONCURRENCY_FLAGS))
 
 nsys-compare-qwen3-32b-fmms-triton:
-	$(call run_nsys,env VLLM_USE_FMMS_SAMPLER=1 VLLM_FMMS_PROVIDER=fused-triton,fmms-triton-c$(NSYS_CONCURRENCY),$(NSYS_CONCURRENCY_FLAGS))
+	$(call run_nsys,env VLLM_USE_FMMS_SAMPLER=1 VLLM_FMMS_PROVIDER=fused-triton TRITON_PRINT_AUTOTUNING=1,fmms-triton-c$(NSYS_CONCURRENCY),$(NSYS_CONCURRENCY_FLAGS))
 
 MODAL_GPU := b200
 MODAL_RESULTS_DIR := $(RESULTS_DIR)/../modal-results/vllm-bench-$(MODAL_GPU)
@@ -173,7 +173,7 @@ baseline:
 
 fmms-triton:
 	$(VLLM) bench sweep serve \
-		--serve-cmd "env VLLM_USE_FMMS_SAMPLER=1 VLLM_FMMS_PROVIDER=fused-triton $(VLLM) serve $(MODEL) $(SERVE_FLAGS)" \
+		--serve-cmd "env VLLM_USE_FMMS_SAMPLER=1 VLLM_FMMS_PROVIDER=fused-triton TRITON_PRINT_AUTOTUNING=1 $(VLLM) serve $(MODEL) $(SERVE_FLAGS)" \
 		--bench-cmd "$(VLLM) bench serve $(BENCH_FLAGS)" \
 		$(SWEEP_FLAGS) \
 		-o "$(MODEL_DIR)/fmms-triton" \
@@ -200,7 +200,7 @@ quick-baseline:
 
 quick-fmms-triton:
 	$(VLLM) bench sweep serve \
-		--serve-cmd "env VLLM_USE_FMMS_SAMPLER=1 VLLM_FMMS_PROVIDER=fused-triton $(VLLM) serve $(MODEL) $(SERVE_FLAGS) --enforce-eager" \
+		--serve-cmd "env VLLM_USE_FMMS_SAMPLER=1 VLLM_FMMS_PROVIDER=fused-triton TRITON_PRINT_AUTOTUNING=1 $(VLLM) serve $(MODEL) $(SERVE_FLAGS) --enforce-eager" \
 		--bench-cmd "$(VLLM) bench serve $(BENCH_FLAGS)" \
 		$(QUICK_SWEEP_FLAGS) \
 		-o "$(MODEL_DIR)/fmms-triton" \
@@ -225,7 +225,7 @@ eval-baseline-fmms-params:
 	$(PYTHON) "$(RESULTS_DIR)/judge_eval.py" "$(EVAL_DIR)/baseline-fmms-params"
 
 eval-fmms-triton:
-	$(call run_eval,env VLLM_USE_FMMS_SAMPLER=1 VLLM_FMMS_PROVIDER=fused-triton,fmms-triton,$(EVAL_GEN_KWARGS_FMMS))
+	$(call run_eval,env VLLM_USE_FMMS_SAMPLER=1 VLLM_FMMS_PROVIDER=fused-triton TRITON_PRINT_AUTOTUNING=1,fmms-triton,$(EVAL_GEN_KWARGS_FMMS))
 	$(PYTHON) "$(RESULTS_DIR)/judge_eval.py" "$(EVAL_DIR)/fmms-triton"
 
 judge:
