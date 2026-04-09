@@ -260,7 +260,13 @@ def fused_mm_sample_triton(
         )
         maxs_idx = torch.empty_like(maxs, dtype=torch.long)
 
-    logits_out = torch.empty((V, H), dtype=torch.float32, device=weights.device)
+    # logits_out is only read when RETURN_LOGITS=True. For the common path
+    # (return_logits=False), allocating a (V, H) fp32 buffer per call is wasted
+    # HBM (155 MB per decode step at Qwen3-1.7B / H=256) for a buffer the
+    # kernel never touches. Pass a 1-element dummy in that case so the kernel
+    # still has a valid pointer to receive.
+    logits_shape = (V, H) if return_logits else (1,)
+    logits_out = torch.empty(logits_shape, dtype=torch.float32, device=weights.device)
 
     grid_size = {"v": None}
 
