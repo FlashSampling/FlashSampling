@@ -12,6 +12,7 @@
 - The FMMS Triton kernel is in `src/fused_mm_sampling/core.py`.
 - Generally speaking, do imports at the top of the file, not inside functions.
 - Do no speculate blindly about why code is slow. Causal statements need to be backed by empirical evidence. Choose appropriate language to hedge, e.g. "Possibly", "Potentially", and point out what data would let us clear the uncertainty and make confident claims.
+- **Don't block the user with long sleeps.** When waiting for a task, never `sleep` for 60s+ in a single foreground call — that freezes the conversation and prevents the user from steering. For tasks that may run >1 min, launch with `run_in_background=true` and wait for the completion notification. For shorter polling, use 5-15s sleeps and check in.
 
 Development notes and lessons learned while building this project.
 

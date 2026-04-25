@@ -101,6 +101,10 @@ DIAGRAM_SRC := imgs/baseline-vs-fmms-diagram.drawio
 DIAGRAM_PNG := imgs/baseline-vs-fmms-diagram.png
 DIAGRAM_FLASHSAMPLING_PDF := imgs/baseline-vs-flashsampling-diagram.pdf
 
+DIAGRAM_V2_SRC := imgs/baseline-vs-fmms-diagram-v2.drawio
+DIAGRAM_V2_PNG := imgs/baseline-vs-fmms-diagram-v2.png
+DIAGRAM_V2_FLASHSAMPLING_PDF := imgs/baseline-vs-flashsampling-diagram-v2.pdf
+
 diagram:
 	xvfb-run drawio --export --format png --scale 2 --border 10 \
 		--output $(DIAGRAM_PNG) $(DIAGRAM_SRC)
@@ -108,6 +112,14 @@ diagram:
 	xvfb-run -a drawio --export --format pdf --border 10 \
 		--output $(DIAGRAM_FLASHSAMPLING_PDF) $(DIAGRAM_SRC).tmp
 	rm $(DIAGRAM_SRC).tmp
+
+diagram-v2:
+	xvfb-run drawio --export --format png --scale 2 --border 10 \
+		--output $(DIAGRAM_V2_PNG) $(DIAGRAM_V2_SRC)
+	sed 's/FMMS/FlashSampling/g' $(DIAGRAM_V2_SRC) > $(DIAGRAM_V2_SRC).tmp
+	xvfb-run -a drawio --export --format pdf --border 10 \
+		--output $(DIAGRAM_V2_FLASHSAMPLING_PDF) $(DIAGRAM_V2_SRC).tmp
+	rm $(DIAGRAM_V2_SRC).tmp
 
 TRITON_BENCH_TPS := 1 2
 

@@ -1,0 +1,158 @@
+<mxfile host="app.diagrams.net">
+  <diagram name="FMMS vs Baseline (horizontal, larger text)" id="d1">
+    <mxGraphModel dx="2400" dy="600" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2720" pageHeight="760" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <!-- Horizontal divider between the two flows -->
+        <mxCell id="divider" value="" style="endArrow=none;dashed=1;strokeColor=#666666;strokeWidth=3;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="20" y="380" as="sourcePoint"/>
+            <mxPoint x="2700" y="380" as="targetPoint"/>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ===== TOP ROW: Multinomial Sampling ===== -->
+
+        <mxCell id="L_title" value="&lt;b&gt;Multinomial&lt;br&gt;Sampling&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=40;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="20" y="170" width="340" height="140" as="geometry"/>
+        </mxCell>
+
+        <!-- Inputs -->
+        <mxCell id="L_W" value="W ∈ [V,d]" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#90CAF9;fontSize=44;" vertex="1" parent="1">
+          <mxGeometry x="380" y="130" width="240" height="95" as="geometry"/>
+        </mxCell>
+        <mxCell id="L_H" value="H ∈ [B,d]" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#90CAF9;fontSize=44;" vertex="1" parent="1">
+          <mxGeometry x="380" y="255" width="240" height="95" as="geometry"/>
+        </mxCell>
+
+        <!-- Ops -->
+        <mxCell id="L_matmul" value="Matmul&lt;br&gt;(cuBLAS)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#999999;fontSize=44;" vertex="1" parent="1">
+          <mxGeometry x="720" y="170" width="240" height="140" as="geometry"/>
+        </mxCell>
+        <mxCell id="L_softmax" value="Softmax" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#999999;fontSize=44;" vertex="1" parent="1">
+          <mxGeometry x="1140" y="170" width="290" height="140" as="geometry"/>
+        </mxCell>
+        <mxCell id="L_multinomial" value="Multinomial" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#999999;fontSize=44;" vertex="1" parent="1">
+          <mxGeometry x="1610" y="170" width="320" height="140" as="geometry"/>
+        </mxCell>
+        <mxCell id="L_samples" value="Samples&lt;br&gt;∈ [B,1]" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#90CAF9;fontSize=44;" vertex="1" parent="1">
+          <mxGeometry x="2450" y="170" width="240" height="140" as="geometry"/>
+        </mxCell>
+
+        <!-- Edges: W,H -> Matmul -->
+        <mxCell id="E_LW" value="" style="endArrow=classic;html=1;strokeColor=#C62828;strokeWidth=5;" edge="1" source="L_W" target="L_matmul" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="E_LH" value="" style="endArrow=classic;html=1;strokeColor=#C62828;strokeWidth=5;" edge="1" source="L_H" target="L_matmul" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Matmul -> Softmax (Logits ∈ [B,V] label ABOVE the arrow, 2-line) -->
+        <mxCell id="E_L_logits" value="Logits&lt;br&gt;∈ [B,V]" style="endArrow=classic;html=1;strokeColor=#C62828;strokeWidth=5;fontSize=42;fontColor=#C62828;verticalAlign=bottom;" edge="1" source="L_matmul" target="L_softmax" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint as="offset" x="0" y="-12"/>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Softmax -> Multinomial (Probs ∈ [B,V] label ABOVE the arrow, 2-line) -->
+        <mxCell id="E_L_probs" value="Probs&lt;br&gt;∈ [B,V]" style="endArrow=classic;html=1;strokeColor=#C62828;strokeWidth=5;fontSize=42;fontColor=#C62828;verticalAlign=bottom;" edge="1" source="L_softmax" target="L_multinomial" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint as="offset" x="0" y="-12"/>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Multinomial -> Samples (long arrow) -->
+        <mxCell id="E_L_out" value="" style="endArrow=classic;html=1;strokeColor=#C62828;strokeWidth=5;" edge="1" source="L_multinomial" target="L_samples" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+
+        <!-- ===== BOTTOM ROW: FlashSampling ===== -->
+
+        <mxCell id="R_title" value="&lt;b&gt;FlashSampling&lt;/b&gt;" style="text;html=1;align=center;verticalAlign=middle;fontSize=40;fontColor=#555555;" vertex="1" parent="1">
+          <mxGeometry x="20" y="490" width="340" height="140" as="geometry"/>
+        </mxCell>
+
+        <!-- Inputs -->
+        <mxCell id="R_W" value="W ∈ [V,d]" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#90CAF9;fontSize=44;" vertex="1" parent="1">
+          <mxGeometry x="380" y="450" width="240" height="95" as="geometry"/>
+        </mxCell>
+        <mxCell id="R_H" value="H ∈ [B,d]" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#90CAF9;fontSize=44;" vertex="1" parent="1">
+          <mxGeometry x="380" y="575" width="240" height="95" as="geometry"/>
+        </mxCell>
+
+        <!-- SRAM region (behind the fused ops: Tile Matmul, +Gumbel, Stage I argmax) -->
+        <mxCell id="R_shmem" value="&lt;b&gt;SRAM&lt;/b&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#4CAF50;strokeWidth=6;dashed=1;dashPattern=8 4;fillOpacity=40;verticalAlign=top;align=left;fontSize=36;fontColor=#2E7D32;spacingTop=8;spacingLeft=14;" vertex="1" parent="1">
+          <mxGeometry x="705" y="430" width="1240" height="240" as="geometry"/>
+        </mxCell>
+
+        <!-- Fused Ops (inside SRAM) -->
+        <mxCell id="R_matmul" value="Tile&lt;br&gt;Matmul" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#4CAF50;fontSize=44;" vertex="1" parent="1">
+          <mxGeometry x="720" y="490" width="240" height="140" as="geometry"/>
+        </mxCell>
+        <mxCell id="R_gumbel" value="Add Gumbel&lt;br&gt;Noise" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#4CAF50;fontSize=44;" vertex="1" parent="1">
+          <mxGeometry x="1140" y="490" width="290" height="140" as="geometry"/>
+        </mxCell>
+        <mxCell id="R_argmax" value="Stage I&lt;br&gt;argmax" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#4CAF50;fontSize=44;" vertex="1" parent="1">
+          <mxGeometry x="1610" y="490" width="320" height="140" as="geometry"/>
+        </mxCell>
+
+        <!-- Outside SRAM -->
+        <mxCell id="R_global" value="Stage II&lt;br&gt;argmax" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F5F5;strokeColor=#999999;fontSize=44;" vertex="1" parent="1">
+          <mxGeometry x="2150" y="490" width="240" height="140" as="geometry"/>
+        </mxCell>
+        <mxCell id="R_samples" value="Samples&lt;br&gt;∈ [B,1]" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#90CAF9;fontSize=44;" vertex="1" parent="1">
+          <mxGeometry x="2450" y="490" width="240" height="140" as="geometry"/>
+        </mxCell>
+
+        <!-- Edges: W,H -> Tile Matmul -->
+        <mxCell id="E_RW" value="" style="endArrow=classic;html=1;strokeColor=#C62828;strokeWidth=5;" edge="1" source="R_W" target="R_matmul" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="E_RH" value="" style="endArrow=classic;html=1;strokeColor=#C62828;strokeWidth=5;" edge="1" source="R_H" target="R_matmul" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Tile Matmul -> +Gumbel (Logits tile, 2-line label ABOVE) -->
+        <mxCell id="E_R_logits" value="Logits&lt;br&gt;tile" style="endArrow=classic;html=1;strokeColor=#4CAF50;strokeWidth=5;fontSize=42;fontColor=#2E7D32;verticalAlign=bottom;labelBackgroundColor=none;" edge="1" source="R_matmul" target="R_gumbel" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint as="offset" x="0" y="-12"/>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- +Gumbel -> Stage I argmax (Noised logits, 2-line label ABOVE) -->
+        <mxCell id="E_R_noised" value="Noised&lt;br&gt;logits" style="endArrow=classic;html=1;strokeColor=#4CAF50;strokeWidth=5;fontSize=42;fontColor=#2E7D32;verticalAlign=bottom;labelBackgroundColor=none;" edge="1" source="R_gumbel" target="R_argmax" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint as="offset" x="0" y="-12"/>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Stage I argmax -> Stage II argmax (Tile-wise argmax, 2-line label ABOVE) -->
+        <mxCell id="E_R_tilemax" value="Tile-wise&lt;br&gt;argmax" style="endArrow=classic;html=1;strokeColor=#C62828;strokeWidth=5;fontSize=42;fontColor=#C62828;verticalAlign=bottom;" edge="1" source="R_argmax" target="R_global" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint as="offset" x="0" y="-12"/>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Stage II argmax -> Samples -->
+        <mxCell id="E_R_out" value="" style="endArrow=classic;html=1;strokeColor=#C62828;strokeWidth=5;" edge="1" source="R_global" target="R_samples" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Loop arrow: Stage I argmax -> Tile Matmul, routed under SRAM -->
+        <mxCell id="E_loop" value="For Each Tile" style="endArrow=classic;html=1;strokeColor=#555555;strokeWidth=4;edgeStyle=orthogonalEdgeStyle;curved=0;fontSize=38;fontColor=#555555;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" edge="1" source="R_argmax" target="R_matmul" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint as="offset" x="0" y="0"/>
+            <Array as="points">
+              <mxPoint x="1770" y="720"/>
+              <mxPoint x="840" y="720"/>
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
