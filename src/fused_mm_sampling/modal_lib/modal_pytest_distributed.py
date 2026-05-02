@@ -9,12 +9,10 @@ app = make_app()
 
 
 @app.function(gpu=cfg.gpu_spec, image=make_image(), volumes=make_volumes(), timeout=cfg.timeout)
-def modal_pytest_distributed(providers_csv: str | None = None):
+def modal_pytest_distributed():
     set_volume_caches()
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
-    if providers_csv is not None:
-        env["FMMS_PROVIDERS_CSV"] = providers_csv
     subprocess.run(
         [
             sys.executable,
@@ -32,4 +30,4 @@ def modal_pytest_distributed(providers_csv: str | None = None):
 
 @app.local_entrypoint()
 def main():
-    modal_pytest_distributed.remote(cfg.name)
+    modal_pytest_distributed.remote()
