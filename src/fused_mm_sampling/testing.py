@@ -157,32 +157,28 @@ def assert_sampling_distribution(
         )
 
 
-def verify_correctness_tp2(providers_csv: str | None = None) -> None:
+def verify_correctness_tp2() -> None:
     tp = TPInfo.from_world()
     tp.rank0_print("=== test_sampling_distribution_tp2 ===")
-    verify_sampling_distribution_tp2(providers_csv)
+    verify_sampling_distribution_tp2()
 
-    if providers_csv in (None, "default"):
-        tp.rank0_print("\n=== test_greedy_tp2 ===")
-        verify_greedy_tp2()
+    tp.rank0_print("\n=== test_greedy_tp2 ===")
+    verify_greedy_tp2()
 
     tp.rank0_print("\nAll distributed tests passed.")
 
 
-def verify_sampling_distribution_tp2(providers_csv: str | None = None) -> None:
+def verify_sampling_distribution_tp2() -> None:
     """Worker function for TP2 sampling distribution tests (passed to run_maybe_distributed)."""
     set_torch_allocator_for_tma_descriptors()
     tp = TPInfo.from_world()
-    default_providers = [
+    providers = [
         "fused-triton",
         "naive-pt",
         "naive-compiled",
         "flashinfer:sampling_from_logits",
         "flashinfer:top_k_top_p_sampling_from_logits",
     ]
-    providers = default_providers
-    if providers_csv not in (None, "default"):
-        providers = providers_csv.split(",")
     for provider, vocab_size, n_hidden_states in product(providers, [100, 200, 256], [1, 2]):
         assert_sampling_distribution(provider, vocab_size, n_hidden_states, tp=tp)
         tp.rank0_print(f"✅ Passed: {provider} V={vocab_size} H={n_hidden_states}")
