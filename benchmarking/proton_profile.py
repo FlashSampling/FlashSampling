@@ -81,6 +81,7 @@ def run_proton_profile(args: Args) -> None:
         hidden_states_ptr=hidden_states,
         max_out_ptr=maxs,
         max_out_idx_ptr=maxs_idx,
+        symm_mem_buffer_ptrs=maxs,
         vocab_size=v,
         hidden_size=d,
         n_hidden_states=h,
@@ -88,11 +89,15 @@ def run_proton_profile(args: Args) -> None:
         temperature_ptr=temperature,
         seed=42,
         max_grid_size_v=max_grid_size_v,
+        storage_offset_maxs_idx=0,
+        tp_rank=0,
+        tp_world_size=1,
         logits_out_ptr=logits_out,
         WARP_SPECIALIZE=supports_warp_specialization(),
         NUM_SMS=num_sms,
         GREEDY_SAMPLING=False,
         RETURN_LOGITS=False,
+        FAN_OUT_TP=False,
     )
 
     # Start Proton before the first kernel call. When using the TTGIR override
