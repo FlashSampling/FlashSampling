@@ -131,7 +131,6 @@ plot-all:
 	$(MAKE) plot-vllm-bench
 
 plot-vllm-bench:
-	python benchmarking/vllm/plot_tpot.py --results-dir $(VLLM_BENCH_DIR)
 	python benchmarking/vllm/plot_tpot.py --results-dir $(VLLM_BENCH_DIR) --fmt pdf --use-name-flashsampling=1
 
 modal-example:
@@ -189,7 +188,7 @@ modal-get-results-vllm-bench:
 	mkdir -p $(VLLM_BENCH_DIR)
 	set -e; tmpdir=$$(mktemp -d); \
 	cd "$$tmpdir"; \
-	modal volume get fused-mm-sample $(VLLM_VOLUME_DIR_NAME); \
+	modal volume get --force fused-mm-sample $(VLLM_VOLUME_DIR_NAME); \
 	cp -a $(VLLM_VOLUME_DIR_NAME)/. "$(CURDIR)/$(VLLM_BENCH_DIR)/"; \
 	rm -rf "$$tmpdir"
 
