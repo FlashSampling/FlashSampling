@@ -65,15 +65,19 @@ def _fast_multinomial(probs: torch.Tensor, num_samples: int) -> torch.Tensor:
     return probs.unsqueeze(0).div(q).argmax(dim=-1).T  # [H, num_samples]
 
 
-@torch.compiler.disable
 def _allgather_logits(
     logits: torch.Tensor,  # [H, V_local]
 ) -> torch.Tensor:
     """All-gather local logits along the vocab dimension to reconstruct [H, V_global]."""
     tp_size = dist.get_world_size()
-    all_logits = [torch.empty_like(logits) for _ in range(tp_size)]
-    dist.all_gather(all_logits, logits)
-    return torch.cat(all_logits, dim=1)  # [H, V_global]
+    H, V_local = logits.shape  # noqa: N806
+    gathered = torch.empty(
+        (tp_size * H, V_local),
+        dtype=logits.dtype,
+        device=logits.device,
+    )
+    dist.all_gather_into_tensor(gathered, logits)
+    return gathered.reshape(tp_size, H, V_local).movedim(0, 1).reshape(H, tp_size * V_local)
 
 
 def apply_top_k_top_p(
@@ -323,7 +327,7 @@ def fused_mm_sample_triton(
 
 @lru_cache
 def supports_warp_specialization():
-    is_cuda = triton.runtime.driver.active.get_current_target().backend == "cuda"
+    is_cuda = torch.cuda.is_available()
     supports_ws = is_cuda and torch.cuda.get_device_capability()[0] >= 9
     print("Supports warp specialization:", supports_ws)
     return supports_ws
