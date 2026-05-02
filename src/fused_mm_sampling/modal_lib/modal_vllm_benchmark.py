@@ -77,6 +77,7 @@ def make_vllm_image() -> modal.Image:
             str(_repo_root / "README.md"), remote_path="/opt/fused-mm-sample/README.md", copy=True
         )
         .run_commands(
+            "uv pip install --system --reinstall numpy",
             "uv pip install --system tabulate /opt/fused-mm-sample",
         )
     )
