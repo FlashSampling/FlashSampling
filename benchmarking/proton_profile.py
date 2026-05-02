@@ -93,7 +93,6 @@ def run_proton_profile(args: Args) -> None:
         NUM_SMS=num_sms,
         GREEDY_SAMPLING=False,
         RETURN_LOGITS=False,
-        USE_PROTON_SCOPES=False,
     )
 
     # Start Proton before the first kernel call. When using the TTGIR override
