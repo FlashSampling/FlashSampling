@@ -157,7 +157,18 @@ def assert_sampling_distribution(
         )
 
 
-def run_sampling_distribution_tp2() -> None:
+def verify_correctness_tp2() -> None:
+    tp = TPInfo.from_world()
+    tp.rank0_print("=== test_sampling_distribution_tp2 ===")
+    verify_sampling_distribution_tp2()
+
+    tp.rank0_print("\n=== test_greedy_tp2 ===")
+    verify_greedy_tp2()
+
+    tp.rank0_print("\nAll distributed tests passed.")
+
+
+def verify_sampling_distribution_tp2() -> None:
     """Worker function for TP2 sampling distribution tests (passed to run_maybe_distributed)."""
     set_torch_allocator_for_tma_descriptors()
     tp = TPInfo.from_world()
@@ -173,7 +184,7 @@ def run_sampling_distribution_tp2() -> None:
         tp.rank0_print(f"✅ Passed: {provider} V={vocab_size} H={n_hidden_states}")
 
 
-def run_greedy_tp2() -> None:
+def verify_greedy_tp2() -> None:
     """Worker function for TP2 greedy tests (passed to run_maybe_distributed)."""
     set_torch_allocator_for_tma_descriptors()
     tp = TPInfo.from_world()
