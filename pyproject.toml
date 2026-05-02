@@ -33,6 +33,7 @@ dev = [
     "jupyter>=1.0.0",
     "ipykernel>=6.0.0",
     "helion>=0.1.0",  # Only for benchmarking
+    "matplotlib",
     "seaborn",
     "pytest",
     "flashinfer-python",
