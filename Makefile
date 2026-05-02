@@ -79,7 +79,6 @@ modal-create-results-triton-bench:
 		> $(RESULTS_DIR)/logs.txt 2>&1
 
 modal-plot-triton-bench:
-	python benchmarking/plot-triton-bench.py --tgt_dir $(RESULTS_DIR) $(PLOT_EXTRA_FLAGS)
 	python benchmarking/plot-triton-bench.py --tgt_dir $(RESULTS_DIR) --fmt pdf --use_name_flashsampling=1 $(PLOT_EXTRA_FLAGS)
 
 TRITON_BENCH_GPUS := b300 b200 h200 h100!
