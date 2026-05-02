@@ -71,13 +71,9 @@ def _allgather_logits(
     """All-gather local logits along the vocab dimension to reconstruct [H, V_global]."""
     tp_size = dist.get_world_size()
     H, V_local = logits.shape  # noqa: N806
-    gathered = torch.empty(
-        (tp_size * H, V_local),
-        dtype=logits.dtype,
-        device=logits.device,
-    )
+    gathered = logits.new_empty(tp_size, H, V_local)
     dist.all_gather_into_tensor(gathered, logits)
-    return gathered.reshape(tp_size, H, V_local).movedim(0, 1).reshape(H, tp_size * V_local)
+    return gathered.transpose(0, 1).reshape(H, tp_size * V_local)
 
 
 def apply_top_k_top_p(
