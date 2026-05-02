@@ -35,6 +35,10 @@ def make_app():
 def make_image():
     img = modal.Image.from_registry("pytorch/pytorch:2.10.0-cuda13.0-cudnn9-devel")
     deps = [
+        "triton==3.5.1",  # match the base pytorch image; prevents uv from
+        # leaving an orphan triton-3.6.0.dist-info that breaks
+        # importlib.metadata.entry_points() discovery and causes
+        # ``RuntimeError: 0 active drivers ([])`` on first kernel launch.
         "flashinfer-python",
         "pandas",
         "pydantic-settings",
