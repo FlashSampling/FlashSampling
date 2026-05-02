@@ -12,7 +12,7 @@ import triton
 import triton.language as tl
 
 from .alg_names import ShortNames as S
-from .kraken_reduce import allocate_symm_mem_outputs, kraken_post_kernel_reduce
+from .kraken_reduce import allocate_symm_mem_outputs, kraken_post_kernel_reduce_fanout
 from .tl_matmul import matmul
 from .tp_info import TP1, TPInfo
 
@@ -229,6 +229,7 @@ def fused_mm_sample_triton(
     tp: "TPInfo" = TP1,
     return_logits: bool = False,
 ):
+    assert torch.cuda.is_available(), "fused_mm_sample_triton requires CUDA"
     V, D = weights.shape  # noqa: N806
     H, D2 = hidden_states.shape  # noqa: N806
     if D2 != D:
@@ -246,12 +247,17 @@ def fused_mm_sample_triton(
 
     max_grid_size_v = triton.cdiv(V, MIN_BLOCK_SIZE_V)
     if tp.size > 1:
-        maxs, maxs_idx, symm_mem_hdl, storage_offset_maxs_idx = allocate_symm_mem_outputs(
-            num_samples=num_samples,
-            max_grid_size_v=max_grid_size_v,
-            H=H,
-            device=weights.device,
+        maxs, maxs_idx, symm_mem_hdl, storage_offset_maxs_idx, fanout_world_size = (
+            allocate_symm_mem_outputs(
+                num_samples=num_samples,
+                max_grid_size_v=max_grid_size_v,
+                H=H,
+                device=weights.device,
+            )
         )
+        kernel_maxs = maxs[tp.rank]
+        kernel_maxs_idx = maxs_idx[tp.rank]
+        symm_mem_buffer_ptrs = symm_mem_hdl.buffer_ptrs_dev
     else:
         maxs = torch.empty(
             (num_samples, max_grid_size_v, H),
@@ -259,6 +265,11 @@ def fused_mm_sample_triton(
             device=weights.device,
         )
         maxs_idx = torch.empty_like(maxs, dtype=torch.long)
+        kernel_maxs = maxs
+        kernel_maxs_idx = maxs_idx
+        storage_offset_maxs_idx = 0
+        fanout_world_size = 1
+        symm_mem_buffer_ptrs = maxs
 
     # logits_out is only read when RETURN_LOGITS=True. For the common path
     # (return_logits=False), allocating a (V, H) fp32 buffer per call is wasted
@@ -281,8 +292,9 @@ def fused_mm_sample_triton(
     fused_mm_sample_triton_kernel[grid](
         weights_ptr=weights,
         hidden_states_ptr=hidden_states,
-        max_out_ptr=maxs,
-        max_out_idx_ptr=maxs_idx,
+        max_out_ptr=kernel_maxs,
+        max_out_idx_ptr=kernel_maxs_idx,
+        symm_mem_buffer_ptrs=symm_mem_buffer_ptrs,
         vocab_size=V,
         hidden_size=D,
         n_hidden_states=H,
@@ -290,24 +302,27 @@ def fused_mm_sample_triton(
         temperature_ptr=temperature,
         seed=seed,
         max_grid_size_v=max_grid_size_v,
+        storage_offset_maxs_idx=storage_offset_maxs_idx,
+        tp_rank=tp.rank,
+        tp_world_size=fanout_world_size,
         logits_out_ptr=logits_out,
         WARP_SPECIALIZE=supports_warp_specialization(),
         NUM_SMS=NUM_SMS,
         GREEDY_SAMPLING=greedy_sampling,
         RETURN_LOGITS=return_logits,
+        FAN_OUT_TP=tp.size > 1,
     )
 
     assert grid_size["v"] is not None
 
     if tp.size > 1:
-        samples = kraken_post_kernel_reduce(
+        samples = kraken_post_kernel_reduce_fanout(
+            local_maxs=maxs,
+            local_maxs_idx=maxs_idx,
             symm_mem_hdl=symm_mem_hdl,
-            storage_offset_maxs_idx=storage_offset_maxs_idx,
             grid_size_v=grid_size["v"],
-            max_grid_size_v=max_grid_size_v,
             H=H,
             num_samples=num_samples,
-            vocab_size_per_rank=V,
         )
     else:
         # Local reduction across V-tiles on this rank.
@@ -413,8 +428,10 @@ def unpack_grid(grid):
 
 
 def get_autotuning_configs() -> list[triton.Config]:
-    cc = torch.cuda.get_device_capability()
-    is_dev_machine: bool = cc == (8, 6)  # RTX 3090 config
+    is_dev_machine: bool = torch.cuda.is_available() and torch.cuda.get_device_capability() == (
+        8,
+        6,
+    )  # RTX 3090 config
     if is_dev_machine:
         return [
             triton.Config(
@@ -455,12 +472,16 @@ def fused_mm_sample_triton_kernel(
     hidden_states_ptr,  # [n_hidden_states, D]
     max_out_ptr,  # [num_samples, max_grid_size_v, n_hidden_states]
     max_out_idx_ptr,  # [num_samples, max_grid_size_v, n_hidden_states]
+    symm_mem_buffer_ptrs,  # [tp_world_size] uint64 base pointers when FAN_OUT_TP=True
     vocab_size,  # V
     hidden_size: tl.constexpr,  # D
     n_hidden_states: int,
     num_samples: tl.constexpr,
     temperature_ptr,  # scalar (0-d tensor)
     seed: int,
+    storage_offset_maxs_idx: tl.constexpr,
+    tp_rank: tl.constexpr,
+    tp_world_size: tl.constexpr,
     BLOCK_SIZE_V: tl.constexpr,  # noqa: N803
     BLOCK_SIZE_D: tl.constexpr,  # noqa: N803
     BLOCK_SIZE_H: tl.constexpr,  # noqa: N803
@@ -471,6 +492,7 @@ def fused_mm_sample_triton_kernel(
     NUM_SMS: tl.constexpr,  # noqa: N803
     GREEDY_SAMPLING: tl.constexpr,  # noqa: N803
     RETURN_LOGITS: tl.constexpr,  # noqa: N803
+    FAN_OUT_TP: tl.constexpr,  # noqa: N803
 ):
     """Persistent kernel for fused matmul + Gumbel-max sampling.
 
@@ -565,7 +587,7 @@ def fused_mm_sample_triton_kernel(
             else:
                 gumbel_max, gumbel_max_idx_local = tl.max(logits_blk, axis=0, return_indices=True)
 
-            gumbel_max_idx_global = gumbel_max_idx_local + v_start_c
+            gumbel_max_idx_global = gumbel_max_idx_local + v_start_c + tp_rank * vocab_size
 
             # Plain tl.store (no TMA) for the small per-tile outputs. See note
             # above the descriptor block.
@@ -576,8 +598,28 @@ def fused_mm_sample_triton_kernel(
                 + pid_v_c * n_hidden_states
                 + offsets_h_out
             )
-            tl.store(max_out_ptr + base_offset, gumbel_max, mask=mask_h_out)
-            tl.store(max_out_idx_ptr + base_offset, gumbel_max_idx_global, mask=mask_h_out)
+            if FAN_OUT_TP:
+                buffer_ptrs = symm_mem_buffer_ptrs.to(tl.pointer_type(tl.uint64))
+                source_rank_base_offset = (
+                    tp_rank * num_samples * max_grid_size_v * n_hidden_states + base_offset
+                )
+                for peer_rank in tl.static_range(0, tp_world_size):
+                    peer_base = tl.load(buffer_ptrs + peer_rank)
+                    peer_maxs_ptr = peer_base.to(tl.pointer_type(tl.bfloat16))
+                    peer_maxs_idx_ptr = peer_base.to(tl.pointer_type(tl.int64))
+                    tl.store(
+                        peer_maxs_ptr + source_rank_base_offset,
+                        gumbel_max,
+                        mask=mask_h_out,
+                    )
+                    tl.store(
+                        peer_maxs_idx_ptr + storage_offset_maxs_idx + source_rank_base_offset,
+                        gumbel_max_idx_global,
+                        mask=mask_h_out,
+                    )
+            else:
+                tl.store(max_out_ptr + base_offset, gumbel_max, mask=mask_h_out)
+                tl.store(max_out_idx_ptr + base_offset, gumbel_max_idx_global, mask=mask_h_out)
 
 
 @triton.jit
