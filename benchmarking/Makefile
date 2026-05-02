@@ -41,7 +41,7 @@ ncu-profile-fused-triton:
 		--kernel-name fused_mm_sample_triton_kernel \
 		--source-folders $$(pwd)/../src/fused_mm_sampling \
 		--import-source yes \
-		-fo $(NCU_RESULTS_DIR)/fused-triton $(PYTHON) ./speed_test.py --name fused-triton --n_hidden_states $(N_HIDDEN_STATES) --n_runs_benchmark $(N_RUNS_BENCHMARK) --bench_fn=own
+		-fo $(NCU_RESULTS_DIR)/fused-triton $(PYTHON) ./speed_test.py --name fused-triton --n_hidden_states $(N_HIDDEN_STATES) --n_runs_benchmark $(N_RUNS_BENCHMARK) --bench_fn=own --nsys_profile=True
 
 
 ncu-profile-flashinfer:
@@ -49,7 +49,7 @@ ncu-profile-flashinfer:
 	$(SUDO) env "PATH=$$PATH:$(VENV_BIN)" $(NCU) --set full \
 		--nvtx \
 		--nvtx-include "kernel/" \
-		-fo $(NCU_RESULTS_DIR)/flashinfer $(PYTHON) ./speed_test.py --name flashinfer:sampling_from_logits --n_hidden_states $(N_HIDDEN_STATES) --n_runs_benchmark $(N_RUNS_BENCHMARK) --bench_fn=own
+		-fo $(NCU_RESULTS_DIR)/flashinfer $(PYTHON) ./speed_test.py --name flashinfer:sampling_from_logits --n_hidden_states $(N_HIDDEN_STATES) --n_runs_benchmark $(N_RUNS_BENCHMARK) --bench_fn=own --nsys_profile=True
 
 
 ncu-profile-naive-compiled:
@@ -57,7 +57,7 @@ ncu-profile-naive-compiled:
 	$(SUDO) $(NCU) --set full \
 		--nvtx \
 		--nvtx-include "kernel/" \
-		-fo $(NCU_RESULTS_DIR)/naive-compiled $(PYTHON) ./speed_test.py --name naive-compiled --n_hidden_states $(N_HIDDEN_STATES) --n_runs_benchmark $(N_RUNS_BENCHMARK) --bench_fn=own
+		-fo $(NCU_RESULTS_DIR)/naive-compiled $(PYTHON) ./speed_test.py --name naive-compiled --n_hidden_states $(N_HIDDEN_STATES) --n_runs_benchmark $(N_RUNS_BENCHMARK) --bench_fn=own --nsys_profile=True
 
 
 nsight-profile-fused-triton:
@@ -95,7 +95,7 @@ ncu-export:
 		--nvtx \
 		--nvtx-include "kernel/" \
 		--target-processes all \
-		$(PYTHON) ./speed_test.py --name $(NAME) --n_hidden_states $(N_HIDDEN_STATES) --n_runs_benchmark $(N_RUNS_BENCHMARK) --bench_fn=own --case=$(CASE) --n_procs=$(N_PROCS) > $(NCU_TXT_DIR)/$(NAME).txt
+		$(PYTHON) ./speed_test.py --name $(NAME) --n_hidden_states $(N_HIDDEN_STATES) --n_runs_benchmark $(N_RUNS_BENCHMARK) --bench_fn=own --case=$(CASE) --n_procs=$(N_PROCS) --nsys_profile=True > $(NCU_TXT_DIR)/$(NAME).txt
 
 ncu-export-fused-triton:
 	$(MAKE) ncu-export NAME=fused-triton
@@ -122,7 +122,7 @@ ncu-profile-helion:
 		--nvtx-include "kernel/" \
 		--kernel-name _helion_fused_sample_helion_kernel \
 		--import-source yes \
-		-fo $(NCU_RESULTS_DIR)/helion $(PYTHON) ./speed_test.py --name helion --n_hidden_states $(N_HIDDEN_STATES) --n_runs_benchmark $(N_RUNS_BENCHMARK) --bench_fn=own
+		-fo $(NCU_RESULTS_DIR)/helion $(PYTHON) ./speed_test.py --name helion --n_hidden_states $(N_HIDDEN_STATES) --n_runs_benchmark $(N_RUNS_BENCHMARK) --bench_fn=own --nsys_profile=True
 
 ncu-export-helion:
 	$(MAKE) ncu-export NAME=helion
