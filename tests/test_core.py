@@ -13,8 +13,8 @@ from fused_mm_sampling.bench.triton_benchmark_lib import Args
 from fused_mm_sampling.core import JLSampler, bsz_h, fused_mm_sample_triton, get_sampler
 from fused_mm_sampling.testing import (
     make_synthetic_inputs,
-    run_greedy_tp2,
-    run_sampling_distribution_tp2,
+    verify_greedy_tp2,
+    verify_sampling_distribution_tp2,
 )
 from fused_mm_sampling.tp_info import run_maybe_distributed
 
@@ -126,7 +126,7 @@ def test_sampling_distribution(provider, vocab_size, n_hidden_states):
     reason="Requires >= 2 GPUs (symmetric memory needs NVLink)",
 )
 def test_sampling_distribution_tp2() -> None:
-    run_maybe_distributed(run_sampling_distribution_tp2, n_procs=2)
+    run_maybe_distributed(verify_sampling_distribution_tp2, n_procs=2)
 
 
 @pytest.mark.skipif(
@@ -138,7 +138,7 @@ def test_sampling_distribution_tp2() -> None:
     reason="Requires >= 2 GPUs (symmetric memory needs NVLink)",
 )
 def test_greedy_tp2() -> None:
-    run_maybe_distributed(run_greedy_tp2, n_procs=2)
+    run_maybe_distributed(verify_greedy_tp2, n_procs=2)
 
 
 @pytest.mark.parametrize("n_hidden_states", [1, 2])
