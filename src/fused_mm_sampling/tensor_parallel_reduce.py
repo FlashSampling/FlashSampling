@@ -20,11 +20,10 @@ def allocate_symm_mem_outputs(
     num_samples: int,
     max_grid_size_v: int,
     H: int,
-    device: torch.device,
-) -> tuple[torch.Tensor, torch.Tensor, object, int, int]:
+) -> tuple[torch.Tensor, torch.Tensor, object, int]:
     """Allocate kernel output buffers (maxs, maxs_idx) in symmetric memory.
 
-    Returns (maxs, maxs_idx, symm_mem_hdl, storage_offset_maxs_idx, world_size).
+    Returns (maxs, maxs_idx, symm_mem_hdl, storage_offset_maxs_idx).
     maxs and maxs_idx are views into this rank's symmetric memory buffer,
     usable as regular tensors. They have a leading source-rank dimension; each
     rank's kernel fans out writes to that source slot in every peer buffer.
@@ -55,16 +54,15 @@ def allocate_symm_mem_outputs(
         storage_offset=storage_offset_maxs_idx,
     )
 
-    return maxs, maxs_idx, symm_mem_hdl, storage_offset_maxs_idx, world_size
+    return maxs, maxs_idx, symm_mem_hdl, storage_offset_maxs_idx
 
 
-def kraken_post_kernel_reduce_fanout(
+@nvtx.annotate()
+def tp_post_kernel_reduce(
     local_maxs: torch.Tensor,
     local_maxs_idx: torch.Tensor,
     symm_mem_hdl,
     grid_size_v: int,
-    H: int,
-    num_samples: int,
 ) -> torch.Tensor:  # [H, num_samples]
     """Barrier + local reduction over fan-out outputs.
 
@@ -76,7 +74,7 @@ def kraken_post_kernel_reduce_fanout(
 
     symm_mem_hdl.barrier()
 
-    world_size = symm_mem_hdl.world_size
+    world_size, num_samples, _, H = local_maxs.shape
     maxs = local_maxs[:, :, :grid_size_v, :].movedim(0, 1)
     maxs = maxs.reshape(num_samples, world_size * grid_size_v, H)
     maxs_idx = local_maxs_idx[:, :, :grid_size_v, :].movedim(0, 1)

@@ -12,7 +12,7 @@ import triton.language as tl
 from torch.distributed._functional_collectives import all_gather_tensor
 
 from .alg_names import ShortNames as S
-from .tensor_parallel_reduce import allocate_symm_mem_outputs, kraken_post_kernel_reduce_fanout
+from .tensor_parallel_reduce import allocate_symm_mem_outputs, tp_post_kernel_reduce
 from .tl_matmul import matmul
 from .tp_info import TP1, TPInfo
 
@@ -230,17 +230,15 @@ def fused_mm_sample_triton(
 
     max_grid_size_v = triton.cdiv(V, MIN_BLOCK_SIZE_V)
     if tp.size > 1:
-        maxs, maxs_idx, symm_mem_hdl, storage_offset_maxs_idx, fanout_world_size = (
-            allocate_symm_mem_outputs(
-                num_samples=num_samples,
-                max_grid_size_v=max_grid_size_v,
-                H=H,
-                device=weights.device,
-            )
+        maxs, maxs_idx, symm_mem_hdl, storage_offset_maxs_idx = allocate_symm_mem_outputs(
+            num_samples=num_samples,
+            max_grid_size_v=max_grid_size_v,
+            H=H,
         )
         kernel_maxs = maxs[tp.rank]
         kernel_maxs_idx = maxs_idx[tp.rank]
         symm_mem_buffer_ptrs = symm_mem_hdl.buffer_ptrs_dev
+        fanout_world_size = symm_mem_hdl.world_size
     else:
         maxs = torch.empty(
             (num_samples, max_grid_size_v, H),
@@ -299,13 +297,11 @@ def fused_mm_sample_triton(
     assert grid_size["v"] is not None
 
     if tp.size > 1:
-        samples = kraken_post_kernel_reduce_fanout(
+        samples = tp_post_kernel_reduce(
             local_maxs=maxs,
             local_maxs_idx=maxs_idx,
             symm_mem_hdl=symm_mem_hdl,
             grid_size_v=grid_size["v"],
-            H=H,
-            num_samples=num_samples,
         )
     else:
         # Local reduction across V-tiles on this rank.
