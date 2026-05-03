@@ -12,7 +12,7 @@ import triton.language as tl
 from torch.distributed._functional_collectives import all_gather_tensor
 
 from .alg_names import ShortNames as S
-from .kraken_reduce import allocate_symm_mem_outputs, kraken_post_kernel_reduce_fanout
+from .tensor_parallel_reduce import allocate_symm_mem_outputs, kraken_post_kernel_reduce_fanout
 from .tl_matmul import matmul
 from .tp_info import TP1, TPInfo
 

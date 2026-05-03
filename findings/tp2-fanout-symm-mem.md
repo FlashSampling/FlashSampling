@@ -23,7 +23,7 @@ data locally and only needs to reduce.
 
 ## Implementation
 
-`src/fused_mm_sampling/kraken_reduce.py`:
+`src/fused_mm_sampling/tensor_parallel_reduce.py`:
 
 - `allocate_symm_mem_outputs` now allocates a `[world_size, num_samples,
   max_grid_size_v, H]` buffer per rank (extra leading source-rank dim) instead
@@ -129,7 +129,7 @@ reverted because it provided no real filtering.
 ## Files / branch
 
 - Implementation lives on the `fanout-symm-mem` branch (commit `927601a`,
-  squashed into `kraken_reduce.py` + `core.py`).
+  squashed into `tensor_parallel_reduce.py` + `core.py`).
 - The pre-fanout reduce (single-slot writes + post-kernel remote reads) is
   available in git history before the fanout commit if A/B testing is needed.
 - Benchmark CSVs are in
