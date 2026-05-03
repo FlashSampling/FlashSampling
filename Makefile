@@ -79,7 +79,6 @@ modal-create-results-triton-bench:
 		> $(RESULTS_DIR)/logs.txt 2>&1
 
 modal-plot-triton-bench:
-	python benchmarking/plot-triton-bench.py --tgt_dir $(RESULTS_DIR) $(PLOT_EXTRA_FLAGS)
 	python benchmarking/plot-triton-bench.py --tgt_dir $(RESULTS_DIR) --fmt pdf --use_name_flashsampling=1 $(PLOT_EXTRA_FLAGS)
 
 TRITON_BENCH_GPUS := b300 b200 h200 h100!
@@ -132,7 +131,6 @@ plot-all:
 	$(MAKE) plot-vllm-bench
 
 plot-vllm-bench:
-	python benchmarking/vllm/plot_tpot.py --results-dir $(VLLM_BENCH_DIR)
 	python benchmarking/vllm/plot_tpot.py --results-dir $(VLLM_BENCH_DIR) --fmt pdf --use-name-flashsampling=1
 
 modal-example:
@@ -190,7 +188,7 @@ modal-get-results-vllm-bench:
 	mkdir -p $(VLLM_BENCH_DIR)
 	set -e; tmpdir=$$(mktemp -d); \
 	cd "$$tmpdir"; \
-	modal volume get fused-mm-sample $(VLLM_VOLUME_DIR_NAME); \
+	modal volume get --force fused-mm-sample $(VLLM_VOLUME_DIR_NAME); \
 	cp -a $(VLLM_VOLUME_DIR_NAME)/. "$(CURDIR)/$(VLLM_BENCH_DIR)/"; \
 	rm -rf "$$tmpdir"
 
