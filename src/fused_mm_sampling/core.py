@@ -1,4 +1,3 @@
-import functools
 import math
 from dataclasses import dataclass
 from functools import lru_cache
@@ -143,32 +142,19 @@ def greedy_sample(
     return logits.argmax(dim=-1, keepdim=True)  # [n_hidden_states, 1]
 
 
-_greedy_compiled_fullgraph = torch.compile(greedy_sample, fullgraph=True)
-_greedy_compiled_with_breaks = torch.compile(greedy_sample)
+greedy_sample_compiled = nvtx.annotate()(torch.compile(greedy_sample, fullgraph=True))
+
+_sample_compiled = torch.compile(sample, fullgraph=True)
 
 
 @nvtx.annotate()
-@functools.wraps(greedy_sample)
-def greedy_sample_compiled(*args, tp: TPInfo = TP1, **kwargs):
-    if tp.size > 1:
-        return _greedy_compiled_with_breaks(*args, tp=tp, **kwargs)
-    return _greedy_compiled_fullgraph(*args, tp=tp, **kwargs)
-
-
-sample_compiled_fullgraph = torch.compile(sample, fullgraph=True)
-sample_compiled_with_breaks = torch.compile(sample)
-
-
-@nvtx.annotate()
-@functools.wraps(sample)
-def sample_compiled(*args, tp: TPInfo = TP1, **kwargs):
-    if tp.size > 1:
-        if tp.is_rank0():
-            print_once("Using sample_compiled_with_breaks")
-        return sample_compiled_with_breaks(*args, tp=tp, **kwargs)
-    if tp.is_rank0():
-        print_once("Using sample_compiled_fullgraph")
-    return sample_compiled_fullgraph(*args, tp=tp, **kwargs)
+def sample_compiled(*args, seed: int | None = None, **kwargs):
+    # torch.manual_seed is dynamo-skipped, so seed handling has to live outside
+    # the compiled region. Pass seed=None into the compiled inner; the dead
+    # `if seed is not None` branch in sample() is folded at trace time.
+    if seed is not None:
+        torch.manual_seed(seed)
+    return _sample_compiled(*args, **kwargs)
 
 
 @nvtx.annotate()
