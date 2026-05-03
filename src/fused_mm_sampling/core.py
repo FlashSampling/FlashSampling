@@ -10,6 +10,7 @@ import torch
 import torch.distributed as dist
 import triton
 import triton.language as tl
+from torch.distributed._functional_collectives import all_gather_tensor
 
 from .alg_names import ShortNames as S
 from .kraken_reduce import allocate_symm_mem_outputs, kraken_post_kernel_reduce
@@ -65,16 +66,11 @@ def _fast_multinomial(probs: torch.Tensor, num_samples: int) -> torch.Tensor:
     return probs.unsqueeze(0).div(q).argmax(dim=-1).T  # [H, num_samples]
 
 
-@torch.compiler.disable
 def _allgather_logits(
     logits: torch.Tensor,  # [H, V_local]
 ) -> torch.Tensor:
     """All-gather local logits along the vocab dimension to reconstruct [H, V_global]."""
-    tp_size = dist.get_world_size()
-    H, V_local = logits.shape  # noqa: N806
-    gathered = logits.new_empty(tp_size, H, V_local)
-    dist.all_gather_into_tensor(gathered, logits)
-    return gathered.transpose(0, 1).reshape(H, tp_size * V_local)
+    return all_gather_tensor(logits, gather_dim=1, group=dist.group.WORLD)
 
 
 def apply_top_k_top_p(
