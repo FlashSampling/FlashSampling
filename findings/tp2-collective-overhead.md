@@ -162,7 +162,7 @@ The reductions are cheap and stay on the host side.
 
 ### Implementation details
 
-- `src/fused_mm_sampling/kraken_reduce.py` contains `allocate_symm_mem_outputs()` and `kraken_post_kernel_reduce()`.
+- `src/fused_mm_sampling/tensor_parallel_reduce.py` contains `allocate_symm_mem_outputs()` and `kraken_post_kernel_reduce()`.
 - The `maxs_idx` (int64) buffer must start at a 128-byte-aligned offset after `maxs` (bfloat16) for TMA compatibility.
 - The workspace is allocated once per process group and reused across calls.
 - Requires NVLink-connected GPUs, PyTorch >= 2.6, CUDA >= 12.4.

@@ -164,7 +164,7 @@ Constraints:
 
 ## Symmetric memory TP reduction
 
-`src/fused_mm_sampling/kraken_reduce.py` replaces the NCCL all_gather in the TP>1 code path with symmetric memory. Used automatically when `tp.size > 1`.
+`src/fused_mm_sampling/tensor_parallel_reduce.py` replaces the NCCL all_gather in the TP>1 code path with symmetric memory. Used automatically when `tp.size > 1`.
 
 Flow: the kernel output buffers (`maxs`, `maxs_idx`) are allocated in symmetric memory via `get_symm_mem_workspace`, so the kernel's existing TMA stores write directly to NVLink-mapped addresses. After the kernel completes, a host-side barrier ensures all ranks' writes are visible. Each rank then reads all ranks' per-tile outputs from symmetric memory, runs `_local_reduce` per rank, and picks the global winner via `_stack_and_select_winner`.
 
