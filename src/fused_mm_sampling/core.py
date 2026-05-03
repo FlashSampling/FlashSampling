@@ -65,6 +65,7 @@ def _fast_multinomial(probs: torch.Tensor, num_samples: int) -> torch.Tensor:
     return probs.unsqueeze(0).div(q).argmax(dim=-1).T  # [H, num_samples]
 
 
+@torch.compiler.disable
 def _allgather_logits(
     logits: torch.Tensor,  # [H, V_local]
 ) -> torch.Tensor:
