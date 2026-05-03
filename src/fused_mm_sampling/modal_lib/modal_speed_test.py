@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from ..bench.speed_test import run_speed_test
 from ..bench.triton_benchmark_lib import Args
 from .utils import (
     ModalEnvConfig,
@@ -16,8 +17,6 @@ app = make_app()
 
 @app.function(gpu=cfg.gpu_spec, image=make_image(), volumes=make_volumes(), timeout=cfg.timeout)
 def speed_test(args: Args):
-    from ..bench.speed_test import run_speed_test
-
     set_volume_caches()
     run_speed_test(args)
 
