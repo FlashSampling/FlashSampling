@@ -35,6 +35,10 @@ def make_app():
 def make_image():
     img = modal.Image.from_registry("pytorch/pytorch:2.10.0-cuda13.0-cudnn9-devel")
     deps = [
+        "triton==3.5.1",  # match the base pytorch image; prevents uv from
+        # leaving an orphan triton-3.6.0.dist-info that breaks
+        # importlib.metadata.entry_points() discovery and causes
+        # ``RuntimeError: 0 active drivers ([])`` on first kernel launch.
         "flashinfer-python",
         "pandas",
         "pydantic-settings",
@@ -56,14 +60,17 @@ def make_volumes():
 
 
 def set_volume_caches():
-    """Point cache env vars to the Modal volume so caches persist across runs.
+    """Point cache env vars to the Modal volume and enable Triton autotune logging.
 
     XDG_CACHE_HOME: used by flashinfer, torch.compile, etc.
     TRITON_CACHE_DIR: used by Triton for compiled kernels and autotune results.
     Triton ignores XDG_CACHE_HOME and reads TRITON_CACHE_DIR (or TRITON_HOME) instead.
+    TRITON_PRINT_AUTOTUNING: surfaces autotune progress so silent waits
+    (cold cache, hangs) are debuggable from the run log.
     """
     os.environ["XDG_CACHE_HOME"] = f"{volume_path}/cache"
     os.environ["TRITON_CACHE_DIR"] = f"{volume_path}/cache/triton"
+    os.environ["TRITON_PRINT_AUTOTUNING"] = "1"
 
 
 def add_library_code(image: modal.Image) -> modal.Image:

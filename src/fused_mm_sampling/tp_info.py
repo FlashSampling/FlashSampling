@@ -116,21 +116,31 @@ def _print_gpu_topology() -> None:
 
 
 def _numa_bind(rank: int) -> None:
-    """Pin this process to the CPU cores on the same NUMA node as the GPU."""
+    """Pin this process to the CPU cores on the same NUMA node as the GPU.
+
+    A binding failure (e.g. Modal's gVisor returning an empty CPU set) leaves
+    the process unbound and produces inconsistent benchmark numbers, so we
+    abort instead of warn. Missing torch.numa.binding (older torch) is still
+    tolerated since the platform simply does not support binding.
+    """
     try:
         from torch.numa.binding import (
             AffinityMode,
             NumaOptions,
             _apply_numa_binding_to_current_thread,
         )
-
-        _apply_numa_binding_to_current_thread(
-            gpu_index=rank,
-            numa_options=NumaOptions(affinity_mode=AffinityMode.NODE),
+    except ImportError as e:
+        warnings.warn(
+            f"Rank {rank}: torch.numa.binding unavailable, skipping bind: {e}",
+            stacklevel=2,
         )
-        print(f"Rank {rank}: NUMA-bound to CPUs {sorted(os.sched_getaffinity(0))}", flush=True)
-    except Exception as e:
-        warnings.warn(f"Rank {rank}: NUMA binding failed: {e}", stacklevel=2)
+        return
+
+    _apply_numa_binding_to_current_thread(
+        gpu_index=rank,
+        numa_options=NumaOptions(affinity_mode=AffinityMode.NODE),
+    )
+    print(f"Rank {rank}: NUMA-bound to CPUs {sorted(os.sched_getaffinity(0))}", flush=True)
 
 
 def _find_free_port() -> int:

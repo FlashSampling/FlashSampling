@@ -34,7 +34,7 @@ modal-speed-test:
 	GPU=$(GPU) N_PROCS=$(N_PROCS) NAME=$(NAME) N_HIDDEN_STATES=$(N_HIDDEN_STATES) BENCH_FN=$(BENCH_FN) \
 		modal run -m src.fused_mm_sampling.modal_lib.modal_speed_test 2>&1 | tee benchmarking/modal-results/speed-test/$(GPU)/tp$(N_PROCS)/bsz$(N_HIDDEN_STATES).txt
 
-modal-triton-benchmark: modal-create-results-triton-bench modal-get-results-triton-bench modal-plot-triton-bench
+modal-triton-benchmark: modal-create-results-triton-bench modal-upload-logs-triton-bench modal-get-results-triton-bench modal-plot-triton-bench
 
 modal-ncu-test:
 	modal run -m src.fused_mm_sampling.modal_lib.modal_ncu_test
@@ -78,8 +78,10 @@ modal-create-results-triton-bench:
 		-m src.fused_mm_sampling.modal_lib.modal_triton_benchmark \
 		> $(RESULTS_DIR)/logs.txt 2>&1
 
+modal-upload-logs-triton-bench:
+	modal volume put --force fused-mm-sample $(RESULTS_DIR)/logs.txt $(BENCH_DIR)/logs.txt
+
 modal-plot-triton-bench:
-	python benchmarking/plot-triton-bench.py --tgt_dir $(RESULTS_DIR) $(PLOT_EXTRA_FLAGS)
 	python benchmarking/plot-triton-bench.py --tgt_dir $(RESULTS_DIR) --fmt pdf --use_name_flashsampling=1 $(PLOT_EXTRA_FLAGS)
 
 TRITON_BENCH_GPUS := b300 b200 h200 h100!
@@ -132,7 +134,6 @@ plot-all:
 	$(MAKE) plot-vllm-bench
 
 plot-vllm-bench:
-	python benchmarking/vllm/plot_tpot.py --results-dir $(VLLM_BENCH_DIR)
 	python benchmarking/vllm/plot_tpot.py --results-dir $(VLLM_BENCH_DIR) --fmt pdf --use-name-flashsampling=1
 
 modal-example:
@@ -144,7 +145,7 @@ modal-get-results-speed-test:
 
 modal-get-results-triton-bench:
 	mkdir -p $(RESULTS_DIR)
-	modal volume get fused-mm-sample $(BENCH_DIR) $(dir $(RESULTS_DIR))
+	modal volume get --force fused-mm-sample $(BENCH_DIR) $(dir $(RESULTS_DIR))
 
 modal-persistent-matmul:
 	GPU=$(GPU) \
@@ -190,7 +191,7 @@ modal-get-results-vllm-bench:
 	mkdir -p $(VLLM_BENCH_DIR)
 	set -e; tmpdir=$$(mktemp -d); \
 	cd "$$tmpdir"; \
-	modal volume get fused-mm-sample $(VLLM_VOLUME_DIR_NAME); \
+	modal volume get --force fused-mm-sample $(VLLM_VOLUME_DIR_NAME); \
 	cp -a $(VLLM_VOLUME_DIR_NAME)/. "$(CURDIR)/$(VLLM_BENCH_DIR)/"; \
 	rm -rf "$$tmpdir"
 

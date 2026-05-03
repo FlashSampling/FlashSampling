@@ -1,4 +1,3 @@
-import functools
 import math
 from dataclasses import dataclass
 from functools import lru_cache
@@ -10,6 +9,7 @@ import torch
 import torch.distributed as dist
 import triton
 import triton.language as tl
+from torch.distributed._functional_collectives import all_gather_tensor
 
 from .alg_names import ShortNames as S
 from .kraken_reduce import allocate_symm_mem_outputs, kraken_post_kernel_reduce_fanout
@@ -65,15 +65,11 @@ def _fast_multinomial(probs: torch.Tensor, num_samples: int) -> torch.Tensor:
     return probs.unsqueeze(0).div(q).argmax(dim=-1).T  # [H, num_samples]
 
 
-@torch.compiler.disable
 def _allgather_logits(
     logits: torch.Tensor,  # [H, V_local]
 ) -> torch.Tensor:
     """All-gather local logits along the vocab dimension to reconstruct [H, V_global]."""
-    tp_size = dist.get_world_size()
-    all_logits = [torch.empty_like(logits) for _ in range(tp_size)]
-    dist.all_gather(all_logits, logits)
-    return torch.cat(all_logits, dim=1)  # [H, V_global]
+    return all_gather_tensor(logits, gather_dim=1, group=dist.group.WORLD)
 
 
 def apply_top_k_top_p(
@@ -146,32 +142,19 @@ def greedy_sample(
     return logits.argmax(dim=-1, keepdim=True)  # [n_hidden_states, 1]
 
 
-_greedy_compiled_fullgraph = torch.compile(greedy_sample, fullgraph=True)
-_greedy_compiled_with_breaks = torch.compile(greedy_sample)
+greedy_sample_compiled = nvtx.annotate()(torch.compile(greedy_sample, fullgraph=True))
+
+_sample_compiled = torch.compile(sample, fullgraph=True)
 
 
 @nvtx.annotate()
-@functools.wraps(greedy_sample)
-def greedy_sample_compiled(*args, tp: TPInfo = TP1, **kwargs):
-    if tp.size > 1:
-        return _greedy_compiled_with_breaks(*args, tp=tp, **kwargs)
-    return _greedy_compiled_fullgraph(*args, tp=tp, **kwargs)
-
-
-sample_compiled_fullgraph = torch.compile(sample, fullgraph=True)
-sample_compiled_with_breaks = torch.compile(sample)
-
-
-@nvtx.annotate()
-@functools.wraps(sample)
-def sample_compiled(*args, tp: TPInfo = TP1, **kwargs):
-    if tp.size > 1:
-        if tp.is_rank0():
-            print_once("Using sample_compiled_with_breaks")
-        return sample_compiled_with_breaks(*args, tp=tp, **kwargs)
-    if tp.is_rank0():
-        print_once("Using sample_compiled_fullgraph")
-    return sample_compiled_fullgraph(*args, tp=tp, **kwargs)
+def sample_compiled(*args, seed: int | None = None, **kwargs):
+    # torch.manual_seed is dynamo-skipped, so seed handling has to live outside
+    # the compiled region. Pass seed=None into the compiled inner; the dead
+    # `if seed is not None` branch in sample() is folded at trace time.
+    if seed is not None:
+        torch.manual_seed(seed)
+    return _sample_compiled(*args, **kwargs)
 
 
 @nvtx.annotate()
