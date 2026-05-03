@@ -238,7 +238,6 @@ def fused_mm_sample_triton(
         kernel_maxs = maxs[tp.rank]
         kernel_maxs_idx = maxs_idx[tp.rank]
         symm_mem_buffer_ptrs = symm_mem_hdl.buffer_ptrs_dev
-        fanout_world_size = symm_mem_hdl.world_size
     else:
         maxs = torch.empty(
             (num_samples, max_grid_size_v, H),
@@ -249,7 +248,6 @@ def fused_mm_sample_triton(
         kernel_maxs = maxs
         kernel_maxs_idx = maxs_idx
         storage_offset_maxs_idx = 0
-        fanout_world_size = 1
         symm_mem_buffer_ptrs = maxs
 
     # logits_out is only read when RETURN_LOGITS=True. For the common path
@@ -285,7 +283,7 @@ def fused_mm_sample_triton(
         max_grid_size_v=max_grid_size_v,
         storage_offset_maxs_idx=storage_offset_maxs_idx,
         tp_rank=tp.rank,
-        tp_world_size=fanout_world_size,
+        tp_world_size=tp.size,
         logits_out_ptr=logits_out,
         WARP_SPECIALIZE=supports_warp_specialization(),
         NUM_SMS=NUM_SMS,
@@ -407,10 +405,8 @@ def unpack_grid(grid):
 
 
 def get_autotuning_configs() -> list[triton.Config]:
-    is_dev_machine: bool = torch.cuda.is_available() and torch.cuda.get_device_capability() == (
-        8,
-        6,
-    )  # RTX 3090 config
+    cc = torch.cuda.get_device_capability()
+    is_dev_machine: bool = cc == (8, 6)  # RTX 3090 config
     if is_dev_machine:
         return [
             triton.Config(
