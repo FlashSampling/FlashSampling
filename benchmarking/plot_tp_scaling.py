@@ -93,6 +93,22 @@ def plot_tp_scaling(
             ax=ax,
             palette=palette,
         )
+
+        # Ideal 1/TP reference, anchored at FlashSampling TP=1.
+        fs_name = FLASHSAMPLING_RENAMES[L.fmms_triton]
+        fs_tp1 = sub.query("provider == @fs_name and tp == 1")["time[us]"].iloc[0]
+        ref_values = [fs_tp1 / tp for tp in unique_tps]
+        ax.plot(
+            unique_tps,
+            ref_values,
+            linestyle=":",
+            color=PROVIDER_COLORS[fs_name],
+            linewidth=2.5,
+            marker="*",
+            label="Ideal 1/TP",
+            zorder=1,
+        )
+
         ax.set_xscale("log")
         ax.set_xticks(unique_tps, labels=[str(t) for t in unique_tps])
         ax.xaxis.set_minor_locator(plt.NullLocator())
@@ -121,7 +137,7 @@ def plot_tp_scaling(
         loc="upper center",
         title="Method",
         bbox_to_anchor=(0.5, 1.30),
-        ncol=2,
+        ncol=3,
         fontsize=18,
         title_fontsize=20,
     )
