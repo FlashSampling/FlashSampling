@@ -1,4 +1,5 @@
 *.nsys-rep
+.claude/settings.json
 benchmarking/profiles/
 benchmarking/modal-results/
 benchmarking/modal-results*
