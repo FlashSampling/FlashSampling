@@ -11,6 +11,9 @@ pytest-distributed:
 modal-pytest-distributed:
 	GPU=$(GPU) modal run -m src.fused_mm_sampling.modal_lib.modal_pytest_distributed
 
+modal-versions:
+	modal run -m src.fused_mm_sampling.modal_lib.modal_versions
+
 update-deps:
 	uv lock --upgrade  # Re-resolve all deps to latest compatible versions
 	uv sync --all-extras  # Install exact versions from lockfile, including optional groups
