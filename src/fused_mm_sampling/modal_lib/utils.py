@@ -39,23 +39,22 @@ def make_image():
     # pre-installed torch 2.11.0+cu130 and triton 3.6.0 instead of re-resolving
     # them from PyPI (which yields torch 2.9.1+cu128 + triton 3.5.1 without
     # ptxas-blackwell).
-    deps = " ".join(
-        [
-            "flashinfer-python",
-            "pandas",
-            "pydantic-settings",
-            "matplotlib",
-            "nvtx",
-            "llnl-hatchet",
-            "scipy",
-            "'cuda-bench[cu13]'",
-            "cupti-python",
-        ]
-    )
+    deps: list[str] = [
+        "flashinfer-python",
+        "pandas",
+        "pydantic-settings",
+        "matplotlib",
+        "nvtx",
+        "llnl-hatchet",
+        "scipy",
+        "'cuda-bench[cu13]'",
+        "cupti-python",
+    ]
+    deps_str: str = " ".join(deps)
     return (
         modal.Image.from_registry("pytorch/pytorch:2.11.0-cuda13.0-cudnn9-devel")
         .run_commands("pip install --break-system-packages uv")
-        .run_commands(f"uv pip install --system {deps}")
+        .run_commands(f"uv pip install --system {deps_str}")
     )
 
 
