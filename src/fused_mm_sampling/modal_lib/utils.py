@@ -33,23 +33,30 @@ def make_app():
 
 
 def make_image():
-    img = modal.Image.from_registry("pytorch/pytorch:2.10.0-cuda13.0-cudnn9-devel")
-    deps = [
-        "triton==3.5.1",  # match the base pytorch image; prevents uv from
-        # leaving an orphan triton-3.6.0.dist-info that breaks
-        # importlib.metadata.entry_points() discovery and causes
-        # ``RuntimeError: 0 active drivers ([])`` on first kernel launch.
-        "flashinfer-python",
-        "pandas",
-        "pydantic-settings",
-        "matplotlib",
-        "nvtx",
-        "llnl-hatchet",
-        "scipy",
-        "cuda-bench[cu13]",
-        "cupti-python",
-    ]
-    return img.uv_pip_install(deps)
+    # Pytorch 2.11.0 ships triton 3.6.0, whose bundled `ptxas-blackwell`
+    # supports sm_103a (B300). We install deps via `uv pip install --system`
+    # (mirroring `modal_vllm_benchmark.py`) so uv preserves the base image's
+    # pre-installed torch 2.11.0+cu130 and triton 3.6.0 instead of re-resolving
+    # them from PyPI (which yields torch 2.9.1+cu128 + triton 3.5.1 without
+    # ptxas-blackwell).
+    deps = " ".join(
+        [
+            "flashinfer-python",
+            "pandas",
+            "pydantic-settings",
+            "matplotlib",
+            "nvtx",
+            "llnl-hatchet",
+            "scipy",
+            "'cuda-bench[cu13]'",
+            "cupti-python",
+        ]
+    )
+    return (
+        modal.Image.from_registry("pytorch/pytorch:2.11.0-cuda13.0-cudnn9-devel")
+        .run_commands("pip install --break-system-packages uv")
+        .run_commands(f"uv pip install --system {deps}")
+    )
 
 
 volume_path = "/vol-fused-mm-sample"
