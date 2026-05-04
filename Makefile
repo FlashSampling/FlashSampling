@@ -136,6 +136,9 @@ plot-all:
 plot-vllm-bench:
 	python benchmarking/vllm/plot_tpot.py --results-dir $(VLLM_BENCH_DIR) --fmt pdf --use-name-flashsampling=1
 
+plot-tp-scaling:
+	python benchmarking/plot_tp_scaling.py --gpu $(GPU) --bench_fn own --case large
+
 modal-example:
 	modal run -m src.fused_mm_sampling.modal_lib.modal_example
 
