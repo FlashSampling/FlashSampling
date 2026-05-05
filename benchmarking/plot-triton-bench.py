@@ -182,11 +182,17 @@ def plot_batch_scaling(bdf_long: pd.DataFrame):
 
 
 def plot_relative_performance(
-    bdf_rel_long: pd.DataFrame, ref_method: str, show_providers: list[str]
+    bdf_rel_long: pd.DataFrame,
+    show_providers: list[str],
+    use_errorbar: bool = False,
 ) -> None:
     plot_df = bdf_rel_long.query("provider in @show_providers")
     palette = _provider_palette(show_providers)
     _, ax = plt.subplots(figsize=(10, 6))
+    barplot_kwargs = {}
+    if use_errorbar:
+        barplot_kwargs["errorbar"] = minmax_skip_zero_range
+        barplot_kwargs["err_kws"] = {"linewidth": 2.5, "color": "black"}
     sns.barplot(
         plot_df,
         x="n_hidden_states",
@@ -195,9 +201,13 @@ def plot_relative_performance(
         hue_order=show_providers,
         palette=palette,
         ax=ax,
+        **barplot_kwargs,
     )
     hatches = [PROVIDER_HATCHES.get(p, "") for p in show_providers]
-    for container, hatch in zip(ax.containers, hatches):
+    bar_containers = [
+        c for c in ax.containers if isinstance(c, plt.matplotlib.container.BarContainer)
+    ]
+    for container, hatch in zip(bar_containers, hatches):
         for bar in container:
             bar.set_hatch(hatch)
     ax.grid(alpha=0.5, axis="y")
@@ -426,6 +436,18 @@ def read_triton_bench_csv(path: Path) -> pd.DataFrame:
     return df
 
 
+def minmax_skip_zero_range(x: pd.Series) -> tuple[float, float]:
+    """Min-max errorbar that returns (nan, nan) when the range is zero.
+
+    Used for the reference method whose relative-perf is exactly 1.0 across
+    all runs; seaborn skips drawing the errorbar when both endpoints are nan.
+    """
+    lo, hi = x.min(), x.max()
+    if lo == hi:
+        return (np.nan, np.nan)
+    return (lo, hi)
+
+
 def plot_relative_performance_from_wide(
     bdf: pd.DataFrame,
     ref_method: str,
@@ -434,24 +456,30 @@ def plot_relative_performance_from_wide(
     plot_folder: Path,
     csv_folder: Path,
     fmt: str = "png",
+    use_errorbars: bool = False,
 ):
-    """Compute relative performance vs ref_method and save plot + CSV."""
+    """Compute relative performance vs ref_method and save plot + CSV.
+
+    ``bdf`` may contain multiple rows per ``n_hidden_states`` (one per run);
+    when ``use_errorbars`` is set, the plot renders min-max ranges across
+    those rows.
+    """
     methods = [c for c in bdf.columns if c != ref_method and c != "n_hidden_states"]
     bdf_rel = bdf.copy()
     bdf_rel[[*methods, ref_method]] = bdf[[*methods, ref_method]].div(bdf[ref_method], axis=0)
     bdf_rel_long = bdf_rel.melt(
         id_vars=["n_hidden_states"], var_name="provider", value_name="relative-time"
     )
+    bdf_rel_long["relative-perf"] = 1 / bdf_rel_long["relative-time"]
 
     # discard Batch Sizes
     # discard_batch_sizes = [2, 8]  # noqa: F841
     # bdf_rel_long = bdf_rel_long.query("~n_hidden_states.isin(@discard_batch_sizes)")
 
-    bdf_rel_long["relative-perf"] = 1 / bdf_rel_long["relative-time"]
     bdf_rel_long.round(3).to_csv(
         csv_folder / f"relative-performance-vs-{ref_slug}.csv", index=False
     )
-    ax = plot_relative_performance(bdf_rel_long, ref_method, show_providers)
+    ax = plot_relative_performance(bdf_rel_long, show_providers, use_errorbar=use_errorbars)
     ax.figure.savefig(
         plot_folder / f"relative-performance-vs-{ref_slug}.{fmt}",
         dpi=300,
@@ -460,11 +488,32 @@ def plot_relative_performance_from_wide(
     return ax
 
 
+def _discover_rerun_folders(folder: Path) -> list[Path]:
+    """Find sibling rerun folders (e.g. b200-rerun1/tp1) for a primary folder.
+
+    ``folder`` is typically ``.../<gpu>/<tp>``. The parent's siblings matching
+    ``<gpu>-rerun*`` provide additional runs of the same configuration.
+    """
+    gpu_dir = folder.parent
+    base_name = gpu_dir.name
+    tp_name = folder.name
+    matches = sorted(gpu_dir.parent.glob(f"{base_name}-rerun*"))
+    rerun_folders = [m / tp_name for m in matches if (m / tp_name).is_dir()]
+    if rerun_folders:
+        print(f"Errorbars: aggregating {len(rerun_folders)} rerun folder(s):")
+        for r in rerun_folders:
+            print(f"  - {r}")
+    else:
+        print("Errorbars requested but no rerun folders found; bars will have no error bars.")
+    return rerun_folders
+
+
 def create_and_triton_bench_plots(
     folder: Path,
     fmt: str = "png",
     use_name_flashsampling: bool = False,
     skip_multinomial_eager: bool = False,
+    use_errorbars: bool = False,
 ):
     tgt_folder = folder / "custom-plots"
     tgt_folder.mkdir(parents=True, exist_ok=True)
@@ -479,6 +528,8 @@ def create_and_triton_bench_plots(
         f"GPU: {gpu_name}{tp_suffix} → peak HBM BW: {peak_bw_gbs} GB/s, peak compute: {peak_compute_tflops} TFLOP/s"
     )
 
+    rerun_folders: list[Path] = _discover_rerun_folders(folder) if use_errorbars else []
+
     csv_prefix = "fused-mm-sample-batch-scaling-"
     for csv_path in sorted(folder.glob(f"{csv_prefix}*.csv")):
         case = csv_path.stem.removeprefix(csv_prefix)
@@ -487,7 +538,14 @@ def create_and_triton_bench_plots(
         case_folder = tgt_folder / f"case-{case}"
         case_folder.mkdir(parents=True, exist_ok=True)
 
-        bdf = read_triton_bench_csv(csv_path)
+        bdfs_list: list[pd.DataFrame] = [read_triton_bench_csv(csv_path)]
+        for rerun_folder in rerun_folders:
+            rerun_csv = rerun_folder / csv_path.name
+            if not rerun_csv.exists():
+                print(f"  warn: missing {rerun_csv}")
+                continue
+            bdfs_list.append(read_triton_bench_csv(rerun_csv))
+        bdf = pd.concat(bdfs_list, ignore_index=True)
         if skip_multinomial_eager:
             bdf = bdf.drop(columns=[LongNames.multinomial_sampling_eager], errors="ignore")
         if use_name_flashsampling:
@@ -544,7 +602,14 @@ def create_and_triton_bench_plots(
                 continue
             show = [p for p in rp["show"] if p in bdf.columns]
             ax = plot_relative_performance_from_wide(
-                bdf, rp["ref"], rp["slug"], show, case_folder, folder, fmt=fmt
+                bdf,
+                rp["ref"],
+                rp["slug"],
+                show,
+                case_folder,
+                folder,
+                fmt=fmt,
+                use_errorbars=use_errorbars and bool(rerun_folders),
             )
             plt.close(ax.figure)
 
@@ -559,6 +624,7 @@ class Args(BaseSettings, cli_parse_args=True):
     fmt: str = "png"
     use_name_flashsampling: bool = False
     skip_multinomial_eager: bool = False
+    use_errorbars: bool = False
 
 
 if __name__ == "__main__":
@@ -568,4 +634,5 @@ if __name__ == "__main__":
         fmt=args.fmt,
         use_name_flashsampling=args.use_name_flashsampling,
         skip_multinomial_eager=args.skip_multinomial_eager,
+        use_errorbars=args.use_errorbars,
     )
