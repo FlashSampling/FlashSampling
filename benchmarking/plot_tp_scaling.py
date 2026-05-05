@@ -15,10 +15,13 @@ from pydantic_settings import BaseSettings
 L = LongNames
 
 DEFAULT_PROVIDERS: list[str] = [
-    FLASHSAMPLING_RENAMES[L.fmms_triton],
-    L.multinomial_sampling_compiled,
-    L.flashinfer_sampling_from_logits,
-    L.flashinfer_top_k_top_p_sampling_from_logits,
+    FLASHSAMPLING_RENAMES.get(name, name)
+    for name in [
+        L.fmms_triton,
+        L.multinomial_sampling_compiled,
+        L.flashinfer_sampling_from_logits,
+        L.flashinfer_top_k_top_p_sampling_from_logits,
+    ]
 ]
 
 
@@ -89,6 +92,7 @@ def plot_tp_scaling(
             style="provider",
             style_order=providers,
             markers=markers,
+            markersize=12,
             dashes=False,
             ax=ax,
             palette=palette,
@@ -105,6 +109,7 @@ def plot_tp_scaling(
             color=PROVIDER_COLORS[fs_name],
             linewidth=2.5,
             marker="*",
+            markersize=14,
             label="Ideal 1/TP",
             zorder=1,
         )

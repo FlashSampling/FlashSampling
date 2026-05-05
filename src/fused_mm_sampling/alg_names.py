@@ -45,6 +45,8 @@ class FlashSamplingNames:
     fmms_helion = "FlashSampling (Helion)"
     fmms_greedy_triton = "FlashSampling Greedy"
     vllm_fmms = "vLLM + FlashSampling"
+    flashinfer_top_k_top_p_sampling_from_logits = "FI1"
+    flashinfer_sampling_from_logits = "FI2"
 
 
 S = ShortNames
@@ -56,6 +58,8 @@ FLASHSAMPLING_RENAMES: dict[str, str] = {
     L.fmms_triton: F.fmms_triton,
     L.fmms_helion: F.fmms_helion,
     L.fmms_greedy_triton: F.fmms_greedy_triton,
+    L.flashinfer_top_k_top_p_sampling_from_logits: F.flashinfer_top_k_top_p_sampling_from_logits,
+    L.flashinfer_sampling_from_logits: F.flashinfer_sampling_from_logits,
 }
 
 # Maps provider keys (used in get_sampler()) to display names (used in plots/CSVs).

@@ -186,26 +186,38 @@ def plot_relative_performance(
 ) -> None:
     plot_df = bdf_rel_long.query("provider in @show_providers")
     palette = _provider_palette(show_providers)
-    ax = sns.barplot(
+    _, ax = plt.subplots(figsize=(10, 6))
+    sns.barplot(
         plot_df,
         x="n_hidden_states",
         y="relative-perf",
         hue="provider",
         hue_order=show_providers,
         palette=palette,
+        ax=ax,
     )
     hatches = [PROVIDER_HATCHES.get(p, "") for p in show_providers]
     for container, hatch in zip(ax.containers, hatches):
         for bar in container:
             bar.set_hatch(hatch)
     ax.grid(alpha=0.5, axis="y")
-    ncol = 1  # min(len(show_providers), 2)
-    sns.move_legend(ax, "upper center", title="Method", bbox_to_anchor=(0.5, 1.35), ncol=ncol)
+    fontsize = 18
+    sns.move_legend(
+        ax,
+        "upper center",
+        title="Method",
+        bbox_to_anchor=(0.5, 1.3),
+        ncol=len(show_providers),
+        fontsize=fontsize,
+        title_fontsize=fontsize,
+    )
     for handle, hatch in zip(ax.get_legend().legend_handles, hatches):
         handle.set_hatch(hatch)
-    ax.set_xlabel("Batch Size")
-    ax.set_ylabel("Relative Performance")
+    ax.set_xlabel("Batch Size", fontsize=fontsize)
+    ax.set_ylabel("Relative Performance", fontsize=fontsize)
     ax.set_xticks(ax.get_xticks(), labels=bdf_rel_long["n_hidden_states"].unique().astype(int))
+    ax.yaxis.set_major_locator(plt.MultipleLocator(0.25))
+    ax.tick_params(axis="both", labelsize=fontsize)
     ax.figure.tight_layout()
     return ax
 
@@ -235,21 +247,25 @@ def assign_col_mem_throughput(df: pd.DataFrame, vocab_size: int, hidden_size: in
 def plot_memory_throughput(bdf_long: pd.DataFrame, peak_bw_gbs: float | None = None):
     palette = _provider_palette(bdf_long["provider"])
     markers = _provider_markers(bdf_long["provider"])
+    fontsize = 18
 
+    _, ax = plt.subplots(figsize=(10, 7))
     if peak_bw_gbs is not None:
         # Primary axis: Speed-of-Light %, so grid lines align with SoL ticks.
         plot_df = bdf_long.copy()
         plot_df["SoL %"] = plot_df["mem_throughput[GB/s]"] / peak_bw_gbs * 100
 
-        ax = sns.lineplot(
+        sns.lineplot(
             plot_df,
             x="n_hidden_states",
             y="SoL %",
             hue="provider",
             style="provider",
             markers=markers,
+            markersize=12,
             dashes=False,
             palette=palette,
+            ax=ax,
         )
 
         ax.axhline(100, color="black", linestyle="--", linewidth=1)
@@ -260,11 +276,11 @@ def plot_memory_throughput(bdf_long: pd.DataFrame, peak_bw_gbs: float | None = N
             transform=ax.get_yaxis_transform(),
             va="bottom",
             ha="left",
-            fontsize=9,
+            fontsize=fontsize - 2,
             color="black",
         )
 
-        ax.set_ylabel("Speed-of-Light %")
+        ax.set_ylabel("Speed-of-Light %", fontsize=fontsize)
         ax.set_ylim(bottom=0, top=110)
         ax.yaxis.set_minor_locator(plt.FixedLocator([10, 30, 50, 70, 90]))
 
@@ -276,28 +292,40 @@ def plot_memory_throughput(bdf_long: pd.DataFrame, peak_bw_gbs: float | None = N
                 lambda gbs: gbs / peak_bw_gbs * 100,
             ),
         )
-        ax2.set_ylabel("Memory Throughput (GB/s)")
+        ax2.set_ylabel("Memory Throughput (GB/s)", fontsize=fontsize)
+        ax2.tick_params(axis="y", labelsize=fontsize)
     else:
-        ax = sns.lineplot(
+        sns.lineplot(
             bdf_long,
             x="n_hidden_states",
             y="mem_throughput[GB/s]",
             hue="provider",
             style="provider",
             markers=markers,
+            markersize=12,
             dashes=False,
             palette=palette,
+            ax=ax,
         )
-        ax.set_ylabel("Memory Throughput (GB/s)")
+        ax.set_ylabel("Memory Throughput (GB/s)", fontsize=fontsize)
 
     ax.set_xscale("log")
     unique_n_hidden = sorted(bdf_long["n_hidden_states"].unique())
     ax.set_xticks(unique_n_hidden, labels=[int(x) for x in unique_n_hidden])
     ax.xaxis.set_minor_locator(plt.NullLocator())
     ax.grid(alpha=0.5, which="both")
-    ax.set_xlabel("Batch Size")
+    ax.set_xlabel("Batch Size", fontsize=fontsize)
+    ax.tick_params(axis="both", labelsize=fontsize)
 
-    sns.move_legend(ax, "upper center", title="Method", bbox_to_anchor=(0.5, 1.35), ncol=2)
+    sns.move_legend(
+        ax,
+        "upper center",
+        title="Method",
+        bbox_to_anchor=(0.5, 1.3),
+        ncol=2,
+        fontsize=fontsize,
+        title_fontsize=fontsize,
+    )
 
     ax.figure.tight_layout()
     return ax
@@ -317,7 +345,8 @@ def plot_roofline(
     df["ai"] = df["flops"] / df["bytes"]  # arithmetic intensity (FLOP/byte)
     df["achieved_tflops"] = df["flops"] / (df["time[ms]"] / 1000) / 1e12
 
-    fig, ax = plt.subplots(figsize=(7, 4))
+    fig, ax = plt.subplots(figsize=(8, 6), layout="constrained")
+    fontsize = 18
 
     # Roofline ceiling
     ridge_ai = peak_compute_tflops / (peak_bw_gbs / 1000)  # TFLOP/s / (TB/s) = FLOP/byte
@@ -327,7 +356,7 @@ def plot_roofline(
     mem_ceiling = peak_bw_gbs / 1000 * ai_range  # TB/s * FLOP/byte = TFLOP/s
     compute_ceiling = np.full_like(ai_range, peak_compute_tflops)
     roofline = np.minimum(mem_ceiling, compute_ceiling)
-    ax.plot(ai_range, roofline, color="black", linewidth=2, label="Roofline", zorder=1)
+    ax.plot(ai_range, roofline, color="black", linewidth=2, label="_nolegend_", zorder=1)
 
     # Ridge point annotation
     ax.axvline(ridge_ai, color="gray", linestyle=":", linewidth=0.8, alpha=0.6)
@@ -335,7 +364,7 @@ def plot_roofline(
         f"Ridge: AI={ridge_ai:.0f}",
         xy=(ridge_ai, peak_compute_tflops),
         xytext=(ridge_ai * 1.3, peak_compute_tflops * 0.7),
-        fontsize=10,
+        fontsize=fontsize - 4,
         color="gray",
         arrowprops=dict(arrowstyle="->", color="gray", lw=0.8),
     )
@@ -350,6 +379,7 @@ def plot_roofline(
             pdf["ai"],
             pdf["achieved_tflops"],
             marker=PROVIDER_MARKERS.get(provider, "o"),
+            markersize=10,
             label=provider,
             color=color,
             zorder=3,
@@ -363,18 +393,25 @@ def plot_roofline(
                     xy=(row["ai"], row["achieved_tflops"]),
                     xytext=(5, -10),
                     textcoords="offset points",
-                    fontsize=10,
+                    fontsize=fontsize - 4,
                     color="black",
                 )
 
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_xlabel("Arithmetic Intensity (FLOP/byte)")
-    ax.set_ylabel("Achieved Performance (TFLOP/s)")
+    ax.set_xlabel("Arithmetic Intensity (FLOP/byte)", fontsize=fontsize)
+    ax.set_ylabel("Achieved Performance (TFLOP/s)", fontsize=fontsize)
     ax.minorticks_off()
     ax.grid(True, alpha=0.3, which="both")
-    ax.legend(loc="lower right", fontsize=9)
-    fig.tight_layout()
+    ax.tick_params(axis="both", labelsize=fontsize)
+    ax.legend(
+        loc="lower center",
+        title="Method",
+        bbox_to_anchor=(0.5, 1.02),
+        ncol=2,
+        fontsize=fontsize,
+        title_fontsize=fontsize,
+    )
     return ax
 
 
@@ -405,6 +442,11 @@ def plot_relative_performance_from_wide(
     bdf_rel_long = bdf_rel.melt(
         id_vars=["n_hidden_states"], var_name="provider", value_name="relative-time"
     )
+
+    # discard Batch Sizes
+    # discard_batch_sizes = [2, 8]  # noqa: F841
+    # bdf_rel_long = bdf_rel_long.query("~n_hidden_states.isin(@discard_batch_sizes)")
+
     bdf_rel_long["relative-perf"] = 1 / bdf_rel_long["relative-time"]
     bdf_rel_long.round(3).to_csv(
         csv_folder / f"relative-performance-vs-{ref_slug}.csv", index=False
@@ -477,15 +519,19 @@ def create_and_triton_bench_plots(
                     peak_bw_gbs,
                     peak_compute_tflops,
                 )
-                ax.figure.savefig(case_folder / f"roofline.{fmt}", dpi=300, bbox_inches="tight")
+                ax.figure.savefig(case_folder / f"roofline.{fmt}", dpi=300)
                 plt.close(ax.figure)
 
         FMMS = LongNames.fmms_triton  # noqa: N806
-        if use_name_flashsampling:
-            FMMS = FLASHSAMPLING_RENAMES[FMMS]  # noqa: N806
-        NAIVE = LongNames.multinomial_sampling_compiled  # noqa: N806
         FI_SAMPLE = LongNames.flashinfer_sampling_from_logits  # noqa: N806
         FI_TOPK = LongNames.flashinfer_top_k_top_p_sampling_from_logits  # noqa: N806
+
+        if use_name_flashsampling:
+            FMMS = FLASHSAMPLING_RENAMES[FMMS]  # noqa: N806
+            FI_SAMPLE = FLASHSAMPLING_RENAMES[FI_SAMPLE]  # noqa: N806
+            FI_TOPK = FLASHSAMPLING_RENAMES[FI_TOPK]  # noqa: N806
+
+        NAIVE = LongNames.multinomial_sampling_compiled  # noqa: N806
 
         rel_plots = [
             # (1) FMMS vs PyTorch Compiled (baseline)
