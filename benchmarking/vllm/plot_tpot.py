@@ -33,9 +33,16 @@ MODELS = [
     "Qwen3-8B",
     "Qwen3-32B",
     "gpt-oss-120b",
+    "Llama-3.3-70B-Instruct",
 ]
 
 MAX_CONCURRENCY = 64
+
+
+def tp_from_dir(results_dir: Path) -> int:
+    """Parse the TP value out of the results dir name (e.g. ...-tp2). Defaults to 1."""
+    m = re.search(r"-tp(\d+)(?:[-_].*)?$", results_dir.name)
+    return int(m.group(1)) if m else 1
 
 
 def resolve_model_dirs(results_dir: Path, model: str) -> list[Path]:
@@ -116,6 +123,7 @@ def paired_speedups(model_dirs: list[Path], max_concurrency: int) -> pd.DataFram
 # ---------------------------------------------------------------------------
 
 FIGSIZE = (6.4, 5)
+TPOT_FIGSIZE = (6.0, 5)
 DOT_SIZE = 50
 DOT_ALPHA = 0.4
 
@@ -169,14 +177,15 @@ def plot_tpots(
     df: pd.DataFrame, results_dir: Path, imgs_dir: Path, fmms_name: str, fmt: str = "png"
 ):
     tpots_dir = imgs_dir / "tpots"
-    tpots_dir.mkdir(parents=True, exist_ok=True)
+    tp = tp_from_dir(results_dir)
 
     for model in MODELS:
         mdf = df.query("model == @model")
         if mdf.empty:
             continue
 
-        fig, ax = plt.subplots(figsize=FIGSIZE)
+        tpots_dir.mkdir(parents=True, exist_ok=True)
+        fig, ax = plt.subplots(figsize=TPOT_FIGSIZE)
         series = []
         for variant in [BASELINE_NAME, fmms_name]:
             vdf = mdf.query("variant == @variant")
@@ -185,8 +194,18 @@ def plot_tpots(
         _plot_scatter_line(
             ax, series=series, x_col="max_concurrency", y_col="y", ylabel="Median TPOT (ms)"
         )
-        ax.set_title(model)
+        ax.set_title(f"{model} TP{tp}")
         ax.legend(title="Method")
+        ax.annotate(
+            "lower is better",
+            xy=(0.98, 0.02),
+            xycoords="axes fraction",
+            ha="right",
+            va="bottom",
+            fontsize=14,
+            color="gray",
+            style="italic",
+        )
 
         fig.tight_layout()
         out = tpots_dir / f"{model}.{fmt}"
@@ -204,7 +223,7 @@ def plot_speedups(
     results_dir: Path, imgs_dir: Path, max_concurrency: int, fmms_name: str, fmt: str = "png"
 ):
     speedups_dir = imgs_dir / "speedups"
-    speedups_dir.mkdir(parents=True, exist_ok=True)
+    tp = tp_from_dir(results_dir)
 
     for model in MODELS:
         model_dirs = resolve_model_dirs(results_dir, model)
@@ -214,6 +233,7 @@ def plot_speedups(
         if sdf.empty:
             continue
 
+        speedups_dir.mkdir(parents=True, exist_ok=True)
         fig, ax = plt.subplots(figsize=FIGSIZE)
         _plot_scatter_line(
             ax,
@@ -223,7 +243,7 @@ def plot_speedups(
             ylabel="Speedup (%)",
             hline=0,
         )
-        ax.set_title(model)
+        ax.set_title(f"{model} TP{tp}")
 
         fig.tight_layout()
         out = speedups_dir / f"{model}.{fmt}"
@@ -237,9 +257,11 @@ def plot_speedups(
 # ---------------------------------------------------------------------------
 
 
-def plot_strips(df: pd.DataFrame, imgs_dir: Path, fmms_name: str, fmt: str = "png"):
+def plot_strips(
+    df: pd.DataFrame, results_dir: Path, imgs_dir: Path, fmms_name: str, fmt: str = "png"
+):
     strips_dir = imgs_dir / "strips"
-    strips_dir.mkdir(parents=True, exist_ok=True)
+    tp = tp_from_dir(results_dir)
 
     variants = [BASELINE_NAME, fmms_name]
 
@@ -253,6 +275,7 @@ def plot_strips(df: pd.DataFrame, imgs_dir: Path, fmms_name: str, fmt: str = "pn
         n_conc = len(concurrencies)
         n_variants = len(present_variants)
 
+        strips_dir.mkdir(parents=True, exist_ok=True)
         fig, ax = plt.subplots(figsize=(max(8, n_conc * 1.8), 5))
 
         width = 0.3
@@ -324,7 +347,7 @@ def plot_strips(df: pd.DataFrame, imgs_dir: Path, fmms_name: str, fmt: str = "pn
         ax.set_xticklabels([str(int(c)) for c in concurrencies])
         ax.set_xlabel("Batch Size")
         ax.set_ylabel("Median TPOT (ms)")
-        ax.set_title(f"E2E Speedups for {model}")
+        ax.set_title(f"E2E Speedups for {model} TP{tp}")
         ax.grid(axis="y", alpha=0.3)
 
         if legend_handles:
@@ -366,8 +389,9 @@ def main():
     fmms_name = VLLM_FLASHSAMPLING_RENAMES[FMMS_NAME] if args.use_name_flashsampling else FMMS_NAME
 
     results_dir = args.results_dir
+    if not results_dir.exists():
+        raise SystemExit(f"results-dir does not exist: {results_dir}")
     imgs_dir = results_dir / "imgs"
-    imgs_dir.mkdir(parents=True, exist_ok=True)
 
     sns.set_context("talk")
     df = load_all_data(results_dir, fmms_name)
@@ -375,7 +399,7 @@ def main():
 
     plot_tpots(df, results_dir, imgs_dir, fmms_name, fmt=args.fmt)
     plot_speedups(results_dir, imgs_dir, MAX_CONCURRENCY, fmms_name, fmt=args.fmt)
-    plot_strips(df, imgs_dir, fmms_name, fmt=args.fmt)
+    plot_strips(df, results_dir, imgs_dir, fmms_name, fmt=args.fmt)
 
 
 if __name__ == "__main__":

@@ -139,6 +139,9 @@ plot-all:
 plot-vllm-bench:
 	python benchmarking/vllm/plot_tpot.py --results-dir $(VLLM_BENCH_DIR) --fmt pdf --use-name-flashsampling=1
 
+plot-vllm-bench-tp2:
+	$(MAKE) plot-vllm-bench N_PROCS=2
+
 plot-tp-scaling:
 	python benchmarking/plot_tp_scaling.py --gpu $(GPU) --bench_fn own --case large
 
