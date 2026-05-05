@@ -92,6 +92,7 @@ class Args:
     variants: str = ""  # comma-separated, e.g. "baseline,fmms-triton". Empty = all.
     bench_params_json: str = ""  # JSON string with bench params (read from file locally)
     resume_experiment: str = ""  # if set, --resume into <out_dir>/<this name>
+    tensor_parallel_size: int = 1
 
 
 class Config(ModalEnvConfig):
@@ -122,6 +123,11 @@ def function(args: Args):
     params = json.loads(args.bench_params_json)
     num_runs = 1 if is_quick else args.num_runs
     enforce_eager = "--enforce-eager" if is_quick else ""
+    tp_flag = (
+        f"--tensor-parallel-size {args.tensor_parallel_size}"
+        if args.tensor_parallel_size > 1
+        else ""
+    )
 
     if args.variants:
         variant_keys = [v.strip() for v in args.variants.split(",")]
@@ -138,11 +144,9 @@ def function(args: Args):
 
             env_prefix = " ".join(f"{k}={v}" for k, v in env_vars.items())
             if env_prefix:
-                serve_cmd = (
-                    f"env {env_prefix} vllm serve {args.model} {SERVE_FLAGS} {enforce_eager}"
-                )
+                serve_cmd = f"env {env_prefix} vllm serve {args.model} {SERVE_FLAGS} {enforce_eager} {tp_flag}"
             else:
-                serve_cmd = f"vllm serve {args.model} {SERVE_FLAGS} {enforce_eager}"
+                serve_cmd = f"vllm serve {args.model} {SERVE_FLAGS} {enforce_eager} {tp_flag}"
 
             resume_flags = ""
             if args.resume_experiment:
@@ -192,5 +196,6 @@ def main():
         variants=cfg.variants,
         bench_params_json=bench_params_json,
         resume_experiment=cfg.resume_experiment,
+        tensor_parallel_size=cfg.n_procs,
     )
     function.remote(args=args)

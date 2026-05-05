@@ -164,7 +164,7 @@ modal-matmul-comparison:
 # --- vLLM benchmarks on Modal ---
 VLLM_MODEL := openai/gpt-oss-120b
 VLLM_SWEEP := quick
-VLLM_VOLUME_DIR_NAME := vllm-bench-$(GPU)$(POSTFIX)
+VLLM_VOLUME_DIR_NAME := vllm-bench-$(GPU)-tp$(N_PROCS)$(POSTFIX)
 VLLM_BENCH_DIR := benchmarking/modal-results/$(VLLM_VOLUME_DIR_NAME)
 VLLM_MODEL_SLUG = $(lastword $(subst /, ,$(VLLM_MODEL)))
 VLLM_VARIANTS :=
@@ -182,11 +182,23 @@ modal-vllm-benchmark-full-qwen3-8b:
 modal-vllm-benchmark-full-qwen3-32b:
 	$(MAKE) modal-vllm-benchmark VLLM_SWEEP=all VLLM_MODEL=Qwen/Qwen3-32B
 
+modal-vllm-benchmark-full-qwen3-32b-tp2:
+	$(MAKE) modal-vllm-benchmark VLLM_SWEEP=all VLLM_MODEL=Qwen/Qwen3-32B N_PROCS=2
+
+modal-vllm-benchmark-quick-qwen3-32b-tp2:
+	$(MAKE) modal-vllm-benchmark VLLM_SWEEP=quick VLLM_MODEL=Qwen/Qwen3-32B N_PROCS=2
+
+modal-vllm-benchmark-full-llama-3.3-70b-tp2:
+	$(MAKE) modal-vllm-benchmark VLLM_SWEEP=all VLLM_MODEL=meta-llama/Llama-3.3-70B-Instruct N_PROCS=2
+
+modal-vllm-benchmark-quick-llama-3.3-70b-tp2:
+	$(MAKE) modal-vllm-benchmark VLLM_SWEEP=quick VLLM_MODEL=meta-llama/Llama-3.3-70B-Instruct N_PROCS=2
+
 modal-vllm-benchmark: modal-create-results-vllm-bench modal-get-results-vllm-bench modal-collect-results-vllm-bench
 
 modal-create-results-vllm-bench:
 	mkdir -p $(VLLM_BENCH_DIR)/$(VLLM_MODEL_SLUG)/logs
-	GPU=$(GPU) MODEL=$(VLLM_MODEL) SWEEP=$(VLLM_SWEEP) VARIANTS=$(VLLM_VARIANTS) \
+	GPU=$(GPU) N_PROCS=$(N_PROCS) MODEL=$(VLLM_MODEL) SWEEP=$(VLLM_SWEEP) VARIANTS=$(VLLM_VARIANTS) \
 	RESUME_EXPERIMENT=$(VLLM_RESUME_EXPERIMENT) \
 	TGT_DIR="/vol-fused-mm-sample/$(VLLM_VOLUME_DIR_NAME)" \
 	modal run \
