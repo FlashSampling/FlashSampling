@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+from plot_lib import minmax_skip_zero_range, read_triton_bench_csv
 from plot_styles import (
     FLASHSAMPLING_RENAMES,
     PROVIDER_COLORS,
@@ -427,25 +428,6 @@ def plot_roofline(
 
 def assign_col_samples_per_ms(df: pd.DataFrame) -> pd.DataFrame:
     return df.assign(**{"samples/ms": lambda df: df["n_hidden_states"] / df["time[ms]"]})
-
-
-def read_triton_bench_csv(path: Path) -> pd.DataFrame:
-    """Read a Triton benchmark CSV, stripping the ' (Time (ms))' column suffix."""
-    df = pd.read_csv(path)
-    df.columns = [c.removesuffix(" (Time (ms))") for c in df.columns]
-    return df
-
-
-def minmax_skip_zero_range(x: pd.Series) -> tuple[float, float]:
-    """Min-max errorbar that returns (nan, nan) when the range is zero.
-
-    Used for the reference method whose relative-perf is exactly 1.0 across
-    all runs; seaborn skips drawing the errorbar when both endpoints are nan.
-    """
-    lo, hi = x.min(), x.max()
-    if lo == hi:
-        return (np.nan, np.nan)
-    return (lo, hi)
 
 
 def plot_relative_performance_from_wide(

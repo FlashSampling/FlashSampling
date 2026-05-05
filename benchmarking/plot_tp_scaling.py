@@ -9,6 +9,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
+from plot_lib import read_triton_bench_csv
 from plot_styles import FLASHSAMPLING_RENAMES, PROVIDER_COLORS, PROVIDER_MARKERS, LongNames
 from pydantic_settings import BaseSettings
 
@@ -25,40 +26,51 @@ DEFAULT_PROVIDERS: list[str] = [
 ]
 
 
-def read_triton_bench_csv(path: Path) -> pd.DataFrame:
-    """Read a Triton benchmark CSV, stripping the ' (Time (ms))' column suffix."""
-    df = pd.read_csv(path)
-    df.columns = [c.removesuffix(" (Time (ms))") for c in df.columns]
-    return df
-
-
-def collect_long_df(
-    base_dir: Path,
-    gpu: str,
-    bench_fn: str,
-    case: str,
-    tps: list[int],
-) -> pd.DataFrame:
+def collect_long_df(args: "Args") -> pd.DataFrame:
     """Read the per-TP batch-scaling CSVs and return a long DataFrame.
 
-    Columns: tp, n_hidden_states, provider, time[ms].
+    When ``args.use_reruns`` is set, also load sibling ``{gpu}-rerun*``
+    folders so each (tp, n_hidden_states, provider) cell has multiple rows.
+    Slow-pod runs are dropped per ``args.max_slowdown`` (FMMS-Triton median
+    must be within that factor of the fastest run at the same tp).
+
+    Columns: tp, n_hidden_states, provider, time[ms], run.
     """
+    fmms = FLASHSAMPLING_RENAMES[L.fmms_triton]
+    parent = args.base_dir / "triton-bench" / args.bench_fn
     frames: list[pd.DataFrame] = []
-    for tp in tps:
-        csv = (
-            base_dir
-            / "triton-bench"
-            / bench_fn
-            / gpu
-            / f"tp{tp}"
-            / f"fused-mm-sample-batch-scaling-{case}.csv"
-        )
-        if not csv.exists():
-            raise FileNotFoundError(csv)
-        wide = read_triton_bench_csv(csv).rename(columns=FLASHSAMPLING_RENAMES)
-        long = wide.melt(id_vars=["n_hidden_states"], var_name="provider", value_name="time[ms]")
-        long["tp"] = tp
-        frames.append(long)
+    for tp in args.tps:
+        run_dirs = [parent / args.gpu]
+        if args.use_reruns:
+            run_dirs += sorted(parent.glob(f"{args.gpu}-rerun*"))
+
+        # First pass: read all and compute FMMS median per run
+        per_run: list[tuple[str, float, pd.DataFrame]] = []
+        for run_dir in run_dirs:
+            csv = run_dir / f"tp{tp}" / f"fused-mm-sample-batch-scaling-{args.case}.csv"
+            if not csv.exists():
+                if run_dir.name == args.gpu:
+                    raise FileNotFoundError(csv)
+                print(f"warn: missing {csv}")
+                continue
+            wide = read_triton_bench_csv(csv).rename(columns=FLASHSAMPLING_RENAMES)
+            fmms_med = wide[fmms].median()
+            per_run.append((run_dir.name, fmms_med, wide))
+
+        if not per_run:
+            continue
+        fastest = min(m for _, m, _ in per_run)
+        for name, fmms_med, wide in per_run:
+            slowdown = fmms_med / fastest
+            if slowdown > args.max_slowdown:
+                print(f"drop tp{tp} {name}: FMMS={fmms_med * 1000:.1f}us, {slowdown:.2f}x slower")
+                continue
+            long = wide.melt(
+                id_vars=["n_hidden_states"], var_name="provider", value_name="time[ms]"
+            )
+            long["tp"] = tp
+            long["run"] = name
+            frames.append(long)
     return pd.concat(frames, ignore_index=True)
 
 
@@ -81,6 +93,8 @@ def plot_tp_scaling(
 
     unique_tps = sorted(plot_df["tp"].unique())
 
+    lineplot_kwargs = {"estimator": "min", "errorbar": None}
+
     for ax_idx, (ax, h) in enumerate(zip(axes, h_values)):
         sub = plot_df.query("n_hidden_states == @h")
         sns.lineplot(
@@ -96,11 +110,12 @@ def plot_tp_scaling(
             dashes=False,
             ax=ax,
             palette=palette,
+            **lineplot_kwargs,
         )
 
-        # Ideal 1/TP reference, anchored at FlashSampling TP=1.
+        # Ideal 1/TP reference, anchored at FlashSampling TP=1 (min across runs).
         fs_name = FLASHSAMPLING_RENAMES[L.fmms_triton]
-        fs_tp1 = sub.query("provider == @fs_name and tp == 1")["time[us]"].iloc[0]
+        fs_tp1 = sub.query("provider == @fs_name and tp == 1")["time[us]"].min()
         ref_values = [fs_tp1 / tp for tp in unique_tps]
         ax.plot(
             unique_tps,
@@ -158,12 +173,41 @@ class Args(BaseSettings, cli_parse_args=True):
     tps: list[int] = [1, 2, 4, 8]
     h_values: list[int] = [16, 64, 256]
     out: Path = Path(__file__).parent.parent / "imgs" / "tp-scaling" / "tp-scaling.pdf"
+    use_reruns: bool = False
+    max_slowdown: float = 2.0  # drop runs whose FMMS median is more than this factor slower than the fastest at the same tp
+
+
+def write_summary_csv(long: pd.DataFrame, args: "Args") -> Path:
+    """Aggregate (provider, n_hidden_states, tp) to mean/min/max in microseconds."""
+    sel = long.query("n_hidden_states in @args.h_values and provider in @DEFAULT_PROVIDERS").copy()
+    sel["time[us]"] = sel["time[ms]"] * 1000
+    summary = (
+        sel.groupby(["provider", "n_hidden_states", "tp"])["time[us]"]
+        .agg(n_runs="count", mean_time_us="mean", min_time_us="min", max_time_us="max")
+        .round(2)
+        .reset_index()
+        .rename(
+            columns={
+                "provider": "method",
+                "n_hidden_states": "batch_size",
+                "tp": "tensor_parallel_size",
+            }
+        )
+    )
+    summary["batch_size"] = summary["batch_size"].astype(int)
+    summary = summary.sort_values(["method", "batch_size", "tensor_parallel_size"])
+    summary["range_us"] = (summary["max_time_us"] - summary["min_time_us"]).round(2)
+    csv_path = args.out.with_name("tp-scaling-runs-summary.csv")
+    summary.to_csv(csv_path, index=False)
+    return csv_path
 
 
 if __name__ == "__main__":
     args = Args()
-    long = collect_long_df(args.base_dir, args.gpu, args.bench_fn, args.case, args.tps)
+    long = collect_long_df(args)
     fig = plot_tp_scaling(long, args.h_values, DEFAULT_PROVIDERS)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(args.out, dpi=300, bbox_inches="tight")
     print(f"wrote {args.out}")
+    csv_path = write_summary_csv(long, args)
+    print(f"wrote {csv_path}")

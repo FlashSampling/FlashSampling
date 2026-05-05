@@ -9,12 +9,21 @@ import torch
 import torch.distributed as dist
 import triton
 import triton.language as tl
+from torch._dynamo.trace_rules import manual_torch_name_rule_map
+from torch._dynamo.variables.functions import UserFunctionVariable
 from torch.distributed._functional_collectives import all_gather_tensor
 
 from .alg_names import ShortNames as S
 from .tensor_parallel_reduce import allocate_symm_mem_outputs, tp_post_kernel_reduce
 from .tl_matmul import matmul
 from .tp_info import TP1, TPInfo
+
+# Workaround for https://github.com/pytorch/pytorch/issues/179722: torch 2.11's
+# dynamo skips _maybe_view_chunk_cat (called by all_gather_tensor when
+# gather_dim != 0), breaking torch.compile(fullgraph=True) on _sample_compiled
+# / greedy_sample_compiled. Upstream fix is in flight (PRs #180389, #182435);
+# patch the rule map until it lands.
+manual_torch_name_rule_map.setdefault("torch._utils._maybe_view_chunk_cat", UserFunctionVariable)
 
 
 def sample(
