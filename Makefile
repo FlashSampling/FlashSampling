@@ -126,6 +126,13 @@ diagram-v2:
 		--output $(DIAGRAM_V2_FLASHSAMPLING_PDF) $(DIAGRAM_V2_SRC).tmp
 	rm $(DIAGRAM_V2_SRC).tmp
 
+DIAGRAM_MULTIGPU_SRC := imgs/multi-gpu-comparison.drawio
+DIAGRAM_MULTIGPU_PDF := imgs/multi-gpu-comparison.pdf
+
+diagram-multi-gpu:
+	xvfb-run -a drawio --export --format pdf --border 10 \
+		--output $(DIAGRAM_MULTIGPU_PDF) $(DIAGRAM_MULTIGPU_SRC)
+
 TRITON_BENCH_TPS := 1 2
 
 plot-all:
