@@ -11,14 +11,20 @@ Both pipelines run on Modal cloud GPUs. A local NVIDIA workstation can run a sub
 
 ## 1. Prerequisites
 
-- A Modal account with access to H100, H200, B200, and B300 GPUs.
-- A HuggingFace token exported as `HF_TOKEN` (needed for gated models such as Llama-3.3-70B-Instruct).
-- Python `>=3.12`. Install dependencies into the in-repo `.venv`:
-  ```bash
-  uv sync --all-extras
-  ```
-  This installs PyTorch 2.10.0, Triton 3.6, FlashInfer 0.6.9, Helion, Modal, and the rest of the benchmarking deps from `pyproject.toml` / `uv.lock`.
-- (Optional) A local CUDA toolkit for the NCU/Proton breakdown sweeps. See `scripts/brev-bootstrap.sh`.
+1. **Python `>=3.10`.** Install dependencies into the in-repo `.venv` and activate it:
+   ```bash
+   uv sync --all-extras
+   source .venv/bin/activate    # or prepend .venv/bin to PATH
+   ```
+   This installs Modal, FlashInfer, Helion, and the rest of the benchmarking deps from `pyproject.toml` / `uv.lock`.
+   The `make` targets below invoke `modal`, `python`, and `pytest` directly, so the venv must be active (or its `bin/` on `PATH`) for them to work.
+2. **Modal account** with access to H100, H200, B200, and B300 GPUs. With the venv active, authenticate once:
+   ```bash
+   modal setup
+   ```
+   The Makefile uses a Modal volume named `fused-mm-sample`, which is created automatically on first run.
+3. **HuggingFace token** exported as `HF_TOKEN` (needed for gated models such as Llama-3.3-70B-Instruct).
+4. *(Optional)* A local CUDA toolkit for the NCU/Proton breakdown sweeps.
 
 ## 2. Software versions
 
@@ -31,7 +37,9 @@ These versions are baked into the Modal image used for all reported results:
 | Triton      | 3.6.0   |
 | FlashInfer  | 0.6.9   |
 
-Inputs and weights are BF16. Kernels are warmed up for 25 iterations before timing. Kernel timings are CUPTI medians over 100 iterations (`bench_fn=fi-cupti`). To verify the live image versions, run `make modal-versions`.
+The local `.venv` produced by `uv sync` is used only as a Modal driver and for plotting; its PyTorch and Triton versions are pinned by `uv.lock` and may differ from the table above. To verify the live Modal image versions, run `make modal-versions`.
+
+Inputs and weights are BF16. Kernels are warmed up for 25 iterations before timing. Kernel timings are CUPTI medians over 100 iterations (`bench_fn=fi-cupti`).
 
 ## 3. Kernel microbenchmarks
 
@@ -113,32 +121,11 @@ The ratio `fused-triton-ret-logits` / `fused-triton` runtimes gives Table 8's "M
 
 ## 4. End-to-end vLLM
 
-The vLLM integration lives on the `feature/fmms-sampler` branch of vLLM. The Modal image installs that version automatically. See `docs/vllm-integration.md` for branch and env-var details.
+The vLLM experiments (Tables 4, 5; Figure 6) are produced from a private vLLM fork that integrates the FlashSampling sampler.
+The fork's patch can be inspected at the anonymous mirror linked from the submission, but the Modal benchmark scripts and the fork itself are omitted from this supplemental to preserve double-blind anonymity.
+Both will be released alongside the camera-ready version after acceptance.
 
-### 4.1 TPOT sweep (Tables 4, 5; Figure 6)
-
-```bash
-# TP1, B200:
-make modal-vllm-benchmark-full-qwen3-1.7b GPU=b200
-make modal-vllm-benchmark-full-qwen3-8b   GPU=b200
-
-# TP2, B200:
-make modal-vllm-benchmark-full-qwen3-32b-tp2     GPU=b200
-make modal-vllm-benchmark-full-llama-3.3-70b-tp2 GPU=b200
-```
-
-Each sweep runs concurrency levels {1, 2, 4, 8, 16, 32, 64} with 5 runs per level for both the `baseline` and `fmms-triton` variants. Sampling parameters are `temperature=0.6, top_k=-1, top_p=1.0`. The dataset is `AI-MO/aimo-validation-aime` with `--hf-output-len 256` and `--max-model-len 1024`, prefix caching disabled.
-
-Outputs land in `benchmarking/modal-results/vllm-bench-b200-tp{1,2}/<model>/` with `baseline/`, `fmms-triton/`, `logs/`, and `results.txt`. The `results.txt` rows produce Table 5; Table 4 is the relative speedup `1 - fmms-triton / baseline`.
-
-### 4.2 TPOT plots (Figure 6)
-
-```bash
-make plot-vllm-bench       # TP1
-make plot-vllm-bench-tp2   # TP2
-```
-
-Outputs: `tpot-<model>.pdf` under `benchmarking/modal-results/vllm-bench-b200-tp{1,2}/`.
+The reported configuration was: concurrency levels {1, 2, 4, 8, 16, 32, 64} with 5 runs per level for both `baseline` and `fmms-triton` variants; sampling parameters `temperature=0.6, top_k=-1, top_p=1.0`; dataset `AI-MO/aimo-validation-aime` with `--hf-output-len 256` and `--max-model-len 1024`, prefix caching disabled.
 
 ## 5. Empirical correctness
 
@@ -159,19 +146,7 @@ make modal-pytest-distributed GPU=b200   # via Modal
 
 ### 5.2 GSM8K end-to-end accuracy
 
-The 89.4% vs. 89.6% comparison on Qwen3-1.7B / GSM8K (1,319 questions) is produced by:
-
-```bash
-cd benchmarking/vllm
-
-make eval-baseline
-make eval-baseline-fmms-params
-make eval-fmms-triton
-
-make judge   # requires OPENROUTER_API_KEY
-```
-
-Outputs go to `benchmarking/vllm/eval/{baseline,baseline-fmms-params,fmms-triton}/`. The paired bootstrap p-value (0.776) is reported by `judge_eval.py`.
+The 89.4% vs. 89.6% comparison on Qwen3-1.7B / GSM8K (1,319 questions) uses the same private vLLM fork as Section 4 to drive baseline and FlashSampling decoding, then judges answers with a separate LLM. The eval scripts depend on the fork and are omitted from this supplemental for the same anonymity reason; they will be released alongside the camera-ready.
 
 ## 6. Hardware specs (Table 6)
 
