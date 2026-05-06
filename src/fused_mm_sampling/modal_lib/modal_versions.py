@@ -9,7 +9,7 @@ app = make_app()
 def show():
     import importlib.metadata as md
 
-    for pkg in ("torch", "triton", "flashinfer-python"):
+    for pkg in ("torch", "triton", "flashinfer-python", "numpy"):
         try:
             print(f"{pkg}: {md.version(pkg)}")
         except md.PackageNotFoundError:
