@@ -8,7 +8,14 @@ from pathlib import Path
 
 import modal
 
-from .utils import ModalEnvConfig, make_app, make_volumes, set_volume_caches, volume_path
+from .utils import (
+    ModalEnvConfig,
+    make_app,
+    make_vllm_image,
+    make_volumes,
+    set_volume_caches,
+    volume_path,
+)
 
 _repo_root = Path(__file__).resolve().parents[3]
 _bench_params_dir = _repo_root / "benchmarking" / "vllm"
@@ -35,52 +42,6 @@ ALL_VARIANTS = {
         "TRITON_PRINT_AUTOTUNING": "1",
     },
 }
-
-VLLM_FORK_BRANCH = "feature/fmms-sampler"
-VLLM_FORK_SHA = "3170fdf3da4e09a76031fa515698c86d1fcbc699"
-
-
-def make_vllm_image() -> modal.Image:
-    return (
-        # Base image must match vLLM's pinned torch version (see requirements/cuda.txt
-        # in the fork: torch==2.11.0). cuda13.0 is the newest CUDA tag pytorch/pytorch
-        # publishes for 2.11.0. Because vLLM pins torch without a local version, uv
-        # treats the base image's torch==2.11.0+cu130 as satisfying the pin and skips
-        # reinstalling, so we keep cu13 throughout and the precompiled .so stays ABI-
-        # compatible.
-        modal.Image.from_registry("pytorch/pytorch:2.11.0-cuda13.0-cudnn9-devel")
-        .apt_install("git", "curl")
-        .run_commands("pip install --break-system-packages uv")
-        .run_commands(
-            f"git clone --depth 1 -b {VLLM_FORK_BRANCH}"
-            " https://github.com/tomasruizt/vllm.git /opt/vllm"
-            " && cd /opt/vllm"
-            f" && git fetch --depth 1 origin {VLLM_FORK_SHA}"
-            f" && git checkout {VLLM_FORK_SHA}",
-            # Let vLLM's resolver pick the torch version that matches the precompiled .so.
-            # Earlier we pinned torch==2.10.0 to match a 2.10.0+cu130 .so, but the upstream
-            # precompiled wheel is now built against torch 2.11.0, so any pin breaks the ABI.
-            "cd /opt/vllm && VLLM_USE_PRECOMPILED=1 uv pip install --system -e '.[bench]'",
-        )
-        .add_local_dir(
-            str(_repo_root / "src"),
-            remote_path="/opt/fused-mm-sample/src",
-            copy=True,
-            ignore=["__pycache__", "*.pyc"],
-        )
-        .add_local_file(
-            str(_repo_root / "pyproject.toml"),
-            remote_path="/opt/fused-mm-sample/pyproject.toml",
-            copy=True,
-        )
-        .add_local_file(
-            str(_repo_root / "README.md"), remote_path="/opt/fused-mm-sample/README.md", copy=True
-        )
-        .run_commands(
-            "uv pip install --system --reinstall numpy",
-            "uv pip install --system tabulate /opt/fused-mm-sample",
-        )
-    )
 
 
 @dataclass

@@ -1,7 +1,6 @@
 """Print torch / triton / flashinfer / numpy versions on the modal images."""
 
-from .modal_vllm_benchmark import make_vllm_image
-from .utils import make_app, make_image
+from .utils import make_app, make_image, make_vllm_image
 
 app = make_app()
 
