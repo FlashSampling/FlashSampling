@@ -294,7 +294,12 @@ def fused_mm_sample_triton(
         tp_rank=tp.rank,
         tp_world_size=tp.size,
         logits_out_ptr=logits_out,
-        WARP_SPECIALIZE=supports_warp_specialization(),
+        # Gate WS on having enough V tiles so the persistent loop runs more
+        # than one iteration even for the largest autotune BLOCK_SIZE_V (=2 *
+        # MIN_BLOCK_SIZE_V). On B200/Triton 3.6, NVWSInsertAref crashes when
+        # num_tiles=1 (e.g. tiny test vocabs); production V (>=128k) is far
+        # above the threshold.
+        WARP_SPECIALIZE=supports_warp_specialization() and V > 2 * MIN_BLOCK_SIZE_V,
         NUM_SMS=NUM_SMS,
         GREEDY_SAMPLING=greedy_sampling,
         RETURN_LOGITS=return_logits,

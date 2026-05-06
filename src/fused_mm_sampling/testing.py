@@ -107,7 +107,6 @@ def assert_sampling_distribution(
     vocab_size: int,
     n_hidden_states: int,
     num_samples: int = 10_000,
-    temperature_val: float = 5.0,
     tp: TPInfo = TP1,
 ) -> None:
     """Verify that a sampler produces the correct distribution.
@@ -117,7 +116,10 @@ def assert_sampling_distribution(
     theoretical softmax probabilities via a chi-squared test.
     """
     device = torch.device("cuda")
-    temperature = torch.tensor(temperature_val, device=device)
+    # Synthetic logits are arange(-V/2, V/2). Scale temperature so logits/temp
+    # stays in roughly arange(-10, 10) regardless of V; otherwise the softmax
+    # collapses to a near-one-hot at large V and chi-squared loses bins.
+    temperature = torch.tensor(vocab_size / 20.0, device=device)
 
     inputs = make_synthetic_inputs(
         vocab_size=vocab_size,
@@ -179,7 +181,9 @@ def verify_sampling_distribution_tp2() -> None:
         "flashinfer:sampling_from_logits",
         "flashinfer:top_k_top_p_sampling_from_logits",
     ]
-    for provider, vocab_size, n_hidden_states in product(providers, [100, 200, 256], [1, 2]):
+    # 512 > 2 * MIN_BLOCK_SIZE_V flips WARP_SPECIALIZE on (see core.py:297),
+    # giving us coverage of the warp-specialized lowering path.
+    for provider, vocab_size, n_hidden_states in product(providers, [100, 256, 512], [1, 2]):
         assert_sampling_distribution(provider, vocab_size, n_hidden_states, tp=tp)
         tp.rank0_print(f"✅ Passed: {provider} V={vocab_size} H={n_hidden_states}")
 
@@ -188,7 +192,7 @@ def verify_greedy_tp2() -> None:
     """Worker function for TP2 greedy tests (passed to run_maybe_distributed)."""
     set_torch_allocator_for_tma_descriptors()
     tp = TPInfo.from_world()
-    for vocab_size, n_hidden_states in product([100, 200, 256], [1, 2]):
+    for vocab_size, n_hidden_states in product([100, 256, 512], [1, 2]):
         inputs = make_synthetic_inputs(
             vocab_size=vocab_size, n_hidden_states=n_hidden_states, tp=tp
         )
