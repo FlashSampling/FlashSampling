@@ -179,6 +179,18 @@ modal-vllm-benchmark-full-gpt-oss-120b:
 modal-vllm-benchmark-full-qwen3-1.7b:
 	$(MAKE) modal-vllm-benchmark VLLM_SWEEP=all VLLM_MODEL=Qwen/Qwen3-1.7B
 
+modal-vllm-benchmark-quick-gemma-3-1b-it:
+	$(MAKE) modal-vllm-benchmark VLLM_SWEEP=quick VLLM_MODEL=google/gemma-3-1b-it
+
+modal-vllm-benchmark-full-gemma-3-1b-it:
+	$(MAKE) modal-vllm-benchmark VLLM_SWEEP=all VLLM_MODEL=google/gemma-3-1b-it
+
+modal-vllm-benchmark-full-qwen3-4b:
+	$(MAKE) modal-vllm-benchmark VLLM_SWEEP=all VLLM_MODEL=Qwen/Qwen3-4B
+
+modal-vllm-benchmark-quick-qwen3-4b:
+	$(MAKE) modal-vllm-benchmark VLLM_SWEEP=quick VLLM_MODEL=Qwen/Qwen3-4B
+
 modal-vllm-benchmark-full-qwen3-8b:
 	$(MAKE) modal-vllm-benchmark VLLM_SWEEP=all VLLM_MODEL=Qwen/Qwen3-8B
 
