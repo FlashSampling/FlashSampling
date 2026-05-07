@@ -332,7 +332,7 @@ def fused_mm_sample_triton(
     return samples  # [n_hidden_states, num_samples]
 
 
-@lru_cache
+@lru_cache(maxsize=1)
 def supports_warp_specialization_cached():
     is_cuda = triton.runtime.driver.active.get_current_target().backend == "cuda"
     supports_ws = is_cuda and torch.cuda.get_device_capability()[0] >= 9
