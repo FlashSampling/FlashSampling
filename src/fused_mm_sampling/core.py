@@ -207,6 +207,11 @@ def cdiv(n: int, div: int) -> int:
     return (n + div - 1) // div
 
 
+@lru_cache(maxsize=1)
+def num_sms_cached(device_index: int) -> int:
+    return torch.cuda.get_device_properties(device_index).multi_processor_count
+
+
 MIN_BLOCK_SIZE_V = 128
 
 
@@ -235,7 +240,7 @@ def fused_mm_sample_triton(
     # scratch from this allocator; without it Triton raises a RuntimeError at launch.
     set_torch_allocator_for_tma_descriptors_cached()
 
-    NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count  # noqa: N806
+    NUM_SMS = num_sms_cached(weights.device.index)  # noqa: N806
 
     max_grid_size_v = triton.cdiv(V, MIN_BLOCK_SIZE_V)
     if tp.size > 1:
