@@ -29,6 +29,7 @@ for _mapping in [VARIANT_COLORS, VARIANT_MARKERS]:
         _mapping[_new_key] = _mapping[_old_key]
 
 MODELS = [
+    "gemma-3-1b-it",
     "Qwen3-1.7B",
     "Qwen3-8B",
     "Qwen3-32B",
@@ -52,9 +53,9 @@ def resolve_model_dirs(results_dir: Path, model: str) -> list[Path]:
 
 
 def latest_timestamp(variant_dir: Path) -> Path:
-    dirs = sorted(d for d in variant_dir.iterdir() if d.is_dir())
+    dirs = sorted(d for d in variant_dir.iterdir() if d.is_dir() and (d / "summary.csv").exists())
     if not dirs:
-        raise FileNotFoundError(f"No runs found in {variant_dir}")
+        raise FileNotFoundError(f"No completed runs (with summary.csv) found in {variant_dir}")
     return dirs[-1]
 
 
