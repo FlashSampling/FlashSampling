@@ -57,6 +57,7 @@ def fused_mm_sample_helion(
     hidden_states: torch.Tensor,  # [H, D]
     num_samples: int,
     temperature: torch.Tensor,  # scalar (0-d)
+    **kwargs,
 ) -> torch.Tensor:
     temperature = temperature.reshape(1)  # Helion kernel needs 1D tensor for indexing
     V = weights.size(0)  # noqa: N806

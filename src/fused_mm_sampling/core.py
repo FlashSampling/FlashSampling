@@ -173,6 +173,7 @@ def sequential_sample_pt(
     hidden_states: torch.Tensor,  # [n_hidden_states, D]
     num_samples: int,
     temperature: torch.Tensor,  # scalar (0-d)
+    **kwargs,
 ):
     device = weights.device
     V, D = weights.shape  # noqa: N806
@@ -762,7 +763,7 @@ def get_sampler(provider: str, weights: torch.Tensor) -> Sampler:
         case S.fused_cuda:
             from .cuda_impl import fused_mm_sample_cuda
 
-            return SimpleSampler(lambda **kwargs: fused_mm_sample_cuda(**kwargs, seed=0))
+            return SimpleSampler(fused_mm_sample_cuda)
         case S.helion:
             from .helion_impl import fused_mm_sample_helion
 

@@ -47,6 +47,7 @@ def fused_mm_sample_cuda(
     num_samples: int,
     temperature: torch.Tensor,  # scalar (0-d)
     seed: int = 0,
+    **kwargs,
 ) -> torch.Tensor:
     """Fused matrix-multiply & sampling using the CUDA C++ kernel."""
     V, D = weights.shape  # noqa: N806
