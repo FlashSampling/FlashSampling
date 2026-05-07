@@ -33,7 +33,7 @@ from fused_mm_sampling.core import (
     MIN_BLOCK_SIZE_V,
     fused_mm_sample_triton_kernel,
     set_torch_allocator_for_tma_descriptors_cached,
-    supports_warp_specialization,
+    supports_warp_specialization_cached,
 )
 
 device = torch.device("cuda")
@@ -93,7 +93,7 @@ def run_proton_profile(args: Args) -> None:
         tp_rank=0,
         tp_world_size=1,
         logits_out_ptr=logits_out,
-        WARP_SPECIALIZE=supports_warp_specialization(),
+        WARP_SPECIALIZE=supports_warp_specialization_cached(),
         NUM_SMS=num_sms,
         GREEDY_SAMPLING=False,
         RETURN_LOGITS=False,

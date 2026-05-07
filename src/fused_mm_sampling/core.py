@@ -299,7 +299,7 @@ def fused_mm_sample_triton(
         # MIN_BLOCK_SIZE_V). On B200/Triton 3.6, NVWSInsertAref crashes when
         # num_tiles=1 (e.g. tiny test vocabs); production V (>=128k) is far
         # above the threshold.
-        WARP_SPECIALIZE=supports_warp_specialization() and V > 2 * MIN_BLOCK_SIZE_V,
+        WARP_SPECIALIZE=supports_warp_specialization_cached() and V > 2 * MIN_BLOCK_SIZE_V,
         NUM_SMS=NUM_SMS,
         GREEDY_SAMPLING=greedy_sampling,
         RETURN_LOGITS=return_logits,
@@ -328,7 +328,7 @@ def fused_mm_sample_triton(
 
 
 @lru_cache
-def supports_warp_specialization():
+def supports_warp_specialization_cached():
     is_cuda = triton.runtime.driver.active.get_current_target().backend == "cuda"
     supports_ws = is_cuda and torch.cuda.get_device_capability()[0] >= 9
     print("Supports warp specialization:", supports_ws)
