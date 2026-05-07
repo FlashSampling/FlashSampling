@@ -76,6 +76,7 @@ The blog uses both "large" (V=128,256, d=8,192) and "small" (V=151,936, d=4,096)
 ## Triton TMA (Tensor Memory Access) pitfalls
 
 See [docs/triton-tma-pitfalls.md](docs/triton-tma-pitfalls.md). Key points: innermost dim must be 16-byte aligned, `tl.dot(a, b.T)` fails with TMA blocks, Triton enforces `strides[-1] == 1`.
+`set_torch_allocator_for_tma_descriptors_cached()` is called by `fused_mm_sample_triton()`, so clients that use the sampler/wrapper APIs do not need to call it directly. Keep direct calls only for raw TMA kernel launch paths that bypass the wrapper.
 
 ## Findings
 

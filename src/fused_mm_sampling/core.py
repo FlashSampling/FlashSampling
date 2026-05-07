@@ -232,9 +232,8 @@ def fused_mm_sample_triton(
 
     # The kernel uses TMA descriptors which need a runtime allocator. Some
     # autotuner configs (notably the ones picked on B200/sm_100) request global
-    # scratch from this allocator; without it Triton raises a RuntimeError at
-    # launch. set_allocator is idempotent, so calling it on every launch is fine.
-    set_torch_allocator_for_tma_descriptors()
+    # scratch from this allocator; without it Triton raises a RuntimeError at launch.
+    set_torch_allocator_for_tma_descriptors_cached()
 
     NUM_SMS = torch.cuda.get_device_properties("cuda").multi_processor_count  # noqa: N806
 
@@ -626,7 +625,8 @@ def _gumbel_noise(seed, pid_v, pid_h, sample_idx, noise_offsets):
     )
 
 
-def set_torch_allocator_for_tma_descriptors():
+@lru_cache(maxsize=1)
+def set_torch_allocator_for_tma_descriptors_cached():
     """From https://triton-lang.org/main/python-api/generated/triton.language.make_tensor_descriptor.html"""
     # TMA descriptors require a global memory allocation
     triton.set_allocator(alloc_on_cuda)

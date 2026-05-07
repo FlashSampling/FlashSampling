@@ -7,7 +7,6 @@ import torch
 from ..core import (
     get_sampler,
     sample,
-    set_torch_allocator_for_tma_descriptors,
 )
 from ..testing import shard_weights
 from ..tp_info import TP1, TPInfo, run_maybe_distributed
@@ -23,7 +22,6 @@ from .triton_benchmark_lib import (
 )
 
 device = torch.device("cuda")
-set_torch_allocator_for_tma_descriptors()
 
 
 class CliArgs(Args, cli_parse_args=True):

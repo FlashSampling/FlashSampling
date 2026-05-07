@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from scipy.stats import chisquare
 
-from .core import get_sampler, set_torch_allocator_for_tma_descriptors
+from .core import get_sampler
 from .tp_info import TP1, TPInfo
 
 
@@ -172,7 +172,6 @@ def verify_correctness_tp2() -> None:
 
 def verify_sampling_distribution_tp2() -> None:
     """Worker function for TP2 sampling distribution tests (passed to run_maybe_distributed)."""
-    set_torch_allocator_for_tma_descriptors()
     tp = TPInfo.from_world()
     providers = [
         "fused-triton",
@@ -190,7 +189,6 @@ def verify_sampling_distribution_tp2() -> None:
 
 def verify_greedy_tp2() -> None:
     """Worker function for TP2 greedy tests (passed to run_maybe_distributed)."""
-    set_torch_allocator_for_tma_descriptors()
     tp = TPInfo.from_world()
     for vocab_size, n_hidden_states in product([100, 256, 512], [1, 2]):
         inputs = make_synthetic_inputs(

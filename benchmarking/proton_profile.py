@@ -32,12 +32,12 @@ from fused_mm_sampling.bench.sys_metadata import get_gpu_name
 from fused_mm_sampling.core import (
     MIN_BLOCK_SIZE_V,
     fused_mm_sample_triton_kernel,
-    set_torch_allocator_for_tma_descriptors,
+    set_torch_allocator_for_tma_descriptors_cached,
     supports_warp_specialization,
 )
 
 device = torch.device("cuda")
-set_torch_allocator_for_tma_descriptors()
+set_torch_allocator_for_tma_descriptors_cached()
 
 
 # "small" case: Qwen3-8B / Llama 3 8B dimensions
