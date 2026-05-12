@@ -13,7 +13,7 @@ We present FlashSampling, an exact sampling primitive that fuses sampling into t
 
 **Date:** February 28, 2026
 
-[[Webpage](https://flashsampling.github.io/FlashSampling)] [[Huggingface](https://huggingface.co/papers/2603.15854)] 
+[[Project Page](https://github.com/FlashSampling/FlashSampling)] [[Webpage](https://flashsampling.github.io/FlashSampling)] [[Huggingface](https://huggingface.co/papers/2603.15854)] 
 
 ![](./FlashSampling.png) 
 
