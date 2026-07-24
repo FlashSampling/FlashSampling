@@ -1,7 +1,3 @@
-from pathlib import Path
-
-from ..bench.speed_test import run_speed_test
-from ..bench.triton_benchmark_lib import Args
 from .utils import (
     ModalEnvConfig,
     make_app,
@@ -16,19 +12,36 @@ app = make_app()
 
 
 @app.function(gpu=cfg.gpu_spec, image=make_image(), volumes=make_volumes(), timeout=cfg.timeout)
-def speed_test(args: Args):
+def speed_test(
+    n_hidden_states: int,
+    n_procs: int,
+    name: str | None,
+    bench_fn: str,
+    case: str,
+):
+    from pathlib import Path
+
+    from ..bench.speed_test import run_speed_test
+    from ..bench.triton_benchmark_lib import Args
+
     set_volume_caches()
+    args = Args(
+        n_hidden_states=n_hidden_states,
+        n_procs=n_procs,
+        name=name,
+        bench_fn=bench_fn,
+        case=case,
+        tgt_dir=Path(volume_path) / "speed-test",
+    )
     run_speed_test(args)
 
 
 @app.local_entrypoint()
 def main():
-    args = Args(
+    speed_test.remote(
         n_hidden_states=cfg.n_hidden_states,
         n_procs=cfg.n_procs,
         name=cfg.name,
         bench_fn=cfg.bench_fn,
         case=cfg.case,
-        tgt_dir=Path(volume_path) / "speed-test",
     )
-    speed_test.remote(args=args)

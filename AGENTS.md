@@ -72,6 +72,7 @@ The blog uses both "large" (V=128,256, d=8,192) and "small" (V=151,936, d=4,096)
 
 - Use the `.venv` in the repo root (not system Python). Run tests/scripts with `.venv/bin/python` or `.venv/bin/pytest`.
 - **Save all learnings in this file (`CLAUDE.md`), not in `~/.claude/` MEMORY.md.** The `~/.claude/` directory is local to the server and will be lost when switching machines. This file is checked into git and travels with the code.
+- **Keep Modal submission modules CPU-importable.** Import GPU-only runtime dependencies such as Torch, Triton, FlashInfer, and benchmark modules inside the remote function. Pass primitive serializable arguments from the local entrypoint and construct runtime argument objects inside the Modal container.
 - Brev machine quirks and CUDA toolkit setup: see [docs/brev-environment.md](docs/brev-environment.md).
 
 ## Triton TMA (Tensor Memory Access) pitfalls

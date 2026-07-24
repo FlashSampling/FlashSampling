@@ -14,7 +14,8 @@ import os
 import torch
 import torch.distributed as dist
 
-from fused_mm_sampling import TPInfo, fused_mm_sample_triton
+from fused_mm_sampling.core import fused_mm_sample_triton
+from fused_mm_sampling.tp_info import TPInfo
 from fused_mm_sampling.testing import shard_weights
 
 

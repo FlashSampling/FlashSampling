@@ -33,7 +33,7 @@ For a complete working example, see [`examples/basic_usage.py`](examples/basic_u
 The basic usage pattern:
 
 ```python
-from fused_mm_sampling import fused_mm_sample_triton
+from fused_mm_sampling.core import fused_mm_sample_triton
 
 samples = fused_mm_sample_triton(
     weights=weights,        # [vocab_size, hidden_size]

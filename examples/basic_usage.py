@@ -1,6 +1,6 @@
 import os
 
-from fused_mm_sampling import fused_mm_sample_triton
+from fused_mm_sampling.core import fused_mm_sample_triton
 
 os.environ["TRITON_PRINT_AUTOTUNING"] = "1"
 
