@@ -8,8 +8,14 @@ brev-create:  # Then run scripts/brev-bootstrap.sh on the instance
 pytest-distributed:
 	FMMS_TEST_DISTRIBUTED=1 pytest -s tests/test_core.py::test_sampling_distribution_tp2
 
+modal-verify-correctness-tp1:
+	$(MAKE) modal-pytest-distributed N_PROCS=1
+
 modal-pytest-distributed:
-	GPU=$(GPU) modal run -m src.fused_mm_sampling.modal_lib.modal_pytest_distributed
+	mkdir -p benchmarking/modal-results/pytest/$(GPU)/tp$(N_PROCS)
+	GPU=$(GPU) N_PROCS=$(N_PROCS) \
+		modal run -m src.fused_mm_sampling.modal_lib.modal_pytest_distributed 2>&1 | \
+		tee benchmarking/modal-results/pytest/$(GPU)/tp$(N_PROCS)/sampling-distribution.txt
 
 modal-versions:
 	modal run -m src.fused_mm_sampling.modal_lib.modal_versions

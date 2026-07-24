@@ -1,9 +1,9 @@
-# B200 + Triton 3.6 + warp specialization + single-tile persistent loop = compiler crash
+# B200 + Triton 3.6 + warp specialization on correctness-test shapes = compiler crash
 
 ## Symptom
 
 `make modal-pytest-distributed` (default `GPU=b200`) failed in both ranks during
-the very first kernel compile of `verify_sampling_distribution_tp2`:
+the very first kernel compile of `verify_sampling_distribution_tp`:
 
 ```
 /root/src/fused_mm_sampling/core.py:454:0: error: Failures have been detected
@@ -16,7 +16,7 @@ RuntimeError: PassManager::run failed
 
 `make modal-speed-test` ran clean on the same image.
 
-## Root cause
+## Observed trigger
 
 The chi-squared TP2 test calls the kernel with synthetic shapes from
 `make_synthetic_inputs` in `src/fused_mm_sampling/testing.py`:
@@ -26,38 +26,44 @@ With `BLOCK_SIZE_V=128, BLOCK_SIZE_H=16` the persistent kernel sees
 `num_pid_v=1, num_pid_h=1, num_tiles=1` and the host-side grid is
 `min(NUM_SMS, num_tiles)=1`. The persistent loop becomes a single-iteration
 `scf.for ... step=148` and `tl.range(..., warp_specialize=True)` (`core.py:521`)
-asks Triton 3.6's `NVWSInsertAref` pass to lower it. That lowering crashes on
-B200 (sm_100). Bumping `D` (10 -> 64, padded to 72) gave the matmul a second
-D-step but did not move the needle - the trigger is the single-tile persistent
-loop, not the small D.
+asks Triton 3.6's `NVWSInsertAref` pass to lower it.
+That lowering crashes on B200 (sm_100).
+Bumping `D` (10 -> 64, padded to 72) gave the matmul a second D-step but did not fix the failure.
+
+The original vocabulary guard disabled warp specialization for `V <= 256`.
+After adding `V=512` to the test, the TP1 run passed V=100 and V=256 but failed at `V=512, H=1, num_samples=10_000` in the same `NVWSInsertAref` pass.
+That shape has 2--4 tiles depending on `BLOCK_SIZE_V`, so `num_tiles=1` is not a complete characterization of the trigger.
+Both failures combine a small shape, warp specialization, and the compile-time `num_samples=10_000` loop used by the distribution test.
+The failure occurs during compilation before any samples are generated.
 
 `make modal-speed-test` does not hit this because production shapes
 (V >= 128k, D in {4096, 8192}) produce hundreds of tiles.
 
-## Fix
+## Workaround
 
-Gate `WARP_SPECIALIZE` on having enough V tiles for the largest autotune
-`BLOCK_SIZE_V` (`2 * MIN_BLOCK_SIZE_V = 256`) to give >= 1 V tile, applied at
-`src/fused_mm_sampling/core.py:297`:
+Restrict warp specialization to the production sampling path, which requests one sample per row:
 
 ```python
-WARP_SPECIALIZE=supports_warp_specialization() and V > 2 * MIN_BLOCK_SIZE_V,
+WARP_SPECIALIZE=(
+    supports_warp_specialization_cached()
+    and num_samples == 1
+    and V > 2 * MIN_BLOCK_SIZE_V
+),
 ```
 
-Production V (>=128k) is far above 256 and keeps WS on. Tiny test vocabs
-(100, 200, 256) skip the buggy compile path and run the non-WS lowering, which
-is correct (just unoptimized for prod-sized inputs).
+Production decode keeps warp specialization because it requests one sample.
+The chi-squared test requests 10,000 samples and uses the non-WS lowering.
 
 ## Verification
 
 - Local RTX 3090 (cc 8.6, WS unavailable): `pytest tests/test_core.py` -
   95 passed, 2 skipped (TP2 cases). No regressions.
-- Modal B200 x2: `make modal-pytest-distributed` - all 36 cases pass
-  (5 providers x 3 vocabs x 2 H plus 6 greedy).
+- The earlier vocabulary-only guard passed Modal B200 x2 before `V=512` was added to the test.
+- Modal B200 TP1: `make modal-verify-correctness-tp1` passed all 30 distribution checks (5 providers x 3 vocabularies x 2 H) and all 6 greedy checks, including FMMS at `V=512`.
 
 ## What did not work
 
 - Bumping `make_synthetic_inputs(hidden_size=10 -> 64)`: D went from 16 to 72
   (one bias column + TMA align), still crashed. Reverted.
-- Increasing `vocab_size` would also work, but it skews the chi-squared test
-  away from the small-bin diversity it needs.
+- The `V > 2 * MIN_BLOCK_SIZE_V` guard does not cover `V=512`.
+- Increasing `vocab_size` alone does not characterize the trigger because `V=512` still crashes.

@@ -4,7 +4,7 @@ import sys
 
 from .utils import ModalEnvConfig, make_app, make_image, make_volumes, set_volume_caches
 
-cfg = ModalEnvConfig(n_procs=2)
+cfg = ModalEnvConfig()
 app = make_app()
 
 
@@ -19,7 +19,7 @@ def modal_pytest_distributed():
             "-m",
             "torch.distributed.run",
             "--standalone",
-            "--nproc_per_node=2",
+            f"--nproc_per_node={cfg.n_procs}",
             "-m",
             "src.fused_mm_sampling.modal_lib.modal_pytest_distributed_worker",
         ],

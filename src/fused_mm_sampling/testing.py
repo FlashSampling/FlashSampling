@@ -159,19 +159,19 @@ def assert_sampling_distribution(
         )
 
 
-def verify_correctness_tp2() -> None:
+def verify_correctness_tp() -> None:
     tp = TPInfo.from_world()
-    tp.rank0_print("=== test_sampling_distribution_tp2 ===")
-    verify_sampling_distribution_tp2()
+    tp.rank0_print("=== verify_sampling_distribution_tp ===")
+    verify_sampling_distribution_tp()
 
-    tp.rank0_print("\n=== test_greedy_tp2 ===")
-    verify_greedy_tp2()
+    tp.rank0_print("\n=== verify_greedy_tp ===")
+    verify_greedy_tp()
 
     tp.rank0_print("\nAll distributed tests passed.")
 
 
-def verify_sampling_distribution_tp2() -> None:
-    """Worker function for TP2 sampling distribution tests (passed to run_maybe_distributed)."""
+def verify_sampling_distribution_tp() -> None:
+    """Verify sampling distributions for the initialized tensor-parallel world."""
     tp = TPInfo.from_world()
     providers = [
         "fused-triton",
@@ -187,8 +187,8 @@ def verify_sampling_distribution_tp2() -> None:
         tp.rank0_print(f"✅ Passed: {provider} V={vocab_size} H={n_hidden_states}")
 
 
-def verify_greedy_tp2() -> None:
-    """Worker function for TP2 greedy tests (passed to run_maybe_distributed)."""
+def verify_greedy_tp() -> None:
+    """Verify greedy sampling for the initialized tensor-parallel world."""
     tp = TPInfo.from_world()
     for vocab_size, n_hidden_states in product([100, 256, 512], [1, 2]):
         inputs = make_synthetic_inputs(
