@@ -255,7 +255,7 @@ def fused_mm_sample_triton(
     else:
         maxs = torch.empty(
             (num_samples, max_grid_size_v, H),
-            dtype=torch.bfloat16,
+            dtype=torch.float32,
             device=weights.device,
         )
         maxs_idx = torch.empty_like(maxs, dtype=torch.long)
@@ -605,7 +605,7 @@ def fused_mm_sample_triton_kernel(
                 )
                 for peer_rank in tl.static_range(0, tp_world_size):
                     peer_base = tl.load(buffer_ptrs + peer_rank)
-                    peer_maxs_ptr = peer_base.to(tl.pointer_type(tl.bfloat16))
+                    peer_maxs_ptr = peer_base.to(tl.pointer_type(tl.float32))
                     peer_maxs_idx_ptr = peer_base.to(tl.pointer_type(tl.int64))
                     tl.store(
                         peer_maxs_ptr + source_rank_base_offset,

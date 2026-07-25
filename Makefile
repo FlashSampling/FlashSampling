@@ -11,6 +11,15 @@ pytest-distributed:
 modal-verify-correctness-tp1:
 	$(MAKE) modal-pytest-distributed N_PROCS=1
 
+modal-verify-correctness-large-vocab:
+	mkdir -p benchmarking/modal-results/pytest/$(GPU)/tp1
+	GPU=$(GPU) modal run \
+		-m src.fused_mm_sampling.modal_lib.modal_verify_correctness_large_vocab \
+		--vocab-size $(VOCAB_SIZE) \
+		--num-samples $(NUM_SAMPLES) \
+		--samples-per-call $(SAMPLES_PER_CALL) 2>&1 | \
+		tee benchmarking/modal-results/pytest/$(GPU)/tp1/large-vocab-v$(VOCAB_SIZE)-n$(NUM_SAMPLES).txt
+
 modal-pytest-distributed:
 	mkdir -p benchmarking/modal-results/pytest/$(GPU)/tp$(N_PROCS)
 	GPU=$(GPU) N_PROCS=$(N_PROCS) \
@@ -32,6 +41,9 @@ CASE := all
 NAME := default
 DISABLE_COMPILE := 0
 BENCH_FN := fi-cupti
+VOCAB_SIZE := 32768
+NUM_SAMPLES := 1000000
+SAMPLES_PER_CALL := 10000
 # Skip "Multinomial Sampling (Eager)" from plots (it's always slower than Compiled).
 # To include it: make plot-all SKIP_EAGER=
 SKIP_EAGER := 1

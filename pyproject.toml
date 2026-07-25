@@ -36,6 +36,7 @@ dev = [
     "matplotlib",
     "seaborn",
     "pytest",
+    "tqdm",
     "flashinfer-python",
     "modal",
     "cuda-bench",
@@ -73,4 +74,3 @@ ignore = ["E501"]  # Line too long (handled by formatter)
 "src/fused_mm_sampling/persistent_matmul.py" = ["N803", "N806", "E731"]  # Uppercase variable names are conventional in Triton kernels
 "src/fused_mm_sampling/qitra.py" = ["N803", "N806"]  # Vendored from vLLM, uppercase names are conventional in Triton kernels
 "src/fused_mm_sampling/tensor_parallel_reduce.py" = ["N803", "N806"]  # Uppercase names conventional in Triton kernels
-

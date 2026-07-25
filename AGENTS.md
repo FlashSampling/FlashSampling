@@ -74,6 +74,8 @@ The blog uses both "large" (V=128,256, d=8,192) and "small" (V=151,936, d=4,096)
 - **Save all learnings in this file (`CLAUDE.md`), not in `~/.claude/` MEMORY.md.** The `~/.claude/` directory is local to the server and will be lost when switching machines. This file is checked into git and travels with the code.
 - **Keep Modal submission modules CPU-importable.** Import GPU-only runtime dependencies such as Torch, Triton, FlashInfer, and benchmark modules inside the remote function. Pass primitive serializable arguments from the local entrypoint and construct runtime argument objects inside the Modal container.
 - Use `make modal-verify-correctness-tp1` to run the correctness checks on one Modal GPU. `modal-pytest-distributed` accepts `N_PROCS` for other world sizes. Both launch through `torchrun`, including TP1, so the worker can use `TPInfo.from_world()` with an initialized process group.
+- Use `make modal-verify-correctness-large-vocab VOCAB_SIZE=... NUM_SAMPLES=... SAMPLES_PER_CALL=...` for the TP1 large-vocabulary chi-squared check. It batches sampling, accumulates counts on GPU, reports test statistics and coverage, and passes parameters to Modal as CLI options.
+- At V=128,000 and 10M samples on B200, bfloat16 per-tile maxima caused measurable bias. Changing `maxs` to float32 passed the test (reduced chi-squared 0.99844, p=0.6503, 99.84% probability mass). The RNG now also uses separate sample streams and unique tile-element offsets to avoid collisions.
 - Brev machine quirks and CUDA toolkit setup: see [docs/brev-environment.md](docs/brev-environment.md).
 
 ## Triton TMA (Tensor Memory Access) pitfalls

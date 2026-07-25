@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from itertools import product
 
 import numpy as np
 import torch
 from scipy.stats import chisquare
+from tqdm import trange
 
 from .core import get_sampler
 from .tp_info import TP1, TPInfo
@@ -108,6 +110,10 @@ def assert_sampling_distribution(
     n_hidden_states: int,
     num_samples: int = 10_000,
     tp: TPInfo = TP1,
+    inputs: SyntheticInputs | None = None,
+    temperature: torch.Tensor | None = None,
+    print_result: bool = False,
+    samples_per_call: int | None = None,
 ) -> None:
     """Verify that a sampler produces the correct distribution.
 
@@ -116,39 +122,80 @@ def assert_sampling_distribution(
     theoretical softmax probabilities via a chi-squared test.
     """
     device = torch.device("cuda")
-    # Synthetic logits are arange(-V/2, V/2). Scale temperature so logits/temp
-    # stays in roughly arange(-10, 10) regardless of V; otherwise the softmax
-    # collapses to a near-one-hot at large V and chi-squared loses bins.
-    temperature = torch.tensor(vocab_size / 20.0, device=device)
+    if inputs is None:
+        inputs = make_synthetic_inputs(
+            vocab_size=vocab_size,
+            n_hidden_states=n_hidden_states,
+            tp=tp,
+        )
+    if temperature is None:
+        # Synthetic logits are arange(-V/2, V/2). Scale temperature so
+        # logits/temp stays in roughly arange(-10, 10) regardless of V;
+        # otherwise the softmax collapses to a near-one-hot and chi-squared
+        # loses bins.
+        temperature = torch.tensor(vocab_size / 20.0, device=device)
 
-    inputs = make_synthetic_inputs(
-        vocab_size=vocab_size,
-        n_hidden_states=n_hidden_states,
-        tp=tp,
-    )
     sampler = get_sampler(provider, weights=inputs.weights)
     sampler.prepare()
-    samples = sampler.sample(
-        weights=inputs.weights,
-        hidden_states=inputs.hidden_states,
-        num_samples=num_samples,
-        temperature=temperature,
-        tp=tp,
-        seed=tp.rank * 1_000_000,
+    samples_per_call = samples_per_call or num_samples
+    assert num_samples % samples_per_call == 0, (
+        f"num_samples={num_samples} must be divisible by samples_per_call={samples_per_call}"
     )
+    n_calls = num_samples // samples_per_call
+    if print_result:
+        print(
+            f"Drawing {num_samples} samples in {n_calls} calls "
+            f"of {samples_per_call} samples"
+        )
+    empirical_counts = torch.zeros(
+        (inputs.logits.shape[0], inputs.vocab_size),
+        dtype=torch.int64,
+        device=device,
+    )
+    sequence_offsets = (
+        torch.arange(inputs.logits.shape[0], device=device, dtype=torch.int64)[:, None]
+        * inputs.vocab_size
+    )
+    for call_idx in trange(
+        n_calls,
+        desc="Sampling batches",
+        disable=n_calls == 1,
+    ):
+        samples = sampler.sample(
+            weights=inputs.weights,
+            hidden_states=inputs.hidden_states,
+            num_samples=samples_per_call,
+            temperature=temperature,
+            tp=tp,
+            seed=tp.rank * num_samples + call_idx * samples_per_call,
+        )
+        flattened_sample_bins = (samples + sequence_offsets).flatten()
+        empirical_counts += torch.bincount(
+            flattened_sample_bins,
+            minlength=inputs.logits.shape[0] * inputs.vocab_size,
+        ).reshape_as(empirical_counts)
 
     for seq_idx in range(inputs.logits.shape[0]):
         expected_probs = (inputs.logits[seq_idx] / temperature).softmax(dim=0)
         expected_counts = (expected_probs * num_samples).cpu().numpy()
-        empirical_counts = (
-            torch.bincount(samples[seq_idx], minlength=inputs.vocab_size).float().cpu().numpy()
-        )
+        empirical_counts_seq = empirical_counts[seq_idx].float().cpu().numpy()
 
         mask = expected_counts >= 5
-        obs = empirical_counts[mask]
+        obs = empirical_counts_seq[mask]
         exp = expected_counts[mask]
+        tested_probability_mass = exp.sum() / num_samples
         exp = exp * (obs.sum() / exp.sum())
-        _, p_value = chisquare(obs, exp)
+        chi_squared, p_value = chisquare(obs, exp)
+        degrees_of_freedom = len(obs) - 1
+        reduced_chi_squared = chi_squared / degrees_of_freedom
+        if print_result:
+            print(
+                f"Chi-squared: provider={provider}, V={vocab_size}, H={n_hidden_states}, "
+                f"samples={num_samples}, tested_bins={mask.sum()}, "
+                f"tested_probability_mass={tested_probability_mass:.6f}, "
+                f"statistic={chi_squared:.3f}, df={degrees_of_freedom}, "
+                f"reduced_statistic={reduced_chi_squared:.6f}, p={p_value:.6g}"
+            )
         assert not np.isnan(p_value), (
             f"Chi-squared returned NaN for seq {seq_idx} — likely all samples "
             f"landed in a single tile. {provider} may have a masked-fill bug."
@@ -157,6 +204,47 @@ def assert_sampling_distribution(
             f"Sampling distribution mismatch for seq {seq_idx}: p={p_value:.6f}. "
             f"{provider} does not match the expected softmax distribution."
         )
+
+
+def assert_sampling_distribution_large_vocab(
+    vocab_size: int = 32_768,
+    num_samples: int = 1_000_000,
+    samples_per_call: int = 10_000,
+    hidden_size: int = 16,
+) -> None:
+    """Verify FMMS sampling against random-Gaussian logits at realistic vocabulary size."""
+
+    device = torch.device("cuda")
+    torch.manual_seed(0)
+
+    hidden_states = torch.randn(
+        (1, hidden_size),
+        dtype=torch.bfloat16,
+        device=device,
+    )
+    weights = torch.randn(
+        (vocab_size, hidden_size),
+        dtype=torch.bfloat16,
+        device=device,
+    )
+    weights.div_(math.sqrt(hidden_size))
+    inputs = SyntheticInputs(
+        weights=weights,
+        hidden_states=hidden_states,
+        logits=hidden_states.float() @ weights.float().T,
+        vocab_size=vocab_size,
+        hidden_size=hidden_size,
+    )
+    assert_sampling_distribution(
+        provider="fused-triton",
+        vocab_size=vocab_size,
+        n_hidden_states=1,
+        num_samples=num_samples,
+        inputs=inputs,
+        temperature=torch.tensor(1.0, device=device),
+        print_result=True,
+        samples_per_call=samples_per_call,
+    )
 
 
 def verify_correctness_tp() -> None:

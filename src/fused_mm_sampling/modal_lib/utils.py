@@ -47,6 +47,7 @@ def make_image():
         "nvtx",
         "llnl-hatchet",
         "scipy",
+        "tqdm",
         "'cuda-bench[cu13]'",
         "cupti-python",
     ]

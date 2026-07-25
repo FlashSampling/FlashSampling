@@ -33,7 +33,7 @@ def allocate_symm_mem_outputs(
     world_size = dist.get_world_size()
 
     n_elements = world_size * num_samples * max_grid_size_v * H
-    bytes_maxs = n_elements * 2  # bfloat16
+    bytes_maxs = n_elements * 4  # float32
     # TMA requires 128-byte aligned base addresses for tensor descriptors.
     # Align maxs_idx start to 128 bytes, expressed in int64 elements.
     offset_bytes = (bytes_maxs + 127) & ~127
@@ -46,7 +46,7 @@ def allocate_symm_mem_outputs(
     )
 
     shape = (world_size, num_samples, max_grid_size_v, H)
-    maxs = symm_mem_hdl.get_buffer(rank, shape, torch.bfloat16, storage_offset=0)
+    maxs = symm_mem_hdl.get_buffer(rank, shape, torch.float32, storage_offset=0)
     maxs_idx = symm_mem_hdl.get_buffer(
         rank,
         shape,
