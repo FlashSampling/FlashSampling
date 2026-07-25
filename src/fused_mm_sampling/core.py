@@ -576,8 +576,11 @@ def fused_mm_sample_triton_kernel(
             noise_size: tl.constexpr = BLOCK_SIZE_V * BLOCK_SIZE_H
             noise_offsets = tl.arange(0, noise_size).reshape((BLOCK_SIZE_V, BLOCK_SIZE_H))
             if not GREEDY_SAMPLING:
+                tile_noise_offsets = (
+                    (pid_v_c * num_pid_h + pid_h_c) * noise_size + noise_offsets
+                )
                 gumbel_max, gumbel_max_idx_local = tl.max(
-                    logits_blk + _gumbel_noise(seed, pid_v_c, pid_h_c, sample_idx, noise_offsets),
+                    logits_blk + _gumbel_noise(seed, sample_idx, tile_noise_offsets),
                     axis=0,
                     return_indices=True,
                 )
@@ -620,17 +623,12 @@ def fused_mm_sample_triton_kernel(
 
 
 @triton.jit
-def _gumbel_noise(seed, pid_v, pid_h, sample_idx, noise_offsets):
-    # Note: Each tile (v, h) and sample needs a different seed,
-    # otherwise they all create the same noise, leading to sampling artifacts.
-    return -tl.log(
-        -tl.log(
-            tl.rand(
-                seed + pid_v * 100 + pid_h * 1_000 + sample_idx * 10_000,
-                noise_offsets,
-            )
-        )
-    )
+def _gumbel_noise(seed, sample_idx, noise_offsets):
+    # Use the seed as the sample-stream identifier and the offset as the
+    # element identifier. Keeping these two dimensions separate avoids the
+    # collisions caused by combining sample and tile IDs with arbitrary
+    # decimal multipliers.
+    return -tl.log(-tl.log(tl.rand(seed + sample_idx, noise_offsets)))
 
 
 @lru_cache(maxsize=1)
