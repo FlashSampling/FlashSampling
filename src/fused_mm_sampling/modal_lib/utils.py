@@ -54,6 +54,7 @@ def make_image():
     deps_str: str = " ".join(deps)
     return (
         modal.Image.from_registry("pytorch/pytorch:2.11.0-cuda13.0-cudnn9-devel")
+        .apt_install("numactl")
         .run_commands("pip install --break-system-packages uv")
         .run_commands(f"uv pip install --system {deps_str}")
     )

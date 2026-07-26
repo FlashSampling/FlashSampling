@@ -1,3 +1,7 @@
+import os
+import subprocess
+import sys
+
 from .utils import ModalEnvConfig, make_app, make_image, make_volumes, set_volume_caches
 
 
@@ -19,18 +23,33 @@ def function(
     disable_compile: bool,
     bench_fn: str,
 ):
-    from ..bench.triton_benchmark_lib import Args, run_triton_bechmark
-
     set_volume_caches()
-    args = Args(
-        tgt_dir=tgt_dir,
-        case=case,
-        n_procs=n_procs,
-        name=name,
-        disable_compile=disable_compile,
-        bench_fn=bench_fn,
+    env = os.environ.copy()
+    env.update(
+        {
+            "PYTHONUNBUFFERED": "1",
+            "FMMS_TGT_DIR": tgt_dir or "",
+            "FMMS_CASE": case,
+            "FMMS_N_PROCS": str(n_procs),
+            "FMMS_NAME": name or "",
+            "FMMS_DISABLE_COMPILE": str(int(disable_compile)),
+            "FMMS_BENCH_FN": bench_fn,
+        }
     )
-    run_triton_bechmark(args)
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "torch.distributed.run",
+            "--standalone",
+            "--numa-binding=node",
+            f"--nproc-per-node={n_procs}",
+            "-m",
+            "src.fused_mm_sampling.modal_lib.modal_triton_benchmark_worker",
+        ],
+        check=True,
+        env=env,
+    )
 
 
 @app.local_entrypoint()

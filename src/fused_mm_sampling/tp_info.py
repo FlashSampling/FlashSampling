@@ -1,7 +1,6 @@
 import os
 import socket
 import subprocess
-import warnings
 from dataclasses import dataclass
 from typing import Callable
 
@@ -68,6 +67,10 @@ def _torchrun_worker(fn: Callable, args: tuple) -> None:
 
     if rank == 0:
         _print_gpu_topology()
+    print(
+        f"Rank {rank}: torchrun-bound CPUs: {sorted(os.sched_getaffinity(0))}",
+        flush=True,
+    )
     torch.cuda.set_device(local_rank)
     backend = "nccl"
     if rank == 0:
@@ -84,10 +87,9 @@ def _distributed_worker(rank: int, world_size: int, port: int, fn: Callable, arg
     if rank == 0:
         _print_gpu_topology()
     print(
-        f"Rank {rank}: available CPUs (before NUMA bind): {sorted(os.sched_getaffinity(0))}",
+        f"Rank {rank}: available CPUs: {sorted(os.sched_getaffinity(0))}",
         flush=True,
     )
-    _numa_bind(rank)
     device_id = rank % torch.cuda.device_count()
     torch.cuda.set_device(device_id)
     backend = "nccl" if torch.cuda.device_count() >= world_size else "gloo"
@@ -112,35 +114,7 @@ def _print_gpu_topology() -> None:
         topo = subprocess.check_output(["nvidia-smi", "topo", "-m"], text=True).strip()
         print(f"GPU topology:\n{topo}")
     except (FileNotFoundError, subprocess.CalledProcessError) as e:
-        warnings.warn(f"Failed to get GPU topology: {e}", stacklevel=2)
-
-
-def _numa_bind(rank: int) -> None:
-    """Pin this process to the CPU cores on the same NUMA node as the GPU.
-
-    A binding failure (e.g. Modal's gVisor returning an empty CPU set) leaves
-    the process unbound and produces inconsistent benchmark numbers, so we
-    abort instead of warn. Missing torch.numa.binding (older torch) is still
-    tolerated since the platform simply does not support binding.
-    """
-    try:
-        from torch.numa.binding import (
-            AffinityMode,
-            NumaOptions,
-            _apply_numa_binding_to_current_thread,
-        )
-    except ImportError as e:
-        warnings.warn(
-            f"Rank {rank}: torch.numa.binding unavailable, skipping bind: {e}",
-            stacklevel=2,
-        )
-        return
-
-    _apply_numa_binding_to_current_thread(
-        gpu_index=rank,
-        numa_options=NumaOptions(affinity_mode=AffinityMode.NODE),
-    )
-    print(f"Rank {rank}: NUMA-bound to CPUs {sorted(os.sched_getaffinity(0))}", flush=True)
+        print(f"Failed to get GPU topology: {e}")
 
 
 def _find_free_port() -> int:
