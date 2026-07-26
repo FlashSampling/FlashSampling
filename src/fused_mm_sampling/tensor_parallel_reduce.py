@@ -13,6 +13,8 @@ import nvtx
 import torch
 import torch.distributed as dist
 import torch.distributed._symmetric_memory as symm_mem
+import triton
+import triton.language as tl
 
 
 @nvtx.annotate()
@@ -81,3 +83,83 @@ def tp_post_kernel_reduce(
     maxs_idx = maxs_idx.reshape(num_samples, world_size * grid_size_v, H)
     samples, _ = _local_reduce(maxs, maxs_idx, vocab_start_index=0)
     return samples
+
+
+@nvtx.annotate()
+def tp_post_kernel_p2p_reduce(
+    local_maxs: torch.Tensor,
+    local_maxs_idx: torch.Tensor,
+    symm_mem_hdl,
+    storage_offset_maxs_idx: int,
+    grid_size_v: int,
+) -> torch.Tensor:
+    """Fan out local candidates with P2P stores, then run the shared reduction.
+
+    Unlike the default path, the FMMS kernel only writes local candidates.
+    This separate Triton kernel performs the same peer-memory fan-out after
+    computation has finished, isolating the benefit of overlapping P2P stores
+    with the matrix multiplication.
+    """
+    rank = dist.get_rank()
+    _, num_samples, max_grid_size_v, H = local_maxs.shape
+    n_elements = num_samples * grid_size_v * H
+    _fan_out_candidates_kernel[(triton.cdiv(n_elements, 256),)](
+        source_maxs=local_maxs[rank],
+        source_maxs_idx=local_maxs_idx[rank],
+        symm_mem_buffer_ptrs=symm_mem_hdl.buffer_ptrs_dev,
+        n_elements=n_elements,
+        n_hidden_states=H,
+        grid_size_v=grid_size_v,
+        max_grid_size_v=max_grid_size_v,
+        num_samples=num_samples,
+        storage_offset_maxs_idx=storage_offset_maxs_idx,
+        tp_rank=rank,
+        tp_world_size=dist.get_world_size(),
+        BLOCK_SIZE=256,
+    )
+    return tp_post_kernel_reduce(local_maxs, local_maxs_idx, symm_mem_hdl, grid_size_v)
+
+
+@triton.jit
+def _fan_out_candidates_kernel(
+    source_maxs,
+    source_maxs_idx,
+    symm_mem_buffer_ptrs,
+    n_elements,
+    n_hidden_states: tl.constexpr,
+    grid_size_v: tl.constexpr,
+    max_grid_size_v: tl.constexpr,
+    num_samples: tl.constexpr,
+    storage_offset_maxs_idx: tl.constexpr,
+    tp_rank: tl.constexpr,
+    tp_world_size: tl.constexpr,
+    BLOCK_SIZE: tl.constexpr,
+):
+    offsets = tl.program_id(0) * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    mask = offsets < n_elements
+
+    h_idx = offsets % n_hidden_states
+    tile_and_sample_idx = offsets // n_hidden_states
+    tile_idx = tile_and_sample_idx % grid_size_v
+    sample_idx = tile_and_sample_idx // grid_size_v
+    source_offset = (
+        sample_idx * max_grid_size_v * n_hidden_states + tile_idx * n_hidden_states + h_idx
+    )
+    destination_offset = (
+        tp_rank * num_samples * max_grid_size_v * n_hidden_states + source_offset
+    )
+
+    max_values = tl.load(source_maxs + source_offset, mask=mask)
+    max_indices = tl.load(source_maxs_idx + source_offset, mask=mask)
+    buffer_ptrs = symm_mem_buffer_ptrs.to(tl.pointer_type(tl.uint64))
+    for peer_rank in tl.static_range(0, tp_world_size):
+        if peer_rank != tp_rank:
+            peer_base = tl.load(buffer_ptrs + peer_rank)
+            peer_maxs = peer_base.to(tl.pointer_type(tl.float32))
+            peer_maxs_idx = peer_base.to(tl.pointer_type(tl.int64))
+            tl.store(peer_maxs + destination_offset, max_values, mask=mask)
+            tl.store(
+                peer_maxs_idx + storage_offset_maxs_idx + destination_offset,
+                max_indices,
+                mask=mask,
+            )

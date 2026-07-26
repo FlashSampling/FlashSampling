@@ -10,6 +10,7 @@ L = LongNames
 # Consistent color palette: FMMS stands out, baselines are muted.
 PROVIDER_COLORS: dict[str, str] = {
     L.fmms_triton: "#d62728",  # bold red
+    L.fmms_triton_p2p_no_overlap: "#ff9896",  # light red
     L.fmms_helion: "#e45756",  # lighter red
     L.fmms_greedy_triton: "#ff7f0e",  # orange
     L.multinomial_sampling_compiled: "#7f7f7f",  # gray
@@ -22,6 +23,7 @@ PROVIDER_COLORS: dict[str, str] = {
 # Distinct markers so lines are distinguishable without color.
 PROVIDER_MARKERS: dict[str, str] = {
     L.fmms_triton: "o",
+    L.fmms_triton_p2p_no_overlap: "h",
     L.fmms_helion: "D",
     L.fmms_greedy_triton: "^",
     L.multinomial_sampling_compiled: "s",
@@ -34,6 +36,7 @@ PROVIDER_MARKERS: dict[str, str] = {
 # Hatch patterns for bar plots.
 PROVIDER_HATCHES: dict[str, str] = {
     L.fmms_triton: "",
+    L.fmms_triton_p2p_no_overlap: "oo",
     L.fmms_helion: "//",
     L.fmms_greedy_triton: "\\\\",
     L.multinomial_sampling_compiled: "///",

@@ -6,6 +6,7 @@ Import these instead of hardcoding strings so that renames propagate everywhere.
 
 class ShortNames:
     fused_triton = "fused-triton"
+    fused_triton_p2p_no_overlap = "fused-triton-p2p-no-overlap"
     fused_triton_ret_logits = "fused-triton-ret-logits"
     fused_triton_greedy = "fused-triton-greedy"
     fused_cuda = "fused-cuda"
@@ -24,6 +25,7 @@ class ShortNames:
 
 class LongNames:
     fmms_triton = "FMMS (Triton)"
+    fmms_triton_p2p_no_overlap = "FMMS (Triton, P2P No Overlap)"
     fmms_triton_ret_logits = "FMMS (Triton, Return Logits)"
     fmms_greedy_triton = "FMMS Greedy (Triton)"
     fmms_cuda = "FMMS (CUDA)"
@@ -42,6 +44,7 @@ class LongNames:
 
 class FlashSamplingNames:
     fmms_triton = "FlashSampling"
+    fmms_triton_p2p_no_overlap = "FlashSampling (P2P No Overlap)"
     fmms_helion = "FlashSampling (Helion)"
     fmms_greedy_triton = "FlashSampling Greedy"
     vllm_fmms = "vLLM + FlashSampling"
@@ -56,6 +59,7 @@ F = FlashSamplingNames
 # Renames FMMS → FlashSampling for kernel benchmarks.
 FLASHSAMPLING_RENAMES: dict[str, str] = {
     L.fmms_triton: F.fmms_triton,
+    L.fmms_triton_p2p_no_overlap: F.fmms_triton_p2p_no_overlap,
     L.fmms_helion: F.fmms_helion,
     L.fmms_greedy_triton: F.fmms_greedy_triton,
     L.flashinfer_top_k_top_p_sampling_from_logits: F.flashinfer_top_k_top_p_sampling_from_logits,
@@ -65,6 +69,7 @@ FLASHSAMPLING_RENAMES: dict[str, str] = {
 # Maps provider keys (used in get_sampler()) to display names (used in plots/CSVs).
 short2long: dict[str, str] = {
     S.fused_triton: L.fmms_triton,
+    S.fused_triton_p2p_no_overlap: L.fmms_triton_p2p_no_overlap,
     S.fused_triton_ret_logits: L.fmms_triton_ret_logits,
     S.fused_triton_greedy: L.fmms_greedy_triton,
     S.fused_cuda: L.fmms_cuda,

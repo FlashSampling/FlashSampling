@@ -263,6 +263,7 @@ def verify_sampling_distribution_tp() -> None:
     tp = TPInfo.from_world()
     providers = [
         "fused-triton",
+        "fused-triton-p2p-no-overlap",
         "naive-pt",
         "naive-compiled",
         "flashinfer:sampling_from_logits",

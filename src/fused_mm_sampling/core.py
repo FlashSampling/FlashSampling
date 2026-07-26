@@ -14,7 +14,11 @@ from torch._dynamo.variables.functions import UserFunctionVariable
 from torch.distributed._functional_collectives import all_gather_tensor
 
 from .alg_names import ShortNames as S
-from .tensor_parallel_reduce import allocate_symm_mem_outputs, tp_post_kernel_reduce
+from .tensor_parallel_reduce import (
+    allocate_symm_mem_outputs,
+    tp_post_kernel_p2p_reduce,
+    tp_post_kernel_reduce,
+)
 from .tl_matmul import matmul
 from .tp_info import TP1, TPInfo
 
@@ -226,6 +230,7 @@ def fused_mm_sample_triton(
     greedy_sampling: bool = False,
     tp: "TPInfo" = TP1,
     return_logits: bool = False,
+    p2p_no_overlap: bool = False,
 ):
     assert torch.cuda.is_available(), "fused_mm_sample_triton requires CUDA"
     V, D = weights.shape  # noqa: N806
@@ -243,6 +248,7 @@ def fused_mm_sample_triton(
     NUM_SMS = num_sms_cached(weights.device.index)  # noqa: N806
 
     max_grid_size_v = triton.cdiv(V, MIN_BLOCK_SIZE_V)
+    fan_out_tp = tp.size > 1 and not p2p_no_overlap
     if tp.size > 1:
         maxs, maxs_idx, symm_mem_hdl, storage_offset_maxs_idx = allocate_symm_mem_outputs(
             num_samples=num_samples,
@@ -311,23 +317,30 @@ def fused_mm_sample_triton(
         NUM_SMS=NUM_SMS,
         GREEDY_SAMPLING=greedy_sampling,
         RETURN_LOGITS=return_logits,
-        FAN_OUT_TP=tp.size > 1,
+        FAN_OUT_TP=fan_out_tp,
     )
 
     assert grid_size["v"] is not None
 
     if tp.size > 1:
-        samples = tp_post_kernel_reduce(
-            local_maxs=maxs,
-            local_maxs_idx=maxs_idx,
-            symm_mem_hdl=symm_mem_hdl,
-            grid_size_v=grid_size["v"],
-        )
+        if fan_out_tp:
+            samples = tp_post_kernel_reduce(
+                local_maxs=maxs,
+                local_maxs_idx=maxs_idx,
+                symm_mem_hdl=symm_mem_hdl,
+                grid_size_v=grid_size["v"],
+            )
+        else:
+            samples = tp_post_kernel_p2p_reduce(
+                local_maxs=maxs,
+                local_maxs_idx=maxs_idx,
+                symm_mem_hdl=symm_mem_hdl,
+                storage_offset_maxs_idx=storage_offset_maxs_idx,
+                grid_size_v=grid_size["v"],
+            )
     else:
-        # Local reduction across V-tiles on this rank.
-        vocab_start_index = tp.rank * V
-        samples, max_values = _local_reduce(
-            maxs[:, : grid_size["v"], :], maxs_idx[:, : grid_size["v"], :], vocab_start_index
+        samples, _ = _local_reduce(
+            maxs[:, : grid_size["v"], :], maxs_idx[:, : grid_size["v"], :], vocab_start_index=0
         )
 
     if return_logits:
@@ -732,6 +745,12 @@ def get_sampler(provider: str, weights: torch.Tensor) -> Sampler:
     match provider:
         case S.fused_triton:
             return SimpleSampler(lambda **kwargs: fused_mm_sample_triton(**{"seed": 0, **kwargs}))
+        case S.fused_triton_p2p_no_overlap:
+            return SimpleSampler(
+                lambda **kwargs: fused_mm_sample_triton(
+                    **{"seed": 0, "p2p_no_overlap": True, **kwargs}
+                )
+            )
         case S.fused_triton_ret_logits:
             return SimpleSampler(
                 lambda **kwargs: fused_mm_sample_triton(
