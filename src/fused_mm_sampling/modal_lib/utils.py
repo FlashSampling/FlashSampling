@@ -173,4 +173,17 @@ def add_library_code(image: modal.Image) -> modal.Image:
             remote_path="/opt/fmms/nsys_wrapper.py",
             copy=True,
         )
+        .add_local_file(
+            str(_repo_root / "benchmarking" / "memory_traffic.py"),
+            remote_path="/opt/fmms/memory_traffic.py",
+            copy=True,
+        )
     )
+
+
+def make_ncu_image() -> modal.Image:
+    image = make_image().run_commands(
+        "apt-get update && apt-get install -y cuda-nsight-compute-13-2",
+        "ln -sf /opt/nvidia/nsight-compute/2026.1.0/ncu /usr/local/bin/ncu",
+    )
+    return add_library_code(image)

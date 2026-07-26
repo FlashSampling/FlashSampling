@@ -76,6 +76,8 @@ The blog uses both "large" (V=128,256, d=8,192) and "small" (V=151,936, d=4,096)
 - Use `make modal-verify-correctness-tp1` to run the correctness checks on one Modal GPU. `modal-pytest-distributed` accepts `N_PROCS` for other world sizes. Both launch through `torchrun`, including TP1, so the worker can use `TPInfo.from_world()` with an initialized process group.
 - Use `make modal-verify-correctness-large-vocab VOCAB_SIZE=... NUM_SAMPLES=... SAMPLES_PER_CALL=...` for the TP1 large-vocabulary chi-squared check. It batches sampling, accumulates counts on GPU, reports test statistics and coverage, and passes parameters to Modal as CLI options.
 - At V=128,000 and 10M samples on B200, bfloat16 per-tile maxima caused measurable bias. Changing `maxs` to float32 passed the test (reduced chi-squared 0.99844, p=0.6503, 99.84% probability mass). The RNG now also uses separate sample streams and unique tile-element offsets to avoid collisions.
+- Use `make modal-memory-traffic-all CASE=large N_HIDDEN_STATES=64` to profile FlashSampling and the three paper baselines concurrently on Modal. Each provider has its own results subdirectory containing `report.ncu-rep`, `traffic.csv`, `memory.json`, and `log.txt`; `parse-memory-traffic` aggregates completed artifacts with pandas.
+- On B200 with the large case at B=1/64/256, FlashSampling used 0.05/0.77/2.97 MiB peak temporary memory, a 98.48-99.53% reduction against the three baselines. Its HBM-read reduction grew from 0.17-0.33% at B=1 to 4.33-26.52% at B=256, while its HBM-write reduction grew from 37.98-43.30% to 95.73-97.94%.
 - Brev machine quirks and CUDA toolkit setup: see [docs/brev-environment.md](docs/brev-environment.md).
 
 ## Triton TMA (Tensor Memory Access) pitfalls

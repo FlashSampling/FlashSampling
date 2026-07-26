@@ -5,9 +5,8 @@ import modal
 
 from .utils import (
     ModalEnvConfig,
-    add_library_code,
     make_app,
-    make_image,
+    make_ncu_image,
     make_volumes,
     set_volume_caches,
     volume_path,
@@ -21,11 +20,7 @@ class Config(ModalEnvConfig):
 cfg = Config()
 app = make_app()
 
-ncu_image = add_library_code(make_image()).run_commands(
-    "apt-get update && apt-get install -y cuda-nsight-compute-13-2",
-    # Put the new NCU first on PATH so it shadows the old one
-    "ln -sf /opt/nvidia/nsight-compute/2026.1.0/ncu /usr/local/bin/ncu",
-)
+ncu_image = make_ncu_image()
 
 
 @app.function(gpu=cfg.gpu_spec, image=ncu_image, volumes=make_volumes(), timeout=cfg.timeout)

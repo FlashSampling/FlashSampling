@@ -91,6 +91,36 @@ modal-ncu-export:
 	modal run -m src.fused_mm_sampling.modal_lib.modal_ncu \
 		> $(NCU_TXT_DIR)/$(NAME).txt 2>&1
 
+MEMORY_TRAFFIC_VOL_DIR := memory-traffic/$(GPU)/case-$(CASE)/bsz$(N_HIDDEN_STATES)
+MEMORY_TRAFFIC_DIR := benchmarking/modal-results/$(MEMORY_TRAFFIC_VOL_DIR)
+OUTPUT_NAME = $(NAME)
+MEMORY_TRAFFIC_PROVIDER_VOL_DIR = $(MEMORY_TRAFFIC_VOL_DIR)/$(OUTPUT_NAME)
+MEMORY_TRAFFIC_PROVIDER_DIR = $(MEMORY_TRAFFIC_DIR)/$(OUTPUT_NAME)
+
+modal-memory-traffic:
+	mkdir -p "$(MEMORY_TRAFFIC_PROVIDER_DIR)"
+	GPU=$(GPU) modal run \
+		-m src.fused_mm_sampling.modal_lib.modal_memory_traffic \
+		--name "$(NAME)" \
+		--output-name "$(OUTPUT_NAME)" \
+		--case "$(CASE)" \
+		--n-hidden-states $(N_HIDDEN_STATES) 2>&1 | \
+		tee "$(MEMORY_TRAFFIC_PROVIDER_DIR)/log.txt"
+	modal volume get --force fused-mm-sample "$(MEMORY_TRAFFIC_PROVIDER_VOL_DIR)/report.ncu-rep" "$(MEMORY_TRAFFIC_PROVIDER_DIR)/"
+	modal volume get --force fused-mm-sample "$(MEMORY_TRAFFIC_PROVIDER_VOL_DIR)/traffic.csv" "$(MEMORY_TRAFFIC_PROVIDER_DIR)/"
+	modal volume get --force fused-mm-sample "$(MEMORY_TRAFFIC_PROVIDER_VOL_DIR)/memory.json" "$(MEMORY_TRAFFIC_PROVIDER_DIR)/"
+
+modal-memory-traffic-all:
+	@set -e; \
+	$(MAKE) modal-memory-traffic NAME=fused-triton OUTPUT_NAME=fused-triton & \
+	$(MAKE) modal-memory-traffic NAME=naive-compiled OUTPUT_NAME=multinomial-compiled & \
+	$(MAKE) modal-memory-traffic NAME=flashinfer:top_k_top_p_sampling_from_logits OUTPUT_NAME=fi1 & \
+	$(MAKE) modal-memory-traffic NAME=flashinfer:sampling_from_logits OUTPUT_NAME=fi2 & \
+	wait
+	$(MAKE) parse-memory-traffic
+
+parse-memory-traffic:
+	python benchmarking/parse_memory_traffic.py "$(MEMORY_TRAFFIC_DIR)"
 modal-create-results-triton-bench:
 	mkdir -p $(RESULTS_DIR)
 	GPU=$(GPU) TGT_DIR="/vol-fused-mm-sample/$(BENCH_DIR)" \
