@@ -16,11 +16,17 @@ import seaborn as sns
 from fused_mm_sampling.alg_names import FlashSamplingNames
 
 BASELINE_NAME = "vLLM Baseline"
+FI2_NAME = "vLLM + FI2"
 FMMS_NAME = "vLLM + FMMS"
+FI2_DIR = "fi2"
 FMMS_DIR = "fmms-triton"
 
-VARIANT_COLORS = {BASELINE_NAME: "#7f7f7f", FMMS_NAME: "#d62728"}
-VARIANT_MARKERS = {BASELINE_NAME: "s", FMMS_NAME: "o"}
+VARIANT_COLORS = {
+    BASELINE_NAME: "#7f7f7f",
+    FI2_NAME: "#1f77b4",
+    FMMS_NAME: "#d62728",
+}
+VARIANT_MARKERS = {BASELINE_NAME: "s", FI2_NAME: "^", FMMS_NAME: "o"}
 
 # Make the FlashSampling name point to the same color and marker as the FMMS name.
 VLLM_FLASHSAMPLING_RENAMES = {FMMS_NAME: FlashSamplingNames.vllm_fmms}
@@ -76,7 +82,11 @@ def load_all_data(results_dir: Path, fmms_name: str) -> pd.DataFrame:
             print(f"Warning: no directory matching {model} in {results_dir}, skipping")
             continue
         for model_dir in model_dirs:
-            for variant_key, display_name in [("baseline", BASELINE_NAME), (FMMS_DIR, fmms_name)]:
+            for variant_key, display_name in [
+                ("baseline", BASELINE_NAME),
+                (FI2_DIR, FI2_NAME),
+                (FMMS_DIR, fmms_name),
+            ]:
                 df = load_variant(model_dir, variant_key)
                 if df is None:
                     continue
@@ -88,8 +98,12 @@ def load_all_data(results_dir: Path, fmms_name: str) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
-def paired_speedups(model_dirs: list[Path], max_concurrency: int) -> pd.DataFrame:
-    """Compute paired speedup ratios between baseline and FMMS runs.
+def paired_speedups(
+    model_dirs: list[Path],
+    candidate_dir: str,
+    max_concurrency: int,
+) -> pd.DataFrame:
+    """Compute paired speedup ratios between baseline and candidate runs.
 
     Comparisons are made only within the same trial directory (e.g.
     Qwen3-8B-trial1/baseline vs Qwen3-8B-trial1/fmms-triton), never across
@@ -100,20 +114,20 @@ def paired_speedups(model_dirs: list[Path], max_concurrency: int) -> pd.DataFram
     frames = []
     for model_dir in model_dirs:
         baseline_df = load_variant(model_dir, "baseline")
-        fmms_df = load_variant(model_dir, FMMS_DIR)
-        if baseline_df is None or fmms_df is None:
+        candidate_df = load_variant(model_dir, candidate_dir)
+        if baseline_df is None or candidate_df is None:
             continue
         merged = (
             baseline_df[["max_concurrency", "run_number", "median_tpot_ms"]]
             .merge(
-                fmms_df[["max_concurrency", "run_number", "median_tpot_ms"]],
+                candidate_df[["max_concurrency", "run_number", "median_tpot_ms"]],
                 on=["max_concurrency", "run_number"],
-                suffixes=("_base", "_fmms"),
+                suffixes=("_base", "_candidate"),
             )
             .query("max_concurrency <= @max_concurrency")
         )
         merged["speedup_pct"] = (
-            1 - merged["median_tpot_ms_fmms"] / merged["median_tpot_ms_base"]
+            1 - merged["median_tpot_ms_candidate"] / merged["median_tpot_ms_base"]
         ) * 100
         frames.append(merged[["max_concurrency", "speedup_pct"]])
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
@@ -188,7 +202,7 @@ def plot_tpots(
         tpots_dir.mkdir(parents=True, exist_ok=True)
         fig, ax = plt.subplots(figsize=TPOT_FIGSIZE)
         series = []
-        for variant in [BASELINE_NAME, fmms_name]:
+        for variant in [BASELINE_NAME, FI2_NAME, fmms_name]:
             vdf = mdf.query("variant == @variant")
             if not vdf.empty:
                 series.append((variant, vdf.rename(columns={"median_tpot_ms": "y"})))
@@ -230,15 +244,19 @@ def plot_speedups(
         model_dirs = resolve_model_dirs(results_dir, model)
         if not model_dirs:
             continue
-        sdf = paired_speedups(model_dirs, max_concurrency)
-        if sdf.empty:
+        candidate_series = []
+        for candidate_dir, candidate_name in [(FI2_DIR, FI2_NAME), (FMMS_DIR, fmms_name)]:
+            sdf = paired_speedups(model_dirs, candidate_dir, max_concurrency)
+            if not sdf.empty:
+                candidate_series.append((candidate_name, sdf))
+        if not candidate_series:
             continue
 
         speedups_dir.mkdir(parents=True, exist_ok=True)
         fig, ax = plt.subplots(figsize=FIGSIZE)
         _plot_scatter_line(
             ax,
-            series=[(fmms_name, sdf)],
+            series=candidate_series,
             x_col="max_concurrency",
             y_col="speedup_pct",
             ylabel="Speedup (%)",
@@ -264,7 +282,7 @@ def plot_strips(
     strips_dir = imgs_dir / "strips"
     tp = tp_from_dir(results_dir)
 
-    variants = [BASELINE_NAME, fmms_name]
+    variants = [BASELINE_NAME, FI2_NAME, fmms_name]
 
     for model in MODELS:
         mdf = df.query("model == @model and max_concurrency <= @MAX_CONCURRENCY")
@@ -285,6 +303,7 @@ def plot_strips(
 
         for i, conc in enumerate(concurrencies):
             medians_at_conc = {}
+            positions_at_conc = {}
             for j, variant in enumerate(present_variants):
                 offset = (j - (n_variants - 1) / 2) * width
                 pos = i + offset
@@ -298,6 +317,7 @@ def plot_strips(
                 color = VARIANT_COLORS[variant]
                 med = np.median(vals)
                 medians_at_conc[variant] = med
+                positions_at_conc[variant] = pos
 
                 rng = np.random.default_rng(seed=hash((model, conc, variant)) & 0xFFFFFFFF)
                 x_jittered = pos + rng.uniform(-jitter, jitter, size=len(vals))
@@ -320,24 +340,28 @@ def plot_strips(
                     zorder=4,
                 )
 
-            if BASELINE_NAME in medians_at_conc and fmms_name in medians_at_conc:
+            for candidate_idx, candidate in enumerate([FI2_NAME, fmms_name]):
+                if BASELINE_NAME not in medians_at_conc or candidate not in medians_at_conc:
+                    continue
                 b_med = medians_at_conc[BASELINE_NAME]
-                f_med = medians_at_conc[fmms_name]
-                tpot_change = (f_med / b_med - 1) * 100
+                candidate_med = medians_at_conc[candidate]
+                tpot_change = (candidate_med / b_med - 1) * 100
                 ann_color = "#2ca02c" if tpot_change < 0 else "#b22222"
-                higher = max(b_med, f_med)
+                higher = max(b_med, candidate_med)
+                baseline_pos = positions_at_conc[BASELINE_NAME]
+                candidate_pos = positions_at_conc[candidate]
                 ax.annotate(
                     "",
-                    xy=(i, f_med),
-                    xytext=(i, b_med),
+                    xy=(candidate_pos, candidate_med),
+                    xytext=(baseline_pos, b_med),
                     arrowprops=dict(arrowstyle="->", color=ann_color, lw=1.5),
                 )
                 ax.annotate(
                     f"{tpot_change:+.1f}%",
-                    xy=(i, higher),
-                    xytext=(0, 10),
+                    xy=(candidate_pos, higher),
+                    xytext=((-4, 10) if candidate_idx == 0 else (4, 10)),
                     textcoords="offset points",
-                    ha="center",
+                    ha=("right" if candidate_idx == 0 else "left"),
                     va="bottom",
                     fontsize=10,
                     fontweight="bold",

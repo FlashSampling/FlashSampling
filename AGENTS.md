@@ -216,6 +216,7 @@ The `--nsys_profile` flag is a pydantic-settings `bool` field. On the CLI, pass 
 ## vLLM integration
 
 See [docs/vllm-integration.md](docs/vllm-integration.md). Covers: sampler wrapper, env vars, local benchmarking, `.item()` sync bug, autotuning fix.
+The derivation and validation of `VLLM_PRECOMPILED_WHEEL_SHA` are documented under "Modal vLLM image build" in [docs/modal-benchmarking.md](docs/modal-benchmarking.md).
 
 ## Benchmark timing functions
 
@@ -235,6 +236,9 @@ Both return `list[float]` (per-iteration times in ms). The `bench_fn` parameter 
 
 See [docs/modal-benchmarking.md](docs/modal-benchmarking.md). Covers: Modal profiles, volume management, triton-bench pipeline, vllm-bench pipeline, image build, caching.
 
+- Parallel `modal-create-results-vllm-bench` invocations for the same model can collide in the local log path because it uses only the model slug and a one-second timestamp. Until the filename includes the variant or another unique identifier, do not use a collided local log to attribute messages to a provider. Use the provider-specific Modal app log or the `sweep.log` stored inside the provider's experiment directory.
+- The retained Qwen3-8B rebuttal experiment is baseline `20260727_135427`, FI2 `20260727_141150`, and FMMS `20260727_154330`. After taking the median over five runs per batch size and then across batch sizes 1-64, TPOT is 3.86 ms, 3.91 ms, and 3.72 ms, respectively. A later independent battery was removed locally and from Modal because its low-batch provider ordering did not reproduce this experiment.
+
 ### Directory structure
 
 Modal triton-bench results are organized as: `modal-results/triton-bench/{bench_fn}/{gpu}/tp{N}/`. Custom plots go into `custom-plots/case-{small,large}/` subdirectories within each tp directory. The `BENCH_FN` make variable (default: `fi-cupti`) controls which timing method and directory to use.
@@ -242,3 +246,12 @@ Modal triton-bench results are organized as: `modal-results/triton-bench/{bench_
 ### Makefile variable passing
 
 Makefile variables use `:=` assignment, so environment variables do NOT override them. Always pass overrides as make arguments (`make FOO=bar target`), not env vars (`FOO=bar make target`). The `NAME` variable defaults to `default` (all providers). `Args.providers()` treats both `None` and `"default"` as the sentinel for `DEFAULT_PROVIDERS`.
+
+### vLLM run-level anomalies
+
+- The first concurrent Qwen3-1.7B TP1 B200 serving sweep produced implausible high-concurrency slowdowns for both FlashSampling and FI2.
+- Isolated reruns did not reproduce them. At concurrency 64, FI2 TPOT fell from 3.190 ms to 2.109 ms and TTFT fell from 28.102 ms to 11.403 ms. The isolated FI2 curve increased only 0.236 ms from concurrency 1 to 64, consistent with the sub-0.45 ms FI2 kernel microbenchmark.
+- Treat repetitions within one `vllm bench sweep serve` process as correlated measurements from one Modal host. If a curve conflicts with kernel-level bounds or unrelated metrics such as TTFT degrade together, rerun that variant as a fresh isolated sweep before drawing conclusions.
+- The `all` vLLM sweep covers batch sizes 1, 2, 4, 8, 16, 32, and 64. Figure 5 and its rebuttal aggregate do not use batch sizes 128 or 256.
+- A combined Qwen3-8B invocation stopped after 27 minutes during FI2: baseline completed, FI2 reached batch size 8, and FlashSampling never started. This was not the two-hour function timeout. The cause was not established, so use one app per provider and resume partial experiments when applicable.
+- Dates inside vLLM `summary.csv` are UTC, while `modal app list --json` renders app timestamps in the local timezone. Convert them before comparing benchmark completion with app lifetime. Completed Qwen3-8B FI2 and FlashSampling apps stopped within 5–6 seconds of their final summary row.

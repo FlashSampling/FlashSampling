@@ -34,6 +34,10 @@ AFTER_BENCH = (
 
 ALL_VARIANTS = {
     "baseline": {},
+    "fi2": {
+        "VLLM_USE_FMMS_SAMPLER": "1",
+        "VLLM_FMMS_PROVIDER": "flashinfer:sampling_from_logits",
+    },
     "fmms-triton": {
         "VLLM_USE_FMMS_SAMPLER": "1",
         "VLLM_FMMS_PROVIDER": "fused-triton",

@@ -221,6 +221,7 @@ VLLM_BENCH_DIR := benchmarking/modal-results/$(VLLM_VOLUME_DIR_NAME)
 VLLM_MODEL_SLUG = $(lastword $(subst /, ,$(VLLM_MODEL)))
 VLLM_VARIANTS :=
 VLLM_RESUME_EXPERIMENT :=
+MODAL_RUN_FLAGS :=
 
 modal-vllm-benchmark-full-gpt-oss-120b:
 	$(MAKE) modal-vllm-benchmark VLLM_SWEEP=all VLLM_MODEL=openai/gpt-oss-120b
@@ -265,7 +266,7 @@ modal-create-results-vllm-bench:
 	GPU=$(GPU) N_PROCS=$(N_PROCS) MODEL=$(VLLM_MODEL) SWEEP=$(VLLM_SWEEP) VARIANTS=$(VLLM_VARIANTS) \
 	RESUME_EXPERIMENT=$(VLLM_RESUME_EXPERIMENT) \
 	TGT_DIR="/vol-fused-mm-sample/$(VLLM_VOLUME_DIR_NAME)" \
-	modal run \
+	modal run $(MODAL_RUN_FLAGS) \
 		-m src.fused_mm_sampling.modal_lib.modal_vllm_benchmark \
 		2>&1 | tee $(VLLM_BENCH_DIR)/$(VLLM_MODEL_SLUG)/logs/$$(date +%Y%m%d_%H%M%S).txt
 

@@ -4,8 +4,8 @@
 
 Two Modal workspaces are configured. Switch with `modal profile activate <name>`.
 
-- **`tomasruizt`** (personal): Used for vllm-bench runs on gpt-oss-120b and Qwen3-1.7B. The `fused-mm-sample` volume here holds these results.
-- **`lmu-css`** (default): Used for triton-bench runs and vllm-bench runs on Qwen3-8B. The `fused-mm-sample` volume here holds these results.
+- **`tomasruizt`** (personal): Used in the past, but not anymore.
+- **`lmu-css`** (default): Used for triton-bench runs and vllm-bench runs on Qwen3 models, including Qwen3-1.7B and Qwen3-8B. The `fused-mm-sample` volume here holds these results.
 
 Check the active profile with `modal profile list` (the `•` marker shows the active one). When downloading results with `make modal-get-results-*`, ensure the correct profile is active or the volume lookup will fail silently (no matching directory).
 
@@ -91,7 +91,7 @@ make modal-collect-results-vllm-bench GPU=b200 VLLM_MODEL=...  # runs collect_re
 **Makefile variables**:
 - `GPU` — Modal GPU type (default: `b200`)
 - `VLLM_MODEL` — HuggingFace model ID (default: `openai/gpt-oss-120b`)
-- `VLLM_SWEEP` — `quick` (1 concurrency, 1 run, `--enforce-eager`) or `all` (full sweep, 5 runs)
+- `VLLM_SWEEP` — `quick` (1 concurrency, 1 run, `--enforce-eager`) or `all` (batch sizes 1–64, 5 runs)
 - `VLLM_VARIANTS` — comma-separated variant filter, e.g. `baseline` or `fmms-triton`. Empty = all variants.
 - `VLLM_RESUME_EXPERIMENT` — if set to a previous experiment dir name (e.g. `20260409_101524`), passes `--resume --experiment-name <name>` to `vllm bench sweep serve` so it picks up where the previous run left off, skipping any `(concurrency, run)` combos that already have a `run=N.json` on the modal volume. See "Resuming a partial sweep" below.
 - `POSTFIX` — suffix for result directory (for A/B comparisons)
@@ -117,17 +117,53 @@ The experiment-name is the timestamp directory under `<model>/<variant>/` on the
 
 ### Modal vLLM image build
 
-The image uses `pytorch/pytorch:2.10.0-cuda13.0-cudnn9-devel` as base. Key pitfall: vLLM's `VLLM_USE_PRECOMPILED=1` installs precompiled `.so` files built for torch 2.10.0, but vLLM's metadata pins `torch==2.9.1`. The image build works around this with a two-step install:
+The image uses `pytorch/pytorch:2.11.0-cuda13.0-cudnn9-devel`, matching the fork's `torch==2.11.0` requirement and the ABI of its upstream precompiled wheel.
+The fork is installed non-editably with `VLLM_USE_PRECOMPILED=1`, `--no-build-isolation`, and an explicit `VLLM_PRECOMPILED_WHEEL_COMMIT`.
 
-1. `cd /opt/vllm && VLLM_USE_PRECOMPILED=1 uv pip install --system -e '.[bench]'` — installs vLLM with torch 2.9.1
-2. `uv pip install --system 'torch==2.10.0' 'torchvision>=0.25' 'torchaudio>=2.10'` — force-upgrades torch to match the precompiled `.so`
+#### Determining `VLLM_PRECOMPILED_WHEEL_SHA`
 
-Without step 2, you get an ABI mismatch: `undefined symbol: _ZN3c104cuda29c10_cuda_check_implementationEiPKcS2_jb`.
+vLLM publishes precompiled wheels for commits on upstream `main`, not for commits that exist only on the fork.
+The wheel SHA must therefore be the upstream commit on which the fork's Python-only integration changes are based, rather than `VLLM_FORK_SHA` itself.
+
+For `VLLM_FORK_SHA=7a74973e4dc727df979f2a5ec9fff64ac5319467`, the most recent merge of `main` into `feature/fmms-sampler` is `ed9910164b84f01fb363f0534907c2076c6c96c0`.
+That merge has these parents:
+
+```text
+0027ebfc2372357c4a82d1a8f1f5d80baa8eeefe 1a2c17634eccc4e68d9e1ab654f702d55361c754
+```
+
+The first parent is the previous feature-branch state.
+The second parent is the upstream `main` tip merged into the feature branch, so the selected wheel pin is:
+
+```text
+VLLM_PRECOMPILED_WHEEL_SHA=1a2c17634eccc4e68d9e1ab654f702d55361c754
+```
+
+The derivation can be reproduced in the vLLM checkout:
+
+```bash
+fork_sha=7a74973e4dc727df979f2a5ec9fff64ac5319467
+merge_sha=$(git rev-list --first-parent --merges -n 1 "$fork_sha")
+git show -s --format='%H%n%P%n%s' "$merge_sha"
+```
+
+Use the second hash printed on the parents line.
+After changing or rebasing the fork, repeat this procedure and update both constants together.
+This approach is valid only while the commits after the upstream merge do not modify vLLM's compiled C++ or CUDA sources.
+If compiled sources change, build a wheel for the fork instead of reusing the upstream binary.
+
+Leaving the wheel commit unpinned selected a newer nightly artifact whose installed package exposed `_C_stable_libtorch` but not the `_C.abi3.so` required by this fork.
+Pinning the upstream merge parent produced the expected extension.
+The Modal image build verifies this explicitly with:
+
+```bash
+test -f /usr/local/lib/python3.12/dist-packages/vllm/_C.abi3.so
+```
 
 Other image build lessons:
 - `.pip_install("uv")` fails on Ubuntu 24.04 (PEP 668). Use `.run_commands("pip install --break-system-packages uv")`.
 - `add_local_dir()` / `add_local_file()` require `copy=True` when subsequent build steps need the files.
-- B200 GPU requires CUDA 13.0 / sm_100. PyTorch 2.9.1 only supports up to sm_90, so the 2.10.0 base image is necessary.
+- B200 GPU requires CUDA 13.0 / sm_100, so the CUDA 13.0 base image is necessary.
 - `HF_TOKEN` is passed via `modal.Secret.from_dict({"HF_TOKEN": os.environ["HF_TOKEN"]})`. The code intentionally fails if `HF_TOKEN` is not set locally.
 
 ### torch.compile startup overhead

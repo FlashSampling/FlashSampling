@@ -61,7 +61,12 @@ def make_image():
 
 
 VLLM_FORK_BRANCH = "feature/fmms-sampler"
-VLLM_FORK_SHA = "3170fdf3da4e09a76031fa515698c86d1fcbc699"
+VLLM_FORK_SHA = "7a74973e4dc727df979f2a5ec9fff64ac5319467"
+# Upstream-main parent of the latest main-to-feature merge in VLLM_FORK_SHA.
+# Determine it with:
+# merge=$(git rev-list --first-parent --merges -n 1 "$VLLM_FORK_SHA")
+# git show -s --format='%P' "$merge"  # use the second parent
+VLLM_PRECOMPILED_WHEEL_SHA = "1a2c17634eccc4e68d9e1ab654f702d55361c754"
 
 
 def make_vllm_image() -> modal.Image:
@@ -89,10 +94,17 @@ def make_vllm_image() -> modal.Image:
             # importlib.metadata.version("numpy") return None, which
             # aborts the vllm CLI on import.
             "pip install --break-system-packages 'numpy<2.3'",
+            # Install build dependencies into the base environment because the
+            # precompiled build below deliberately disables isolation.
+            "uv pip install --system -r /opt/vllm/requirements/build.txt",
             # Let vLLM's resolver pick the torch version that matches the precompiled .so.
             # Earlier we pinned torch==2.10.0 to match a 2.10.0+cu130 .so, but the upstream
             # precompiled wheel is now built against torch 2.11.0, so any pin breaks the ABI.
-            "cd /opt/vllm && VLLM_USE_PRECOMPILED=1 uv pip install --system -e '.[bench]'",
+            "cd /opt/vllm"
+            f" && VLLM_PRECOMPILED_WHEEL_COMMIT={VLLM_PRECOMPILED_WHEEL_SHA}"
+            " VLLM_USE_PRECOMPILED=1 uv pip install"
+            " --system --no-build-isolation '.[bench]'",
+            "test -f /usr/local/lib/python3.12/dist-packages/vllm/_C.abi3.so",
         )
         .add_local_dir(
             str(_repo_root / "src"),
