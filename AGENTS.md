@@ -32,6 +32,7 @@ Development notes and lessons learned while building this project.
 - One sentence per line in prose sections, to make git diffs cleaner.
 - Don't write `torch.compile`-d or `torch.compiled` — say "torch compiled".
 - Avoid jargon like "unfused" or "lean" when simpler words work ("baseline", "Gumbel-max kernel").
+- In rebuttals, omit internal benchmark labels such as “large configuration”; report the relevant dimensions or measurements only when needed.
 - When stating speedup ranges, verify them against the actual table data. Use "generally outperforms" rather than "always" when there are exceptions.
 - Never use em dashes (—). Use periods, commas, or parentheses instead.
 
@@ -82,8 +83,10 @@ The blog uses both "large" (V=128,256, d=8,192) and "small" (V=151,936, d=4,096)
 - Multiple B200 reruns do not support a relationship between GPU NUMA placement and the P2P-overlap ablation. At TP2, both same-NUMA and split-NUMA groups contained two runs where the H<=128 median difference was 0.003-0.004 ms and one run where it was 0.045-0.047 ms. At TP4, no-overlap was 0.029-0.036 ms slower whether all GPUs shared one NUMA node or were split 2+2. At TP8, both completed split-NUMA runs showed a 0.035-0.036 ms difference. The new split-NUMA TP2 runs used torchrun binding, while the older same-NUMA and TP4/TP8 runs did not, so launcher generation is also a confounder.
 - Use `make modal-verify-correctness-large-vocab VOCAB_SIZE=... NUM_SAMPLES=... SAMPLES_PER_CALL=...` for the TP1 large-vocabulary chi-squared check. It batches sampling, accumulates counts on GPU, reports test statistics and coverage, and passes parameters to Modal as CLI options.
 - At V=128,000 and 10M samples on B200, bfloat16 per-tile maxima caused measurable bias. Changing `maxs` to float32 passed the test (reduced chi-squared 0.99844, p=0.6503, 99.84% probability mass). The RNG now also uses separate sample streams and unique tile-element offsets to avoid collisions.
-- Use `make modal-memory-traffic-all CASE=large N_HIDDEN_STATES=64` to profile FlashSampling and the three paper baselines concurrently on Modal. Each provider has its own results subdirectory containing `report.ncu-rep`, `traffic.csv`, `memory.json`, and `log.txt`; `parse-memory-traffic` aggregates completed artifacts with pandas.
+- Use `make modal-memory-traffic-all CASE=large N_HIDDEN_STATES=64` to profile FlashSampling, its `return_logits=True` ablation, and the three paper baselines concurrently on Modal. Each provider gets `report.ncu-rep`, `traffic.csv`, `memory.json`, and `log.txt`; `parse-memory-traffic` aggregates them with pandas.
 - On B200 with the large case at B=1/64/256, FlashSampling used 0.05/0.77/2.97 MiB peak temporary memory, a 98.48-99.53% reduction against the three baselines. Its HBM-read reduction grew from 0.17-0.33% at B=1 to 4.33-26.52% at B=256, while its HBM-write reduction grew from 37.98-43.30% to 95.73-97.94%.
+- For rebuttal Q3, use FP32 logits consistently: at B=64 and V=128,256, the full logits use 31.31 MiB, while the theoretical f32-value/int64-index candidates use 0.734 MiB and measure 0.77 MiB. Validate the `2B/D` I/O term separately by toggling only the FP32 logits store inside FlashSampling.
+- A paired B200 NCU profile at B=64 found that `return_logits=True` leaves reads unchanged, adds 27.45 MiB of physical HBM writes, and adds 32.00 MiB of peak temporary allocation. The extra writes are below the 31.31 MiB logical FP32 logits size, so excess DRAM bytes do not explain why the timing slowdown exceeds the I/O prediction; profiling kernel duration and execution metrics is still needed.
 - Brev machine quirks and CUDA toolkit setup: see [docs/brev-environment.md](docs/brev-environment.md).
 
 ## Triton TMA (Tensor Memory Access) pitfalls

@@ -113,6 +113,7 @@ modal-memory-traffic:
 modal-memory-traffic-all:
 	@set -e; \
 	$(MAKE) modal-memory-traffic NAME=fused-triton OUTPUT_NAME=fused-triton & \
+	$(MAKE) modal-memory-traffic NAME=fused-triton-ret-logits OUTPUT_NAME=fused-triton-ret-logits & \
 	$(MAKE) modal-memory-traffic NAME=naive-compiled OUTPUT_NAME=multinomial-compiled & \
 	$(MAKE) modal-memory-traffic NAME=flashinfer:top_k_top_p_sampling_from_logits OUTPUT_NAME=fi1 & \
 	$(MAKE) modal-memory-traffic NAME=flashinfer:sampling_from_logits OUTPUT_NAME=fi2 & \
