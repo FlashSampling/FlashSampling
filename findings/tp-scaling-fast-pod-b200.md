@@ -103,3 +103,47 @@ cause is multi-tenant CPU contention on shared HGX hosts during autotune
   timeout artefacts, kept until cleanup.
 - `benchmarking/modal-results/triton-bench/own/b200/tp{2,4}/` — fast-pod
   reference results from earlier work.
+
+## Fresh full-provider reruns (2026-07-26)
+
+The old B200 data were replaced with fresh runs containing all three baselines, FMMS, and the P2P no-overlap ablation.
+There are five completed runs at TP1, TP2, and TP4, and four at TP8.
+The fifth TP8 submission stopped with a Modal `RemoteError` before producing a CSV.
+
+The apparent TP2-to-TP4 regression was caused by mixing Modal B200 host classes.
+The fresh TP2 set contained one fast-host run, while all five TP4 runs and the original four completed TP8 runs landed in the slow cluster.
+Because the plot takes the minimum independently at each TP size, it selected the fast TP2 result and compared it with slow-host TP4 and TP8 results.
+
+Median FMMS latency across runs at batch sizes 1, 64, and 256 was:
+
+| TP | B=1 | B=64 | B=256 |
+|---:|---:|---:|---:|
+| 1 | 0.333 ms | 0.349 ms | 0.754 ms |
+| 2 | 0.200 ms | 0.216 ms | 0.361 ms |
+| 4 | 0.169 ms | 0.200 ms | 0.208 ms |
+| 8 | 0.159 ms | 0.177 ms | 0.174 ms |
+
+These mixed-class results must not be used for tensor-parallel scaling claims.
+
+### Controlled launcher diagnostic
+
+Two TP4 and two TP8 runs were launched on the current image with torchrun but without NUMA binding.
+Both TP4 runs and one TP8 run landed in the slow cluster.
+Disabling binding did not restore performance on those hosts and was generally slower than the bound runs, which rules out NUMA binding as the cause.
+
+The other TP8 run landed on a host exposing `mlx5_bond_0` and reproduced the old fast results:
+
+| B | Method | Old fast minimum | Diagnostic fast |
+|---:|---|---:|---:|
+| 16 | FMMS | 0.087 ms | 0.087 ms |
+| 16 | Compiled | 0.242 ms | 0.242 ms |
+| 16 | FI1 | 0.215 ms | 0.219 ms |
+| 16 | FI2 | 0.164 ms | 0.170 ms |
+| 64 | FMMS | 0.096 ms | 0.095 ms |
+| 64 | Compiled | 0.313 ms | 0.314 ms |
+| 64 | FI1 | 0.258 ms | 0.260 ms |
+| 64 | FI2 | 0.204 ms | 0.207 ms |
+
+This establishes that the current image, kernels, torchrun launcher, and timing code can reproduce the previous performance.
+The remaining problem is obtaining matched fast-host runs at every TP size.
+The reliable signal in the diagnostic TP8 pair was the presence of `mlx5_bond_0` on the fast host; the slow host exposed ten individual NICs and no bond.

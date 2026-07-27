@@ -19,6 +19,7 @@ DEFAULT_PROVIDERS: list[str] = [
     FLASHSAMPLING_RENAMES.get(name, name)
     for name in [
         L.fmms_triton,
+        L.fmms_triton_p2p_no_overlap,
         L.multinomial_sampling_compiled,
         L.flashinfer_sampling_from_logits,
         L.flashinfer_top_k_top_p_sampling_from_logits,
