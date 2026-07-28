@@ -14,9 +14,12 @@ that produced it.
 
 Build a CUTLASS C++ GEMM with a **custom Epilogue Visitor Tree (EVT)** that
 performs per-tile Gumbel-noise argmax (or top-k) on output tiles while they
-are still in registers, then writes a tiny `[num_tiles, H, k]` candidates
-tensor to HBM. A small second stage (the existing Triton/PyTorch merge) picks
-the global winner.
+are still in registers, then writes a tiny `[num_samples, num_tiles, H, k]`
+candidates tensor to HBM. The kernel loops over `num_samples` internally up
+to a compile-time bound; larger sample counts are batched across launches.
+A small second stage (the existing Triton/PyTorch merge) picks the global
+winner and returns samples with the same `[H, num_samples]` shape as every
+other provider.
 
 Use a custom **M-axis reduction visitor** derived from CUTLASS
 `Sm90RowReduction`.
@@ -132,6 +135,15 @@ The FMMS visitor should derive its layout and reduction choreography from
 Initially use `FinalReduction=false` so every M tile writes one candidate per
 N column.
 The existing GPU Stage 2 then merges candidates across M tiles.
+
+The stock node is templated on scalar reduce functors
+(`RegReduceFn`/`ShuffleReduceFn`/`GmemReduceFn` over `ElementCompute`), so
+carrying a `(value, index)` pair means forking its reduce internals rather
+than instantiating it with a custom functor. Example 61's packed
+`TopKResult` shuffles are the precedent for the pair exchange. The node's
+coordinate tensors (`tCcRow`, `residue_tCcRow` in its args tuple) provide
+the per-element global M coordinate and out-of-bounds predication that both
+the global vocabulary index and the Philox counter mapping derive from.
 
 Example 61 remains useful for its sorted-array insertion and K=2/K=4 PTX
 merge helpers, but not for its N-axis visitor layout or `can_implement`
@@ -343,16 +355,17 @@ distinct mechanisms:
 │        while carrying (val, global_vocab_idx) pairs               │
 │                                                                   │
 │   FmmsArgmaxVisitor::end_loop(epi_m, epi_n):                      │
-│     write (val, idx) to candidates[pid_v, h_idx, 0]               │
+│     per sample: write (val, idx) to candidates                    │
+│       [sample_idx, pid_v, h_idx, 0]                               │
 │     (plain st.global, not TMA - the payload is 8 bytes)           │
 └───────────────────────────────────────────────────────────────────┘
                                  ↓
-            [num_tiles_v, H, 1] candidates tensor (HBM)
+        [num_samples, num_tiles_v, H, 1] candidates tensor (HBM)
                                  ↓
 ┌───────────────────────────────────────────────────────────────────┐
 │ Stage 2 (unchanged from current Triton implementation):           │
-│   idxs = candidates.vals.max(dim=0).indices                       │
-│   samples = candidates.idxs.gather(0, idxs)                       │
+│   max over the num_tiles dimension, gather the winning indices    │
+│   Returns samples with shape [H, num_samples]                     │
 └───────────────────────────────────────────────────────────────────┘
 ```
 
@@ -363,7 +376,8 @@ The visitor is structurally based on `Sm90RowReduction`, with three changes:
    index, packed into 64 bits for shuffle exchange.
    V is far below the signed i32 limit.
    Widen the index to the public int64 output type only when storing.
-3. `FinalReduction=false` writes one candidate per M tile and N column.
+3. `FinalReduction=false` writes one candidate per M tile, N column, and
+   sample.
 
 For top-k, reuse example 61's sorted-array merge concepts inside this
 M-reduction layout.
@@ -377,7 +391,8 @@ Same structure. Two changes:
    from example 61.
    `cub::detail::block_topk` is evaluated only after the fixed-K path works.
 
-2. `end_loop()` writes k pairs to `candidates[pid_v, h_idx, 0..k-1]`.
+2. `end_loop()` writes k pairs per sample to
+   `candidates[sample_idx, pid_v, h_idx, 0..k-1]`.
 
 Stage 2 changes from `max(dim=0)` to top-k merge across `num_tiles*k`
 candidates + softmax + (optional) top-p + multinomial sample, exactly as
@@ -404,8 +419,11 @@ Only after TP2 is stable does the EVT store visitor attempt direct writes to
 peer symmetric-memory buffers.
 
 The host-side `_local_reduce` and `_stack_and_select_winner` are unchanged
-(they operate on a small `[world_size, num_tiles, H, k]` candidates tensor
-already in local HBM after the symm-mem barrier).
+(they operate on a small `[world_size, num_samples, num_tiles, H, k]`
+candidates tensor already in local HBM after the symm-mem barrier).
+The internal candidates layout is an implementation detail; the only shape
+contract is the final samples output `[H, num_samples]`, shared with every
+other provider.
 
 The existing Triton overlap result does not automatically transfer to the
 CUTLASS backend.
@@ -566,6 +584,7 @@ struct FmmsArgmaxVisitor : Sm90VisitorImpl<> {
     ElementCompute const* temperature_ptr = nullptr;  // 0-d GPU tensor
     uint64_t seed = 0;                                 // host scalar
     int vocab_size = 0;
+    int num_samples = 1;  // runtime value, <= NUM_SAMPLES_MAX
     // Output pointers (local HBM or peer symm-mem in TP):
     ElementCompute* candidates_vals_ptr;
     int64_t*        candidates_idxs_ptr;
@@ -590,13 +609,15 @@ struct FmmsArgmaxVisitor : Sm90VisitorImpl<> {
           int epi_v, int epi_m, int epi_n,
           Array<ElementCompute, FragmentSize> const& frg_scaled) {
       // For each element in the fragment:
-      //   1. Map the global (sample_idx, h_idx, global_v_idx) coordinate
-      //      to a unique Philox counter and draw u ~ U(0,1)
-      //   2. gumbel = -LOG2E * log2f(-log2f(u * (1 - epsilon)))
-      //   3. noisy = frg_scaled[i] + gumbel
-      //   4. global_v_idx = block_v_start + thread_v_offset
-      //   5. Insert (noisy, global_v_idx) into thread-local desc-sorted
-      //      argmax array (top-1 or top-k).
+      //   1. Read the global (v_idx, h_idx) coordinate from the node's
+      //      coordinate tensors (tCcRow gives per-element global M/N,
+      //      residue_tCcRow gives OOB predication).
+      //   2. Map (seed, sample_idx, h_idx, global_v_idx) to a unique
+      //      Philox counter and draw u ~ U(0,1)
+      //   3. gumbel = -LOG2E * log2f(-log2f(u * (1 - epsilon)))
+      //   4. noisy = frg_scaled[i] + gumbel
+      //   5. Insert (noisy, global_v_idx) into the per-sample thread-local
+      //      desc-sorted argmax array (top-1 or top-k).
       // Returns frg_scaled unchanged; the argmax is finalized in reduce().
     }
 
@@ -607,7 +628,8 @@ struct FmmsArgmaxVisitor : Sm90VisitorImpl<> {
     }
 
     CUTLASS_DEVICE void end_loop(int epi_m, int epi_n) {
-      // Write k (val, idx) pairs to candidates[pid_v, h_idx, 0..k-1].
+      // Per sample s: write k (val, idx) pairs to
+      // candidates[s, pid_v, h_idx, 0..k-1].
       // Plain st.global, not TMA (payload is tiny: 8 bytes for k=1,
       // ~200 bytes for k=25). Avoids the Blackwell TMA-store singleton
       // bug documented in findings/tma-store-blackwell-singleton-dims.md.
@@ -616,14 +638,26 @@ struct FmmsArgmaxVisitor : Sm90VisitorImpl<> {
 };
 ```
 
+**Sample loop.** The epilogue iterates over `num_samples` within each
+output tile, mirroring the Triton kernel's
+`for sample_idx in range(num_samples)`. The accumulator fragments are
+revisited per sample (the same revisit mechanism example 61 uses in
+`reduce()`), so per-sample argmax state does not scale with
+`num_samples`. `num_samples` is a runtime value bounded by a compile-time
+`NUM_SAMPLES_MAX` sized to the test and benchmark values; the Python
+wrapper batches larger requests across launches and concatenates, keeping
+the provider call signature identical to the other backends. The
+10M-sample large-vocabulary test already batches this way via
+`SAMPLES_PER_CALL`.
+
 ### Risks and mitigations
 
 | Risk | Mitigation |
 |---|---|
-| Stateless Philox arithmetic is expensive inside the epilogue | Prototype it outside GEMM and measure instruction count before integration. |
+| Stateless Philox arithmetic is expensive inside the epilogue | Prototype it outside GEMM and measure instruction count and SM/SFU pipe utilization before integration. |
 | RNG sequence changes with tile or schedule | Derive counters only from global `(seed, sample, h, vocab)` coordinates. |
 | RNG increases register pressure | Compare NCU registers and local-memory traffic against the identical greedy kernel. |
-| Distribution correctness at large V | Re-run the chi-squared test at V=128k (`make modal-verify-correctness-large-vocab VOCAB_SIZE=128000 NUM_SAMPLES=10000000`). Must reproduce p=0.65 from the Triton kernel. |
+| Distribution correctness at large V | Re-run the chi-squared test at V=128k (`make modal-verify-correctness-large-vocab VOCAB_SIZE=128000 NUM_SAMPLES=10000000`). Must pass the same decision threshold as the Triton kernel (its reference draw: reduced chi-squared 0.99844, p=0.6503). |
 
 ### Why not pre-generated noise
 
@@ -648,6 +682,8 @@ The first shippable scope is intentionally narrow:
 - H100 and B200.
 - Greedy and unrestricted Gumbel-Max.
 - The small and large model shape families already used by the benchmarks.
+- The full hidden-state sweep (H=1 through H=256). All H values are in
+  scope for the CUTLASS backend.
 - Existing two-stage candidate merge.
 - Triton remains the fallback backend.
 
@@ -710,34 +746,37 @@ are not yet in the parametrize lists:**
    especially useful for debugging the EVT visitor because it isolates
    the argmax reduction from the RNG.
 
-3. **Cross-provider consistency** (optional after distribution correctness):
-   run two
-   providers with the same seed and verify they produce identical samples.
-   Add `test_cross_provider_seed_consistency`
-   that draws 1000 samples from `fused-triton` and `fused-cutlass` with
-   the same seed and asserts `torch.equal(samples_triton, samples_cutlass)`.
-   This requires both kernels to use the same Philox counter assignment,
-   which is a design constraint worth making explicit (see "RNG sequence
-   contract" below).
+3. **Cross-provider consistency** (optional, best-effort): the Triton and
+   CUTLASS kernels use different, independently valid RNG streams (see
+   "RNG sequence contract" below), so bit-identical samples are not
+   expected and not required. If both kernels ever share a counter
+   assignment, `test_cross_provider_seed_consistency` can assert
+   `torch.equal` over a few thousand same-seed samples as a
+   reproducibility bonus. It is never a gate; the chi-squared test is the
+   only distribution-correctness gate.
 
 ### RNG sequence contract
 
-For the cross-provider consistency test to pass, the CUTLASS and Triton
-kernels must draw Gumbel noise from the same Philox stream in the same
-order. The contract:
+The CUTLASS and Triton kernels use different, independently valid RNG
+streams. Bit-identical samples across providers are not expected and not
+required.
 
-- Seed: passed as a host scalar via `Arguments`.
-- Counter/subsequence: derived from global
-  `(sample_idx, h_idx, global_vocab_idx)` coordinates in a canonical order.
+- CUTLASS kernel: a stateless Philox stream whose counter is derived only
+  from global `(seed, sample_idx, h_idx, global_vocab_idx)` coordinates.
   It must not depend on block index, warp/lane ownership, tile scheduler
-  order, or cluster size.
-- The Triton kernel's current recipe (in `core.py`) is the reference. The
-  CUTLASS EVT visitor must replicate it element-for-element.
+  order, autotuned tile shapes, or cluster size. Seed is a host scalar in
+  `Arguments`.
+- Triton kernel (status quo, unchanged): `_gumbel_noise` in `core.py`
+  draws `tl.rand(seed + sample_idx, tile_noise_offsets)`, where the
+  offsets are linearized from tile coordinates and the autotuned
+  `BLOCK_SIZE_V`/`BLOCK_SIZE_H`. Its stream is therefore tile-shape
+  dependent and cannot be reproduced by a kernel with different tiling.
 
-Exact cross-provider equality also requires the same uniform-to-Gumbel
-floating-point implementation and rounding.
-Treat it as a desirable reproducibility test, not a substitute for the
-chi-squared test.
+Distribution correctness is gated per provider by the chi-squared test.
+Cross-provider bit equality would additionally require replicating
+Triton's tile-dependent counter linearization and its exact
+uniform-to-Gumbel floating-point sequence; it is an optional
+reproducibility experiment, never a gate.
 
 ### Stage-gate policy
 
@@ -784,6 +823,11 @@ Test ties, negative values, partial M tiles, partial N tiles, multiple M and N
 tiles, V in {100, 128, 129, 256, 512}, and H in {1, 2, 63, 64, 65, 256}.
 Run the same tests on H100 and B200 from the beginning.
 
+On sm_100 the accumulator lives in TMEM, so the fragment lane layout after
+the TMEM-to-register load differs from WGMMA's register layout. Re-derive
+the shuffle choreography for the sm_100 epilogue rather than assuming the
+sm_90 layout carries over.
+
 **Exit:** exact agreement with a PyTorch max-with-index reference on both
 architectures.
 
@@ -808,6 +852,11 @@ Compare:
 
 Measure registers, local-memory traffic, occupancy, GEMM duration, Stage 2,
 and total latency.
+Measure the full hidden-state sweep (H=1 through H=256) on both
+architectures, not only the compute-bound regime. Whether one GEMM kernel
+covers the whole sweep or a separate GEMV path handles very small H (see
+`findings/gemv-kernel-for-bsz1.md` and `tl_gemv.py`) is an implementation
+choice decided from these measurements.
 This gate decides whether the custom epilogue preserves enough GEMM
 performance to justify continuing.
 
@@ -830,6 +879,10 @@ Test the RNG outside GEMM first:
 - Uniform-distribution checks.
 - Reproducibility on H100 and B200.
 - Generated instruction count and register footprint.
+- SM issue-slot and SFU (MUFU) pipe utilization. The Gumbel transform
+  issues two `log2f` (LG2) operations per element on the low-throughput
+  SFU pipe; at full weight-stream bandwidth the SFU could bind before HBM
+  does, so measure the pipe, not just instruction count.
 
 **Exit:** correct, stable streams with an acceptable measured cost.
 
@@ -842,7 +895,8 @@ configuration.
 
 Run the provider-agnostic tests, then the large-vocabulary 10M-sample
 chi-squared test.
-Profile registers and local-memory traffic before and after RNG integration.
+Profile registers, local-memory traffic, and SM/SFU pipe utilization before
+and after RNG integration, against the identical greedy kernel.
 
 **Exit:** correct sampling distribution on H100 and B200, no RNG-caused
 spill, and acceptable incremental latency.
@@ -958,16 +1012,23 @@ dedicated tests.
 6. Dedicated tests for the standalone M reduction and stateless Philox
    coordinate mapping.
 
+The early standalone gates (M-reduction, Philox prototype) may build inside
+the existing `csrc/fmms_kernel.cu` extension used by the `fused-cuda`
+provider to reuse its JIT build and pybind plumbing, where that is simpler
+than standing up the CUTLASS build first.
+
 ## Files to modify
 
 1. `src/fused_mm_sampling/core.py` - add `"fused-cutlass"` and
    `"fused-cutlass-topk"` cases to `get_sampler()`.
-2. `tests/test_core.py` - add the new providers to the parametrized
+2. `src/fused_mm_sampling/alg_names.py` - register the new providers in
+   `ShortNames`, `LongNames`, and `short2long`.
+3. `tests/test_core.py` - add the new providers to the parametrized
    chi-squared test.
-3. `src/fused_mm_sampling/bench/triton_benchmark.py` - add the new
+4. `src/fused_mm_sampling/bench/triton_benchmark.py` - add the new
    providers to `provider_names` and `all_providers`.
-4. `src/fused_mm_sampling/bench/speed_test.py` - same.
-5. `Makefile` - add build target for the CUTLASS extension.
+5. `src/fused_mm_sampling/bench/speed_test.py` - same.
+6. `Makefile` - add build target for the CUTLASS extension.
 
 ## Honest assessment of risks
 
