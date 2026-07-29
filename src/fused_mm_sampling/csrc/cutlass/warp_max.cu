@@ -18,6 +18,7 @@ namespace fmms_warp_max {
 using fmms_cutlass::MaxWithIndex;
 using fmms_cutlass::choose_max;
 using fmms_cutlass::float_bits;
+using fmms_cutlass::reduce_warp_xor;
 
 constexpr int kWarps = 4;
 constexpr int kWarpSize = 32;
@@ -39,16 +40,6 @@ struct TestCase {
   std::vector<int> indices;
 };
 
-__device__ MaxWithIndex reduce_warp_m_lanes(MaxWithIndex local) {
-  for (int offset = kLaneStride; offset < kWarpSize; offset *= 2) {
-    MaxWithIndex peer{
-        __shfl_xor_sync(kParticipantMask, local.value, offset),
-        __shfl_xor_sync(kParticipantMask, local.index, offset)};
-    local = choose_max(local, peer);
-  }
-  return local;
-}
-
 __global__ void reduce_warps(
     float const* values,
     int const* indices,
@@ -63,8 +54,10 @@ __global__ void reduce_warps(
   for (int test_case = 0; test_case < case_count; ++test_case) {
     int input_offset =
         (test_case * kWarps + warp) * kParticipantCount + participant;
-    MaxWithIndex winner =
-        reduce_warp_m_lanes({values[input_offset], indices[input_offset]});
+    MaxWithIndex winner = reduce_warp_xor(
+        {values[input_offset], indices[input_offset]},
+        kParticipantMask,
+        kLaneStride);
     int output_offset =
         (test_case * kWarps + warp) * kParticipantCount + participant;
     results[output_offset] = winner;

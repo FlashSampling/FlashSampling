@@ -20,6 +20,7 @@ namespace fmms_cta_max {
 using fmms_cutlass::MaxWithIndex;
 using fmms_cutlass::choose_max;
 using fmms_cutlass::float_bits;
+using fmms_cutlass::reduce_warp_xor;
 
 constexpr int kWarps = 4;
 constexpr int kWarpSize = 32;
@@ -41,16 +42,6 @@ struct TestCase {
   std::vector<int> indices;
 };
 
-__device__ MaxWithIndex reduce_warp_m_lanes(MaxWithIndex local) {
-  for (int offset = kLaneStride; offset < kWarpSize; offset *= 2) {
-    MaxWithIndex peer{
-        __shfl_xor_sync(kParticipantMask, local.value, offset),
-        __shfl_xor_sync(kParticipantMask, local.index, offset)};
-    local = choose_max(local, peer);
-  }
-  return local;
-}
-
 __global__ void reduce_cta(
     float const* values,
     int const* indices,
@@ -68,7 +59,7 @@ __global__ void reduce_cta(
       int input_offset =
           (test_case * kWarps + warp) * kParticipantCount + participant;
       local = {values[input_offset], indices[input_offset]};
-      local = reduce_warp_m_lanes(local);
+      local = reduce_warp_xor(local, kParticipantMask, kLaneStride);
       if (lane == 0) {
         warp_results[warp] = local;
       }
@@ -79,7 +70,7 @@ __global__ void reduce_cta(
       local = participant < kWarps
           ? warp_results[participant]
           : MaxWithIndex{-INFINITY, INT_MAX};
-      local = reduce_warp_m_lanes(local);
+      local = reduce_warp_xor(local, kParticipantMask, kLaneStride);
       if (lane == 0) {
         results[test_case] = local;
       }

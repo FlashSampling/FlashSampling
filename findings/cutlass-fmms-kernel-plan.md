@@ -1046,8 +1046,12 @@ This gate covers one full M tile and one N column only.
 
 #### Gate 1e: support multiple N columns
 
+**Status:** complete on 2026-07-29.
+
 Extend the CTA reduction to every N column in the epilogue tile.
 Verify that columns remain independent.
+The checked-in runner is `make modal-cutlass-cta-multi-column-max`, and the
+result is documented in `findings/cutlass-cta-multi-column-max.md`.
 
 **Exit:** exact results for one full CTA tile across its complete N extent.
 

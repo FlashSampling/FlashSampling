@@ -54,6 +54,11 @@ modal-cutlass-cta-max:
 	modal run -m src.fused_mm_sampling.modal_lib.cutlass.cta_max 2>&1 | \
 		tee benchmarking/modal-results/cutlass-cta-max/log.txt
 
+modal-cutlass-cta-multi-column-max:
+	mkdir -p benchmarking/modal-results/cutlass-cta-multi-column-max
+	modal run -m src.fused_mm_sampling.modal_lib.cutlass.cta_multi_column_max 2>&1 | \
+		tee benchmarking/modal-results/cutlass-cta-multi-column-max/log.txt
+
 update-deps:
 	uv lock --upgrade  # Re-resolve all deps to latest compatible versions
 	uv sync --all-extras  # Install exact versions from lockfile, including optional groups
