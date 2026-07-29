@@ -941,7 +941,7 @@ This gate proves only the ordinary GEMM toolchain, not the custom epilogue.
 **Current baseline (validated 2026-07-29):**
 
 - Modal base image: `pytorch/pytorch:2.11.0-cuda13.0-cudnn9-devel`.
-- CUTLASS: 4.2.1 at commit `f3fde58372d33e9a5650ba7b80fc48b3b49d40c8`.
+- CUTLASS: 4.6.1 at commit `e05f953a5b3d38adc240df2ff928e0421c2abba3`.
 - CUDA toolkit: 13.0.88.
 - PyTorch: 2.11.0+cu130.
 - Host compiler: GCC 13.3.0.
@@ -954,6 +954,8 @@ ordinary GEMM on each architecture, checks CUTLASS's independent device
 reference, and writes the complete log to
 `benchmarking/modal-results/cutlass/00-toolchain/smoke.txt`.
 Both architecture checks passed on 2026-07-29.
+The Gate 2a provider matrix and its shared greedy pytest cases were also rerun
+on both architectures after the 4.6.1 upgrade.
 
 ### Gate 1: standalone M-axis max-with-index
 

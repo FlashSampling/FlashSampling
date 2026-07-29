@@ -8,8 +8,8 @@ from ..utils import PYTORCH_CUDA_IMAGE, make_image
 
 _repo_root = Path(__file__).resolve().parents[4]
 
-CUTLASS_VERSION = "4.2.1"
-CUTLASS_SHA = "f3fde58372d33e9a5650ba7b80fc48b3b49d40c8"
+CUTLASS_VERSION = "4.6.1"
+CUTLASS_SHA = "e05f953a5b3d38adc240df2ff928e0421c2abba3"
 CUTLASS_ROOT = "/opt/cutlass"
 
 

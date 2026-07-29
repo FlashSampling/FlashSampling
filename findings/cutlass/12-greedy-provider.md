@@ -55,7 +55,9 @@ The gate fails if:
 
 The test inputs construct exact, well-separated BF16 maxima and deterministic ties.
 This gate does not establish general GEMM numerical tolerances, performance, RNG correctness, tensor parallelism, or top-k behavior.
-The extension currently requires a local CUTLASS 4.2.1 source tree, and first use JIT compiles the architecture-specific module.
+The extension currently requires a local CUTLASS 4.6.1 source tree at the
+pinned Gate 0 commit, and first use JIT compiles the architecture-specific
+module.
 
 Gate 2b should first replace the diagnostic D store with a no-output epilogue that retains the Gate 1h auxiliary candidates.
 It should then compare the exact corrected provider against plain CUTLASS GEMM, CUTLASS GEMM plus argmax, Triton FMMS, and cuBLAS plus argmax over the full H sweep on both architectures.
