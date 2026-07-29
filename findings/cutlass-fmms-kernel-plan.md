@@ -781,8 +781,10 @@ reproducibility experiment, never a gate.
 
 ### Stage-gate policy
 
-Do not start a later gate until the current gate has a checked-in artifact,
-correctness evidence, benchmark logs, and a written decision.
+Do not start a later gate until the current gate has a complete local validation
+packet, correctness evidence, benchmark logs, and a written decision.
+Commit the reproducible runner and finding, but keep generated validation
+packets under `benchmarking/modal-results/` out of Git.
 Record failed approaches rather than silently carrying them forward.
 
 Initial thresholds:
@@ -807,32 +809,108 @@ Every gate and micro-gate must leave a human-readable validation packet under
 `benchmarking/modal-results/cutlass-<gate-name>/`.
 The packet must contain:
 
+- `VERIFY.md`, as the entry point for the human verifier.
+  It must give the review order, expected outcome, actual outcome, explicit
+  failure criteria, and copy-paste commands that check the packet.
 - `summary.json`, with the expected result, actual result, pass or fail status,
   architectures, dimensions, test counts, failure count, and exact commands.
-- `cases.csv`, with one row per test case and separate expected, actual, error,
-  and pass columns.
+- `case-summary.csv`, with one human-scale row per architecture, test case, and
+  relevant configuration.
+  It must contain separate expected, actual, error or mismatch count, and pass
+  columns, plus the number of raw observations represented by the row.
+- `cases.csv`, with the complete case-level or observation-level evidence used
+  to produce `case-summary.csv`.
+  This is the debugging record, not the primary review surface.
 - `log.txt`, with the complete build and execution output.
 - A finding under `findings/` that explains what was tested, what passed, what
-  could have failed, and what the result does not prove.
+  could have failed, why the gate's constraints remain useful, and what the
+  result does not prove.
 
 Performance gates must additionally save raw per-repetition measurements,
 environment metadata, and profiler reports.
+Their compact report must include repetition counts, the declared threshold,
+the statistic used for the decision, uncertainty or variability where
+applicable, and an explicit pass column.
 Distribution gates must additionally save sample counts and the complete test
 statistics.
+Their compact report must include the test statistic, degrees of freedom,
+p-value or other declared decision statistic, threshold, covered probability
+mass where applicable, sample count, and an explicit pass column.
 If an artifact does not apply, `summary.json` must say why instead of silently
 omitting it.
 
 A human verifier should be able to check a gate without reading kernel source:
 
-1. Confirm that `summary.json` names every required architecture and test case.
-2. Confirm that the expected and actual counts match and `failure_count` is
+1. Start with `VERIFY.md` and confirm that it states the expected and actual
+   outcomes instead of only describing how the test works.
+2. Confirm that `summary.json` names every required architecture and test case.
+3. Confirm that the expected and actual counts match and `failure_count` is
    zero.
-3. Inspect `cases.csv` for worst errors and boundary cases, not only its final
-   pass column.
-4. Search `log.txt` for compiler errors, launch errors, sanitizer failures,
+4. Inspect `case-summary.csv` for every required case, worst errors, and
+   boundary cases, not only its final pass column.
+5. Search `log.txt` for compiler errors, launch errors, sanitizer failures,
    skipped tests, NaNs, and unexpected fallbacks.
-5. Confirm that the finding states the gate's limitations before approving the
+6. Confirm that the finding states the gate's limitations before approving the
    next gate.
+
+The verifier must not need to inspect `cases.csv` or other raw measurements to
+approve a passing gate.
+The compact report must expose every required case and make missing coverage,
+threshold failures, and mismatches obvious.
+Raw evidence remains mandatory so a failure or surprising aggregate can be
+investigated without rerunning the gate.
+
+### Incremental code and artifact lifecycle
+
+Incremental gates intentionally create diagnostic kernels, runners, and
+validation packets.
+Keep them organized so that completed experiments do not become an accidental
+second implementation of the production kernel.
+
+Use these rules:
+
+1. Give each micro-gate one canonical source or test harness, one runner, one
+   Make target, one artifact directory, and one finding.
+   Do not retain alternate files with suffixes such as `new`, `fixed`, or
+   `final`.
+2. Keep gate-only CUDA harnesses clearly named `cutlass_<gate-name>.cu` under
+   `src/fused_mm_sampling/csrc/`.
+   Keep their Modal entrypoints named `modal_cutlass_<gate-name>.py`, and write
+   all generated evidence only under the matching
+   `benchmarking/modal-results/cutlass-<gate-name>/` directory.
+3. When a primitive becomes part of the next gate or the production kernel,
+   move its reusable implementation into one shared header or production
+   source.
+   Make the earlier harness test that shared implementation instead of copying
+   it.
+4. Reuse the pinned image, compilation helpers, packet-writing helpers, and
+   validation schemas across gates.
+   Extract a shared helper after the second real use, rather than cloning a
+   runner and allowing the copies to diverge.
+5. Keep only artifacts needed for human verification and failure diagnosis.
+   Do not duplicate logs or raw measurements in findings, runner output
+   folders, and ad hoc scratch directories.
+   Findings summarize and link to the canonical packet.
+6. After a gate is approved, remove failed prototypes, superseded runners,
+   unused build commands, stale binaries, temporary output directories, and
+   abandoned artifact formats before starting the next gate.
+   Prefer `trash-put` for local cleanup when the target can reasonably be
+   recovered.
+7. Retain the approved gate's minimal reproducible harness, canonical runner,
+   validation packet, and finding until equivalent or stronger coverage exists
+   in the permanent test suite.
+   Once permanent coverage replaces the harness, remove the redundant harness
+   and runner, record the replacement in the finding, and keep the compact
+   historical packet.
+8. At the end of every gate, run `git status --short` and inspect the gate's
+   artifact directory.
+   The handoff must identify every retained gate-specific file and explain why
+   it remains.
+
+A gate is not ready for approval while unexplained scratch files, duplicate
+runners, stale packet formats, or copied implementations remain.
+Cleanup must not remove the only reproducer for an unresolved failure or the
+only evidence supporting a completed gate.
 
 ### Gate 0: establish a reproducible toolchain baseline
 
@@ -878,8 +956,8 @@ Both architecture checks passed on 2026-07-29.
 ### Gate 1: standalone M-axis max-with-index
 
 Gate 1 is divided into micro-gates.
-Each micro-gate produces a checked-in artifact, focused tests, and a written
-result before the next one starts.
+Each micro-gate produces a local validation packet, focused tests, and a
+written result before the next one starts.
 This keeps architecture-specific layout work separate from reduction,
 predication, EVT integration, and multi-tile merging.
 
@@ -911,9 +989,13 @@ This gate maps ownership only and does not prove any reduction.
 
 #### Gate 1b: reduce values owned by one thread
 
+**Status:** complete on 2026-07-29.
+
 Implement deterministic max-with-index over only the values owned by one
 thread.
 Do not use warp shuffles, shared memory, or partial tiles.
+The checked-in runner is `make modal-cutlass-thread-local-max`, and the result
+is documented in `findings/cutlass-thread-local-max.md`.
 
 **Exit:** exact value and lowest-index tie agreement with a CPU reference for
 every thread-local fragment.

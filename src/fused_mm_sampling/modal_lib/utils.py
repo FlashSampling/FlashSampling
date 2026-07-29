@@ -89,9 +89,21 @@ def make_cutlass_image() -> modal.Image:
             " --target 71_blackwell_gemm_with_collective_builder --parallel 2",
         )
     )
-    diagnostic_source = _repo_root / "src/fused_mm_sampling/csrc/cutlass_accumulator_layout.cu"
+    csrc_root = _repo_root / "src/fused_mm_sampling/csrc"
+    image = image.add_local_file(
+        str(csrc_root / "cutlass_thread_local_max.cu"),
+        remote_path="/opt/fmms/cutlass_thread_local_max.cu",
+        copy=True,
+    ).run_commands(
+        "nvcc -std=c++17 -O2 -arch=sm_90a -DFMMS_ARCH_SM90"
+        " /opt/fmms/cutlass_thread_local_max.cu"
+        " -o /opt/fmms/cutlass_thread_local_max_sm90",
+        "nvcc -std=c++17 -O2 -arch=sm_100a -DFMMS_ARCH_SM100"
+        " /opt/fmms/cutlass_thread_local_max.cu"
+        " -o /opt/fmms/cutlass_thread_local_max_sm100",
+    )
     return image.add_local_file(
-        str(diagnostic_source),
+        str(csrc_root / "cutlass_accumulator_layout.cu"),
         remote_path="/opt/fmms/cutlass_accumulator_layout.cu",
         copy=True,
     ).run_commands(
