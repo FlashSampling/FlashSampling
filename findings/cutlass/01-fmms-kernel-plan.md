@@ -1190,7 +1190,7 @@ passing result is documented in `findings/cutlass/12-greedy-provider.md`.
 Profile the exact provider approved in Gate 2a without changing its
 correctness path.
 
-The first implementation task is removing the diagnostic FP32 `[V,H]` destination allocation and store inherited from Gate 1h.
+The diagnostic FP32 `[V,H]` destination allocation and store inherited from Gate 1h have been removed.
 The preferred callback-only implementation set `ElementD=void` while retaining the existing split-tree candidate EVT.
 With CUTLASS 4.6.1, this compiles through the SM90 TMA collective after the EVT advertises a non-void `ElementAux` type and inherits its visitor constructors.
 It does not compile through the SM100 TMA collective.
@@ -1202,9 +1202,17 @@ Do not approve an implementation that redirects the full D store into aliased or
 That would remove the logical allocation without removing the unwanted store traffic, and concurrent stores to the same addresses would introduce races.
 Do not maintain separate SM90 and SM100 production semantics merely because the standard SM90 collective supports the void destination.
 
-The revised implementation boundary is an adapted or handwritten SM100 epilogue collective that preserves the validated accumulator ownership, candidate reduction, and Stage 2 comparator while omitting the D shared-memory pipeline, D TMA descriptor, and D global store.
-The CUTLASS GEMM mainloop remains in scope and should not be rewritten.
-After the SM100 path works, use the same no-D semantics on SM90 and rerun the complete Gate 2a matrix before collecting performance data.
+The implemented boundary is a narrow patch to the SM100 TMA epilogue collective that mirrors the existing SM90 void-D contract.
+It substitutes the EVT auxiliary type for internal layout arithmetic, skips D descriptor construction and prefetch, disables shared-memory reuse that depends on D, and skips both the D shared-memory output copy and D TMA store.
+The D-shaped shared-memory buffer remains as the workspace passed to `cst_callbacks.reduce`; it is not populated with or stored as the GEMM output.
+The CUTLASS GEMM mainloop and the validated candidate reduction remain unchanged.
+The production provider now uses the same `ElementD=void` semantics on SM90 and SM100.
+The complete Gate 2a matrix passed again with 52/52 cases and 18/18 shared pytest cases per architecture.
+The implementation and evidence are documented in `findings/cutlass/13-void-d-epilogue.md`.
+
+**TODO:** Replace the downstream CUTLASS source patch with an upstream NVIDIA/CUTLASS fix.
+Before opening the issue or pull request, extract a minimal SM100 `ElementD=void` reproducer with an EVT auxiliary output and add a focused regression test.
+Keep the local patch pinned to the exact CUTLASS revision until an upstream release containing the fix is adopted and the full Gate 2a matrix passes without it.
 
 Compare:
 

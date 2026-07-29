@@ -259,11 +259,15 @@ using TileShape = Shape<_128, _128, _64>;
 using ClusterShape = Shape<_1, _1, _1>;
 using ElementA = cutlass::bfloat16_t;
 using ElementB = cutlass::bfloat16_t;
-// The packed auxiliary candidate buffer is the gate output. The diagnostic D
-// store uses FP32 and all test N extents preserve CUTLASS's four-element TMA
-// alignment while still exercising complete and partial 128-column tiles.
+// The packed auxiliary candidate buffer is the gate output. Gate 1 keeps an
+// FP32 D store for direct EVT inspection, while the production provider
+// disables D and emits only the candidates.
 using ElementC = float;
+#if defined(FMMS_CUTLASS_DISABLE_D)
+using ElementD = void;
+#else
 using ElementD = float;
+#endif
 using ElementAccumulator = float;
 using LayoutA = cutlass::layout::RowMajor;
 using LayoutB = cutlass::layout::ColumnMajor;
@@ -287,15 +291,23 @@ using RowReduction = cutlass::epilogue::fusion::Sm90RowReduction<
 using CandidateReductionEVT = cutlass::epilogue::fusion::Sm90EVT<
     RowReduction,
     cutlass::epilogue::fusion::Sm90AccFetch>;
-using CandidateEVT = cutlass::epilogue::fusion::Sm90SplitTreeVisitor<
-    PackCandidate,
-    DiscardPackedOutput,
-    CandidateReductionEVT>;
+struct CandidateEVT
+    : cutlass::epilogue::fusion::Sm90SplitTreeVisitor<
+          PackCandidate,
+          DiscardPackedOutput,
+          CandidateReductionEVT> {
+  using Base = cutlass::epilogue::fusion::Sm90SplitTreeVisitor<
+      PackCandidate,
+      DiscardPackedOutput,
+      CandidateReductionEVT>;
+  using Base::Base;
+  using ElementAux = float;
+};
 
 constexpr int kAlignmentA = 128 / cutlass::sizeof_bits_v<ElementA>;
 constexpr int kAlignmentB = 128 / cutlass::sizeof_bits_v<ElementB>;
 constexpr int kAlignmentC = 128 / cutlass::sizeof_bits_v<ElementC>;
-constexpr int kAlignmentD = 128 / cutlass::sizeof_bits_v<ElementD>;
+constexpr int kAlignmentD = 128 / cutlass::sizeof_bits_v<float>;
 
 using CollectiveEpilogue =
     typename cutlass::epilogue::collective::CollectiveBuilder<

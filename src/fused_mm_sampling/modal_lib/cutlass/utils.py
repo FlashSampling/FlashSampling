@@ -41,13 +41,23 @@ def make_cutlass_image() -> modal.Image:
 
 def make_cutlass_provider_image() -> modal.Image:
     """Layer pinned CUTLASS sources onto the standard FMMS runtime image."""
+    void_d_patch = (
+        _repo_root
+        / "src/fused_mm_sampling/csrc/cutlass/sm100-void-d.patch"
+    )
     return (
         make_image()
         .apt_install("git", "ninja-build")
+        .add_local_file(
+            str(void_d_patch),
+            remote_path="/opt/fmms/sm100-void-d.patch",
+            copy=True,
+        )
         .run_commands(
             f"git clone https://github.com/NVIDIA/cutlass.git {CUTLASS_ROOT}",
             f"cd {CUTLASS_ROOT} && git checkout --detach {CUTLASS_SHA}",
             f'test "$(cd {CUTLASS_ROOT} && git rev-parse HEAD)" = "{CUTLASS_SHA}"',
+            f"cd {CUTLASS_ROOT} && patch -p1 < /opt/fmms/sm100-void-d.patch",
             "pip install --break-system-packages pytest",
         )
     )

@@ -5,6 +5,7 @@
 
 #define FMMS_GATE_STAGE2
 #define FMMS_CUTLASS_LIBRARY
+#define FMMS_CUTLASS_DISABLE_D
 #include "evt_candidates.cu"
 
 namespace fmms_cutlass_greedy {
@@ -55,8 +56,6 @@ torch::Tensor greedy(torch::Tensor weights, torch::Tensor hidden_states) {
   padded_hidden_states.narrow(0, 0, n).copy_(hidden_states);
   auto candidates = torch::empty(
       {m_tiles, rounded_n * int64_t(sizeof(PackedCandidate))}, byte_options);
-  auto diagnostic_d = torch::empty(
-      {m, rounded_n}, weights.options().dtype(torch::kFloat32));
   auto output = torch::empty({n, 1}, weights.options().dtype(torch::kInt64));
 
   using StrideA = typename GemmKernel::StrideA;
@@ -92,7 +91,7 @@ torch::Tensor greedy(torch::Tensor weights, torch::Tensor hidden_states) {
           evt_arguments,
           nullptr,
           stride_c,
-          diagnostic_d.data_ptr<float>(),
+          nullptr,
           stride_d,
       },
       hardware_info};
