@@ -1087,6 +1087,8 @@ the gate.
 
 #### Gate 1g: integrate global candidates into a minimal EVT
 
+**Status:** complete on 2026-07-29.
+
 Feed ordinary GEMM accumulators into the proven CTA reduction and write one
 candidate per M tile and N column.
 Convert tile-local positions into global vocabulary indices in the same
@@ -1116,6 +1118,9 @@ Require nonzero tile offsets, boundary winners, negative inputs, and
 deterministic ties.
 A correct final winner cannot hide an incorrect losing tile candidate.
 This gate does not validate Stage 2.
+
+The checked-in runner is `make modal-cutlass GATE=evt-candidates`, and the
+result is documented in `findings/cutlass/10-evt-candidates.md`.
 
 #### Gate 1h: integrate Stage 2 and close deterministic correctness
 

@@ -170,6 +170,30 @@ def add_cutlass_cta_boundary_max(image: modal.Image) -> modal.Image:
     )
 
 
+def add_cutlass_evt_candidates(image: modal.Image) -> modal.Image:
+    """Add the Gate 1g GEMM EVT candidate binaries."""
+    csrc_root = _repo_root / "src/fused_mm_sampling/csrc/cutlass"
+    return (
+        image.add_local_file(
+            str(csrc_root / "evt_candidates.cu"),
+            remote_path="/opt/fmms/evt_candidates.cu",
+            copy=True,
+        )
+        .run_commands(
+            f"nvcc -std=c++17 -O2 -lineinfo --expt-relaxed-constexpr"
+            " -arch=sm_90a -DFMMS_ARCH_SM90"
+            f" -I{CUTLASS_ROOT}/include -I{CUTLASS_ROOT}/tools/util/include"
+            " /opt/fmms/evt_candidates.cu"
+            " -o /opt/fmms/cutlass_evt_candidates_sm90",
+            f"nvcc -std=c++17 -O2 -lineinfo --expt-relaxed-constexpr"
+            " -arch=sm_100a -DFMMS_ARCH_SM100"
+            f" -I{CUTLASS_ROOT}/include -I{CUTLASS_ROOT}/tools/util/include"
+            " /opt/fmms/evt_candidates.cu"
+            " -o /opt/fmms/cutlass_evt_candidates_sm100",
+        )
+    )
+
+
 def add_cutlass_accumulator_layout(image: modal.Image) -> modal.Image:
     """Add the Gate 1a accumulator-layout diagnostic binaries."""
     csrc_root = _repo_root / "src/fused_mm_sampling/csrc/cutlass"
