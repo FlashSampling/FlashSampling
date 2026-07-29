@@ -29,6 +29,18 @@ def fused_mm_sample_cutlass_greedy(
     return _get_module().greedy(weights, hidden_states)
 
 
+def cutlass_plain_gemm(
+    weights: torch.Tensor, hidden_states: torch.Tensor
+) -> torch.Tensor:
+    """Return an FP32 `[V, H]` output from the matching plain CUTLASS GEMM."""
+    return _get_module().plain_gemm(weights, hidden_states)
+
+
+def cutlass_greedy_kernel_attributes() -> dict[str, int]:
+    """Return static resource metadata for the fused GEMM and Stage 2 kernels."""
+    return _get_module().kernel_attributes()
+
+
 def _get_module():
     global _module
     if _module is None:

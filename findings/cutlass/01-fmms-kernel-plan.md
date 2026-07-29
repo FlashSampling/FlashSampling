@@ -1185,7 +1185,7 @@ passing result is documented in `findings/cutlass/12-greedy-provider.md`.
 
 #### Gate 2b: greedy performance feasibility decision
 
-**Status:** in progress.
+**Status:** no-go.
 
 Profile the exact provider approved in Gate 2a without changing its
 correctness path.
@@ -1209,6 +1209,14 @@ The CUTLASS GEMM mainloop and the validated candidate reduction remain unchanged
 The production provider now uses the same `ElementD=void` semantics on SM90 and SM100.
 The complete Gate 2a matrix passed again with 52/52 cases and 18/18 shared pytest cases per architecture.
 The implementation and evidence are documented in `findings/cutlass/13-void-d-epilogue.md`.
+
+The complete H100 and B200 performance sweep failed the predeclared 5%
+threshold in 24 of 36 configurations.
+The worst ratio was 1.38 at V=151,936, D=4,096, H=1 on B200.
+Do not begin Gate 3 on the current implementation.
+Rework the epilogue or wrapper path and rerun Gate 2b, or stop the CUTLASS port.
+The decision and evidence are documented in
+`findings/cutlass/14-greedy-performance.md`.
 
 **TODO:** Replace the downstream CUTLASS source patch with an upstream NVIDIA/CUTLASS fix.
 Before opening the issue or pull request, extract a minimal SM100 `ElementD=void` reproducer with an EVT auxiliary output and add a focused regression test.

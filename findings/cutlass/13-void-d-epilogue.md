@@ -47,7 +47,9 @@ This rerun verifies compilation, runtime pipeline behavior, exact indices, bound
 It does not prove the absence of physical D writes through profiling.
 Gate 2b performance profiling must confirm that claim with memory traffic and kernel metrics before the performance decision.
 
-## Next step
+## Gate 2b result
 
-Build the Gate 2b performance packet and compare greedy CUTLASS FMMS against plain CUTLASS GEMM, CUTLASS GEMM plus argmax, Triton FMMS, and cuBLAS plus argmax.
-Collect total latency, GEMM and Stage 2 duration, registers, local-memory traffic, occupancy, and HBM writes across H=1 through H=256 on both architectures.
+The end-to-end Gate 2b sweep reached a no-go decision under the predeclared 5%
+threshold.
+The complete result is documented in
+`findings/cutlass/14-greedy-performance.md`.
