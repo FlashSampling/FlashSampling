@@ -1029,8 +1029,12 @@ This gate does not prove cross-warp reduction.
 
 #### Gate 1d: reduce within one CTA
 
+**Status:** complete on 2026-07-29.
+
 Combine warp results through shared memory.
 Restrict the problem to one complete M tile and one N column.
+The checked-in runner is `make modal-cutlass-cta-max`, and the result is
+documented in `findings/cutlass-cta-max.md`.
 
 **Exit:** exact max-with-index for one full CTA M tile.
 
