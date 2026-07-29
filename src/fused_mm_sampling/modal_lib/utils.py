@@ -67,10 +67,10 @@ def make_image():
 
 def make_cutlass_image() -> modal.Image:
     """Build the pinned CUTLASS ordinary-GEMM smoke binaries for Hopper and Blackwell."""
-    return (
+    image = (
         modal.Image.from_registry(PYTORCH_CUDA_IMAGE)
         .apt_install("cmake", "git", "ninja-build")
-        .run_commands("pip install --break-system-packages pydantic-settings")
+        .run_commands("pip install --break-system-packages pandas pydantic-settings")
         .run_commands(
             f"git clone https://github.com/NVIDIA/cutlass.git {CUTLASS_ROOT}",
             f"cd {CUTLASS_ROOT} && git checkout --detach {CUTLASS_SHA}",
@@ -88,6 +88,23 @@ def make_cutlass_image() -> modal.Image:
             f"cmake --build {CUTLASS_ROOT}/build-b200"
             " --target 71_blackwell_gemm_with_collective_builder --parallel 2",
         )
+    )
+    diagnostic_source = _repo_root / "src/fused_mm_sampling/csrc/cutlass_accumulator_layout.cu"
+    return image.add_local_file(
+        str(diagnostic_source),
+        remote_path="/opt/fmms/cutlass_accumulator_layout.cu",
+        copy=True,
+    ).run_commands(
+        f"nvcc -std=c++17 -O2 --expt-relaxed-constexpr"
+        " -arch=sm_90a -DFMMS_ARCH_SM90"
+        f" -I{CUTLASS_ROOT}/include -I{CUTLASS_ROOT}/tools/util/include"
+        " /opt/fmms/cutlass_accumulator_layout.cu"
+        " -o /opt/fmms/cutlass_accumulator_layout_sm90",
+        f"nvcc -std=c++17 -O2 --expt-relaxed-constexpr"
+        " -arch=sm_100a -DFMMS_ARCH_SM100"
+        f" -I{CUTLASS_ROOT}/include -I{CUTLASS_ROOT}/tools/util/include"
+        " /opt/fmms/cutlass_accumulator_layout.cu"
+        " -o /opt/fmms/cutlass_accumulator_layout_sm100",
     )
 
 

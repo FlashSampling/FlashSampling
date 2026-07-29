@@ -34,6 +34,11 @@ modal-cutlass-toolchain-smoke:
 	modal run -m src.fused_mm_sampling.modal_lib.modal_cutlass_toolchain 2>&1 | \
 		tee benchmarking/modal-results/cutlass-toolchain/smoke.txt
 
+modal-cutlass-accumulator-layout:
+	mkdir -p benchmarking/modal-results/cutlass-layout
+	modal run -m src.fused_mm_sampling.modal_lib.modal_cutlass_accumulator_layout 2>&1 | \
+		tee benchmarking/modal-results/cutlass-layout/log.txt
+
 update-deps:
 	uv lock --upgrade  # Re-resolve all deps to latest compatible versions
 	uv sync --all-extras  # Install exact versions from lockfile, including optional groups

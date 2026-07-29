@@ -800,6 +800,40 @@ Initial thresholds:
 The 5% and 3% values are starting policy, not facts.
 Change them only before seeing the experiment being judged.
 
+### Required validation packet for every gate
+
+Do not mark a gate complete from a successful process exit alone.
+Every gate and micro-gate must leave a human-readable validation packet under
+`benchmarking/modal-results/cutlass-<gate-name>/`.
+The packet must contain:
+
+- `summary.json`, with the expected result, actual result, pass or fail status,
+  architectures, dimensions, test counts, failure count, and exact commands.
+- `cases.csv`, with one row per test case and separate expected, actual, error,
+  and pass columns.
+- `log.txt`, with the complete build and execution output.
+- A finding under `findings/` that explains what was tested, what passed, what
+  could have failed, and what the result does not prove.
+
+Performance gates must additionally save raw per-repetition measurements,
+environment metadata, and profiler reports.
+Distribution gates must additionally save sample counts and the complete test
+statistics.
+If an artifact does not apply, `summary.json` must say why instead of silently
+omitting it.
+
+A human verifier should be able to check a gate without reading kernel source:
+
+1. Confirm that `summary.json` names every required architecture and test case.
+2. Confirm that the expected and actual counts match and `failure_count` is
+   zero.
+3. Inspect `cases.csv` for worst errors and boundary cases, not only its final
+   pass column.
+4. Search `log.txt` for compiler errors, launch errors, sanitizer failures,
+   skipped tests, NaNs, and unexpected fallbacks.
+5. Confirm that the finding states the gate's limitations before approving the
+   next gate.
+
 ### Gate 0: establish a reproducible toolchain baseline
 
 Use a versioned Modal image and pin the CUTLASS revision used by each
@@ -817,6 +851,12 @@ commands in the Modal runner.
 Do not expose a sampling provider yet.
 
 **Exit:** both architectures build reproducibly and a small GEMM passes.
+
+**Human verification:** check that the log records all pinned versions and
+contains successful independent reference checks for both SM90a and SM100a.
+Treat a missing architecture, an unrecorded dependency version, a reference
+mismatch, or a build that reused an unexplained binary as a failure.
+This gate proves only the ordinary GEMM toolchain, not the custom epilogue.
 
 **Current baseline (validated 2026-07-29):**
 
@@ -837,26 +877,174 @@ Both architecture checks passed on 2026-07-29.
 
 ### Gate 1: standalone M-axis max-with-index
 
-Build the smallest possible deterministic M-reduction artifact.
-Derive its tensor layout and lane, warp, and shared-memory choreography from
-`Sm90RowReduction`.
+Gate 1 is divided into micro-gates.
+Each micro-gate produces a checked-in artifact, focused tests, and a written
+result before the next one starts.
+This keeps architecture-specific layout work separate from reduction,
+predication, EVT integration, and multi-tile merging.
+
+#### Gate 1a: map the accumulator fragment layout
+
+**Status:** complete on 2026-07-29.
+
+Build a diagnostic EVT that replaces accumulator values with ownership
+metadata and lets the ordinary CUTLASS epilogue store it.
+Record the mapping from thread, fragment slot, and epilogue iteration to
+global `(M, N)` coordinates.
+Run it independently on SM90 and SM100 because SM100 loads its accumulator
+from TMEM into registers before the callback.
+The checked-in runner is `make modal-cutlass-accumulator-layout`, and the
+observed layouts are documented in
+`findings/cutlass-accumulator-layout.md`.
+
+**Exit:** every output coordinate in one complete CTA tile has exactly one
+owner, and the SM90 and SM100 mappings are saved and documented.
+
+**Human verification:** inspect `sm90.csv` and `sm100.csv` for 16,384 rows,
+16,384 unique `(m, n)` pairs, zero missing coordinates, and zero duplicate
+coordinates.
+Confirm that each summary reports the expected thread, fragment, and epilogue
+iteration ranges.
+Missing or duplicate owners, corrupted metadata, a GPU launch failure, or an
+architecture absent from the packet fails the gate.
+This gate maps ownership only and does not prove any reduction.
+
+#### Gate 1b: reduce values owned by one thread
+
+Implement deterministic max-with-index over only the values owned by one
+thread.
+Do not use warp shuffles, shared memory, or partial tiles.
+
+**Exit:** exact value and lowest-index tie agreement with a CPU reference for
+every thread-local fragment.
+
+**Human verification:** require separate rows for unique maxima, negative
+values, maxima in every fragment slot, and ties in both index orders on SM90
+and SM100.
+Expected and actual FP32 bit patterns and indices must match exactly.
+This gate does not exercise warp communication or shared memory.
+
+#### Gate 1c: reduce within one warp
+
+Add shuffle-based max-with-index across the M lanes of one warp.
+Test unique maxima, ties, negative values, and maxima that cross lane
+boundaries.
+
+**Exit:** exact agreement for every warp-local M domain.
+
+**Human verification:** require cases whose winner originates in every
+participating lane, plus cross-lane ties and all-negative inputs.
+Check exact values and lowest indices against the CPU reference for every
+warp.
+A result from lane zero alone or a test that never moves the winner across a
+shuffle boundary is insufficient.
+This gate does not prove cross-warp reduction.
+
+#### Gate 1d: reduce within one CTA
+
+Combine warp results through shared memory.
+Restrict the problem to one complete M tile and one N column.
+
+**Exit:** exact max-with-index for one full CTA M tile.
+
+**Human verification:** require winners from every contributing warp and ties
+between different warps.
+Check the complete output against the CPU reference and search the log for
+race-check or synchronization failures.
+This gate covers one full M tile and one N column only.
+
+#### Gate 1e: support multiple N columns
+
+Extend the CTA reduction to every N column in the epilogue tile.
+Verify that columns remain independent.
+
+**Exit:** exact results for one full CTA tile across its complete N extent.
+
+**Human verification:** require independent maxima at different M positions
+for every N column.
+Inspect per-column expected and actual values and indices, including columns
+at both ends of every epilogue N iteration.
+Cross-column contamination or an untested column fails the gate.
+This gate still excludes boundary tiles.
+
+#### Gate 1f: handle boundary tiles
+
+Add explicit predication for partial M and N tiles.
+Test dimensions immediately below, at, and above tile boundaries.
+
+**Exit:** exact results for M in `{100, 127, 128, 129, 255, 256, 257}` and
+N in `{1, 2, 63, 64, 65, 127, 128, 129}`.
+
+**Human verification:** confirm that `cases.csv` contains the full Cartesian
+product of the declared M and N sets on both architectures.
+Require winners at the final valid M coordinate and sentinel maxima in padded
+coordinates, so broken predication cannot pass accidentally.
+Any missing shape, out-of-bounds report, sentinel winner, or mismatch fails
+the gate.
+
+#### Gate 1g: add global indices and deterministic ties
+
+Convert fragment-local positions into global vocabulary indices.
+Match `torch.max` by choosing the lowest global index when values tie.
 Use packed FP32 value plus i32 row index internally and widen the index only
 at the public output.
 
-Test ties, negative values, partial M tiles, partial N tiles, multiple M and N
-tiles, V in {100, 128, 129, 256, 512}, and H in {1, 2, 63, 64, 65, 256}.
-Run the same tests on H100 and B200 from the beginning.
+**Exit:** exact global value and index agreement across multiple CTA
+coordinates.
 
-On sm_100 the accumulator lives in TMEM, so the fragment lane layout after
-the TMEM-to-register load differs from WGMMA's register layout. Re-derive
-the shuffle choreography for the sm_100 epilogue rather than assuming the
-sm_90 layout carries over.
+**Human verification:** require nonzero M-tile offsets, winners at tile edges,
+and equal maxima in different tiles.
+The saved expected and actual indices must be global vocabulary indices, and
+ties must choose the lowest global index.
+This gate does not yet consume real GEMM accumulators.
 
-**Exit:** exact agreement with a PyTorch max-with-index reference on both
+#### Gate 1h: integrate the reduction into a minimal EVT
+
+Feed ordinary GEMM accumulators into the proven CTA reduction and write one
+candidate per M tile and N column.
+Keep `FinalReduction=false`.
+Do not add Stage 2 or sampling.
+
+**Exit:** the candidate from each M tile matches the corresponding slice of
+`torch.matmul`.
+
+**Human verification:** save the reference logits or a reproducible input
+seed and record one candidate per `(m_tile, n)` pair.
+Compare every candidate value and index with the corresponding PyTorch slice,
+including negative and tied logits.
+A correct final winner cannot hide an incorrect losing tile candidate.
+This gate does not validate Stage 2.
+
+#### Gate 1i: add multi-tile Stage 2
+
+Merge candidates across M tiles with the existing GPU Stage 2.
+
+**Exit:** exact agreement with `torch.matmul(...).max(dim=0)` across multiple
+M tiles.
+
+**Human verification:** require cases where the global winner comes from the
+first, middle, and last M tile, plus cross-tile ties.
+Inspect both the intermediate candidates and final values and indices.
+This gate proves deterministic greedy reduction but not sampling or production
+performance.
+
+#### Gate 1j: run the complete H100 and B200 boundary matrix
+
+Run every Gate 1 correctness case separately on H100 and B200.
+A passing SM90 implementation does not imply that SM100 is correct.
+
+**Exit:** exact agreement across the complete boundary matrix on both
 architectures.
 
-**Fallback:** if the generic EVT cannot express this cleanly or reliably,
-switch immediately to a handwritten CUTLASS epilogue or kernel.
+**Human verification:** confirm that the packet enumerates every Gate 1 case
+for both H100 and B200, with no skips or architecture-specific omissions.
+Group `cases.csv` by architecture and case family and verify zero failures in
+each group.
+This gate closes deterministic reduction correctness only.
+
+**Fallback:** if a generic EVT stops expressing the reduction cleanly or
+reliably at any micro-gate, switch at that point to a handwritten CUTLASS
+epilogue or kernel.
 Do not add RNG to a questionable reduction.
 
 ### Gate 2: greedy TP1 FMMS and the performance feasibility gate
@@ -887,6 +1075,17 @@ performance to justify continuing.
 **Exit:** exact greedy results and the agreed performance threshold on both
 architectures.
 
+**Human verification:** first confirm zero correctness failures over the full
+shape sweep.
+Then inspect raw repetitions, medians, dispersion, registers, local-memory
+traffic, occupancy, component durations, and total latency for every provider
+and H value.
+The packet must compute the predeclared threshold directly and identify the
+worst shape.
+Do not accept pointwise minima, missing slow shapes, or a comparison made
+across different toolchain baselines.
+This gate does not prove RNG correctness.
+
 ### Gate 3: stateless Philox prototype
 
 Implement or adapt a counter-based Philox primitive from an established CUDA
@@ -910,6 +1109,15 @@ Test the RNG outside GEMM first:
 
 **Exit:** correct, stable streams with an acceptable measured cost.
 
+**Human verification:** inspect stream-collision counts, reproducibility
+comparisons, launch-shape invariance, uniformity statistics, instruction
+counts, register use, and SFU utilization on both architectures.
+The packet must record the predeclared statistical significance and cost
+thresholds.
+A p-value alone is insufficient without sample count, test statistic, and
+multiple-test policy.
+This gate tests uniform Philox output, not the Gumbel transform inside GEMM.
+
 ### Gate 4: Gumbel-Max TP1
 
 Add the validated stateless Philox and Gumbel transform to the working greedy
@@ -924,6 +1132,15 @@ and after RNG integration, against the identical greedy kernel.
 
 **Exit:** correct sampling distribution on H100 and B200, no RNG-caused
 spill, and acceptable incremental latency.
+
+**Human verification:** require provider-agnostic test rows and the complete
+10M-sample large-vocabulary statistics for both architectures.
+Inspect reduced chi-squared, p-value, covered probability mass, excluded-bin
+count, reproducibility, registers, local-memory traffic, SFU utilization, and
+paired greedy-versus-Gumbel latency.
+Distribution failure, new spill, or an undeclared latency regression fails the
+gate.
+This gate is TP1 and does not prove distributed stream uniqueness.
 
 **Fallback:** try a different stateless Philox implementation or a
 non-warp-specialized epilogue schedule.
@@ -944,6 +1161,14 @@ Do not assume the Triton overlap speedup transfers to CUTLASS.
 
 **Exit:** distributed correctness and competitive total latency.
 
+**Human verification:** require TP2 correctness cases with per-rank outputs
+and explicit confirmation that every rank selected the same global winner.
+Inspect component timings for local compute, fan-out or direct stores,
+barrier, and final reduction before comparing total latency.
+The direct-store experiment must be compared with the local-output fallback
+using the same inputs and hosts.
+This gate does not validate top-k.
+
 ### Gate 6: fixed-K top-k
 
 Implement the production-relevant fixed K first, initially K=20 or a padded
@@ -955,6 +1180,17 @@ Do not put the private `cub::detail::block_topk` API on the critical path.
 Reuse `_topk_merge_and_sample` for the global Stage 2.
 Validate against the renormalized global top-k distribution and compare with
 the existing Triton top-k implementation.
+
+**Exit:** exact top-k membership and tie ordering, a passing sampling
+distribution, and the predeclared performance target on H100 and B200.
+
+**Human verification:** inspect adversarial membership cases at tile
+boundaries, duplicate cutoff values, all-negative inputs, and K values around
+the internal padded K.
+Save the selected indices, normalized probabilities, distribution statistics,
+and raw latency repetitions for CUTLASS and Triton.
+A distribution pass cannot substitute for exact membership and deterministic
+tie tests.
 
 **Fallback:** dispatch top-k to the Triton backend while keeping CUTLASS for
 greedy and unrestricted Gumbel-Max.
@@ -973,6 +1209,16 @@ Run the full benchmark matrix, memory-traffic profiles, and end-to-end vLLM
 TPOT experiments.
 Add H200 and B300 after H100 and B200 are stable.
 
+**Exit:** all earlier correctness packets remain green and the full benchmark
+and end-to-end matrices meet their predeclared acceptance criteria.
+
+**Human verification:** require raw repetitions, host and toolchain metadata,
+memory-traffic reports, and end-to-end summaries for every declared cell.
+Check missing cells, dispersion, warmup policy, autotune state, and whether
+kernel-level changes agree with end-to-end bounds.
+This gate supports production selection but does not generalize beyond the
+tested models, shapes, and hardware.
+
 ### Optional gate: DSMEM candidate compression
 
 DSMEM is not part of the initial production milestone.
@@ -985,6 +1231,13 @@ cluster along M.
 Compare cluster sizes 1, 2, 4, and 8 with paired end-to-end runs.
 Keep it only if the complete path improves by at least the predeclared
 threshold.
+
+**Human verification:** inspect paired raw runs for cluster sizes 1, 2, 4,
+and 8, including candidate traffic, Stage 2, TP exchange, and total latency.
+The mean or median total improvement must exceed 3% with repeatability across
+the declared shapes.
+An isolated microbenchmark improvement or candidate-byte reduction does not
+pass this optional gate.
 
 ## Validation strategy
 
