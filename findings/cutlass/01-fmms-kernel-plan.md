@@ -1064,8 +1064,12 @@ This gate still excludes boundary tiles.
 
 #### Gate 1f: handle boundary tiles
 
+**Status:** complete on 2026-07-29.
+
 Add explicit predication for partial M and N tiles.
 Test dimensions immediately below, at, and above tile boundaries.
+The checked-in runner is `make modal-cutlass GATE=cta-boundary-max`, and the
+result is documented in `findings/cutlass/09-cta-boundary-max.md`.
 
 **Exit:** exact results for M in `{100, 127, 128, 129, 255, 256, 257}` and
 N in `{1, 2, 63, 64, 65, 127, 128, 129}`.

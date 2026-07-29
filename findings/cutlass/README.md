@@ -12,6 +12,7 @@ They keep the research context and completed gates in a stable reading order.
 7. `06-warp-max.md`
 8. `07-cta-max.md`
 9. `08-cta-multi-column-max.md`
+10. `09-cta-boundary-max.md`
 
 Run a gate with `make modal-cutlass GATE=<gate>`.
 The top-level `Makefile` contains the available gate names and maps each one to a numbered directory under `benchmarking/modal-results/cutlass/`.

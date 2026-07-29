@@ -143,6 +143,33 @@ def add_cutlass_cta_multi_column_max(image: modal.Image) -> modal.Image:
     )
 
 
+def add_cutlass_cta_boundary_max(image: modal.Image) -> modal.Image:
+    """Add the Gate 1f boundary-predicated CTA max binaries."""
+    csrc_root = _repo_root / "src/fused_mm_sampling/csrc/cutlass"
+    return (
+        image.add_local_file(
+            str(csrc_root / "max_with_index.cuh"),
+            remote_path="/opt/fmms/max_with_index.cuh",
+            copy=True,
+        )
+        .add_local_file(
+            str(csrc_root / "cta_boundary_max.cu"),
+            remote_path="/opt/fmms/cta_boundary_max.cu",
+            copy=True,
+        )
+        .run_commands(
+            "nvcc -std=c++17 -O2 -lineinfo"
+            " -arch=sm_90a -DFMMS_ARCH_SM90"
+            " -I/opt/fmms /opt/fmms/cta_boundary_max.cu"
+            " -o /opt/fmms/cutlass_cta_boundary_max_sm90",
+            "nvcc -std=c++17 -O2 -lineinfo"
+            " -arch=sm_100a -DFMMS_ARCH_SM100"
+            " -I/opt/fmms /opt/fmms/cta_boundary_max.cu"
+            " -o /opt/fmms/cutlass_cta_boundary_max_sm100",
+        )
+    )
+
+
 def add_cutlass_accumulator_layout(image: modal.Image) -> modal.Image:
     """Add the Gate 1a accumulator-layout diagnostic binaries."""
     csrc_root = _repo_root / "src/fused_mm_sampling/csrc/cutlass"
