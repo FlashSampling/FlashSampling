@@ -802,10 +802,10 @@ Initial thresholds:
 The 5% and 3% values are starting policy, not facts.
 Change them only before seeing the experiment being judged.
 
-### Required validation packet for every gate
+### Required validation packet for every formal gate
 
 Do not mark a gate complete from a successful process exit alone.
-Every gate and micro-gate must leave a human-readable validation packet under
+Every formal gate or milestone must leave a human-readable validation packet under
 `benchmarking/modal-results/cutlass/<number>-<gate-name>/`.
 The packet must contain:
 
@@ -869,8 +869,9 @@ second implementation of the production kernel.
 
 Use these rules:
 
-1. Give each micro-gate one canonical source or test harness, one runner, one
-   Make target, one artifact directory, and one finding.
+1. Give each formal gate or milestone one canonical source or test harness,
+   one runner, one Make target, one artifact directory, and one finding.
+   Keep narrower correctness checks as test families in that harness.
    Do not retain alternate files with suffixes such as `new`, `fixed`, or
    `final`.
 2. Keep gate-only CUDA harnesses under
@@ -956,11 +957,14 @@ Both architecture checks passed on 2026-07-29.
 
 ### Gate 1: standalone M-axis max-with-index
 
-Gate 1 is divided into micro-gates.
-Each micro-gate produces a local validation packet, focused tests, and a
-written result before the next one starts.
-This keeps architecture-specific layout work separate from reduction,
-predication, EVT integration, and multi-tile merging.
+Gate 1 was initially divided into micro-gates, each with a local validation
+packet, focused tests, and a written result.
+Gates 1a through 1f retain those original boundaries as historical records.
+In hindsight, Gates 1b through 1f were useful development checkpoints but
+were narrower than necessary as formal gates.
+Future work uses one formal gate per integration boundary or distinct
+mechanism and keeps thread, warp, CTA, column, boundary, and tie cases as test
+families inside the relevant packet.
 
 #### Gate 1a: map the accumulator fragment layout
 
@@ -1081,77 +1085,93 @@ coordinates, so broken predication cannot pass accidentally.
 Any missing shape, out-of-bounds report, sentinel winner, or mismatch fails
 the gate.
 
-#### Gate 1g: add global indices and deterministic ties
-
-Convert fragment-local positions into global vocabulary indices.
-Match `torch.max` by choosing the lowest global index when values tie.
-Use packed FP32 value plus i32 row index internally and widen the index only
-at the public output.
-
-**Exit:** exact global value and index agreement across multiple CTA
-coordinates.
-
-**Human verification:** require nonzero M-tile offsets, winners at tile edges,
-and equal maxima in different tiles.
-The saved expected and actual indices must be global vocabulary indices, and
-ties must choose the lowest global index.
-This gate does not yet consume real GEMM accumulators.
-
-#### Gate 1h: integrate the reduction into a minimal EVT
+#### Gate 1g: integrate global candidates into a minimal EVT
 
 Feed ordinary GEMM accumulators into the proven CTA reduction and write one
 candidate per M tile and N column.
+Convert tile-local positions into global vocabulary indices in the same
+integration.
+Match `torch.max` tie behavior by choosing the lowest global index.
+Use packed FP32 value plus i32 row index internally and widen the index only
+at the public output.
 Keep `FinalReduction=false`.
 Do not add Stage 2 or sampling.
 
-**Exit:** the candidate from each M tile matches the corresponding slice of
-`torch.matmul`.
+This gate has four required test families in one packet:
+
+- Nonzero M-tile offsets and winners at both tile edges.
+- Complete and partial M and N tiles.
+- Negative and tied logits within a tile.
+- Equal maxima in different tiles, with each emitted candidate retaining its
+  correct global index before the later merge.
+
+**Exit:** every candidate from every `(m_tile, n)` coordinate matches the
+corresponding slice of `torch.matmul`, including its global index.
 
 **Human verification:** save the reference logits or a reproducible input
-seed and record one candidate per `(m_tile, n)` pair.
-Compare every candidate value and index with the corresponding PyTorch slice,
-including negative and tied logits.
+seed and record every candidate rather than only the eventual winner.
+Compare every candidate value bit pattern and global index with the
+corresponding PyTorch slice on H100 and B200.
+Require nonzero tile offsets, boundary winners, negative inputs, and
+deterministic ties.
 A correct final winner cannot hide an incorrect losing tile candidate.
 This gate does not validate Stage 2.
 
-#### Gate 1i: add multi-tile Stage 2
+#### Gate 1h: integrate Stage 2 and close deterministic correctness
 
-Merge candidates across M tiles with the existing GPU Stage 2.
-
-**Exit:** exact agreement with `torch.matmul(...).max(dim=0)` across multiple
-M tiles.
-
-**Human verification:** require cases where the global winner comes from the
-first, middle, and last M tile, plus cross-tile ties.
-Inspect both the intermediate candidates and final values and indices.
-This gate proves deterministic greedy reduction but not sampling or production
-performance.
-
-#### Gate 1j: run the complete H100 and B200 boundary matrix
-
-Run every Gate 1 correctness case separately on H100 and B200.
+Merge the Gate 1g candidates across M tiles with the existing GPU Stage 2.
+Run the complete deterministic boundary and tie matrix on H100 and B200 in
+the same packet.
 A passing SM90 implementation does not imply that SM100 is correct.
 
-**Exit:** exact agreement across the complete boundary matrix on both
-architectures.
+The packet must retain both intermediate candidates and final outputs.
+Required cases place the global winner in the first, middle, and last M tile
+and include equal maxima in different tiles.
 
-**Human verification:** confirm that the packet enumerates every Gate 1 case
-for both H100 and B200, with no skips or architecture-specific omissions.
-Group `cases.csv` by architecture and case family and verify zero failures in
-each group.
-This gate closes deterministic reduction correctness only.
+**Exit:** exact agreement with `torch.matmul(...).max(dim=0)` across the
+complete deterministic matrix on both architectures.
+
+**Human verification:** inspect intermediate candidates before final values
+and indices.
+Confirm that every declared case family and boundary shape is present on both
+architectures, with no skips or architecture-specific omissions.
+Group `cases.csv` by architecture and case family and verify zero candidate
+and final-output failures.
+Cross-tile ties must choose the lowest global index.
+This gate closes deterministic reduction correctness but does not prove
+sampling or production performance.
 
 **Fallback:** if a generic EVT stops expressing the reduction cleanly or
-reliably at any micro-gate, switch at that point to a handwritten CUTLASS
+reliably during Gate 1, switch at that point to a handwritten CUTLASS
 epilogue or kernel.
 Do not add RNG to a questionable reduction.
 
 ### Gate 2: greedy TP1 FMMS and the performance feasibility gate
 
-Integrate the GEMM, CTA-local M reduction, ordinary candidate stores, and the
-existing GPU Stage 2.
+Gate 2 has two formal milestones because provider integration and the
+performance go/no-go decision have different failure modes.
+
+#### Gate 2a: expose the greedy TP1 provider
+
+Wrap the deterministic Gate 1h kernel in the production sampler interface.
 Support only BF16, TP1, greedy sampling, H100, B200, and the two primary model
 shape families.
+Run the provider-agnostic greedy tests and the full supported shape sweep.
+
+**Exit:** the provider builds through the production path and produces exact
+greedy outputs for every supported shape on both architectures.
+
+**Human verification:** require the complete provider-agnostic result matrix,
+including boundary shapes and deterministic ties.
+Confirm that the production wrapper uses the candidate and Stage 2 path
+validated in Gate 1h.
+Missing shapes, fallback to another provider, compilation graph breaks, or any
+output mismatch fails the gate.
+
+#### Gate 2b: greedy performance feasibility decision
+
+Profile the exact provider approved in Gate 2a without changing its
+correctness path.
 
 Compare:
 
@@ -1168,15 +1188,14 @@ architectures, not only the compute-bound regime. Whether one GEMM kernel
 covers the whole sweep or a separate GEMV path handles very small H (see
 `findings/gemv-kernel-for-bsz1.md` and `tl_gemv.py`) is an implementation
 choice decided from these measurements.
-This gate decides whether the custom epilogue preserves enough GEMM
+This milestone decides whether the custom epilogue preserves enough GEMM
 performance to justify continuing.
 
-**Exit:** exact greedy results and the agreed performance threshold on both
-architectures.
+**Exit:** the predeclared performance threshold passes on both architectures,
+or the project records a no-go decision before adding RNG, TP, or top-k.
 
-**Human verification:** first confirm zero correctness failures over the full
-shape sweep.
-Then inspect raw repetitions, medians, dispersion, registers, local-memory
+**Human verification:** confirm that the Gate 2a correctness packet still
+passes, then inspect raw repetitions, medians, dispersion, registers, local-memory
 traffic, occupancy, component durations, and total latency for every provider
 and H value.
 The packet must compute the predeclared threshold directly and identify the
@@ -1194,17 +1213,26 @@ Map every random value from global
 Do not keep long-lived `curandStatePhilox4_32_10_t` state in the epilogue and
 do not derive streams from block, warp, lane, scheduler, or cluster order.
 
-Test the RNG outside GEMM first:
+Gate 3 remains one formal gate with two ordered phases because both phases
+approve the same standalone primitive.
+The correctness phase must pass before cost profiling begins.
+
+Phase A validates:
 
 - Stream uniqueness across tiles and samples.
 - Invariance under different launch and tile shapes.
 - Uniform-distribution checks.
 - Reproducibility on H100 and B200.
+
+Phase B records:
+
 - Generated instruction count and register footprint.
-- SM issue-slot and SFU (MUFU) pipe utilization. The Gumbel transform
-  issues two `log2f` (LG2) operations per element on the low-throughput
-  SFU pipe; at full weight-stream bandwidth the SFU could bind before HBM
-  does, so measure the pipe, not just instruction count.
+- SM issue-slot and SFU (MUFU) pipe utilization.
+
+The Gumbel transform issues two `log2f` (LG2) operations per element on the
+low-throughput SFU pipe.
+At full weight-stream bandwidth the SFU could bind before HBM does, so measure
+the pipe rather than only instruction count.
 
 **Exit:** correct, stable streams with an acceptable measured cost.
 
@@ -1224,10 +1252,12 @@ kernel.
 Measure the incremental cost relative to greedy with the same GEMM
 configuration.
 
-Run the provider-agnostic tests, then the large-vocabulary 10M-sample
-chi-squared test.
-Profile registers, local-memory traffic, and SM/SFU pipe utilization before
-and after RNG integration, against the identical greedy kernel.
+Gate 4 has three ordered acceptance phases in one integration packet:
+
+1. Run deterministic stream and provider-agnostic correctness tests.
+2. Run the large-vocabulary 10M-sample chi-squared test.
+3. Only after both pass, profile registers, local-memory traffic, latency, and
+   SM/SFU pipe utilization against the identical greedy kernel.
 
 **Exit:** correct sampling distribution on H100 and B200, no RNG-caused
 spill, and acceptable incremental latency.
@@ -1248,27 +1278,61 @@ Pre-generated noise is not an acceptable production fallback.
 ### Gate 5: tensor parallelism
 
 Implement TP before top-k and DSMEM.
-First write candidates locally and use a separate P2P fan-out kernel.
-This is the correctness and performance fallback.
-Then test direct stores to peer symmetric-memory buffers from the epilogue.
+Gate 5 has three formal milestones because each introduces a separate
+distributed mechanism or scaling decision.
 
-Validate TP2 first with `make modal-pytest-distributed`.
-Expand to TP4 and TP8 only after TP2 is stable.
-Measure the complete kernel, fan-out or direct-store, barrier, and reduction
-path.
+#### Gate 5a: TP2 correctness with local candidates
+
+Write candidates locally and use a separate P2P fan-out kernel.
+This remains the correctness and performance fallback.
+Validate TP2 with `make modal-pytest-distributed`.
+
+**Exit:** TP2 distributed correctness passes through the fallback path.
+
+**Human verification:** require per-rank candidates and outputs, plus explicit
+confirmation that every rank selected the same global winner.
+Include rank-local boundary winners, cross-rank ties, and distributed RNG
+stream uniqueness.
+This milestone does not test direct peer stores or TP4/TP8.
+
+#### Gate 5b: direct peer-store decision
+
+Test direct stores to peer symmetric-memory buffers from the epilogue.
+Compare them with the approved Gate 5a fallback using identical inputs and
+hosts.
+Measure local compute, fan-out or direct stores, barrier, final reduction, and
+total latency separately.
 Do not assume the Triton overlap speedup transfers to CUTLASS.
 
-**Exit:** distributed correctness and competitive total latency.
+**Exit:** retain direct stores only if they preserve correctness and pass the
+predeclared total-latency threshold.
+Otherwise keep the local-output fallback as the production path.
 
-**Human verification:** require TP2 correctness cases with per-rank outputs
-and explicit confirmation that every rank selected the same global winner.
-Inspect component timings for local compute, fan-out or direct stores,
-barrier, and final reduction before comparing total latency.
-The direct-store experiment must be compared with the local-output fallback
-using the same inputs and hosts.
-This gate does not validate top-k.
+**Human verification:** inspect paired component and total timings rather than
+only kernel duration.
+Require identical results from both paths and record the selected production
+path explicitly.
+
+#### Gate 5c: TP4 and TP8 scaling
+
+Expand the selected TP path to TP4 and TP8 only after TP2 is stable.
+Run distributed correctness and paired scaling measurements at both world
+sizes.
+
+**Exit:** distributed correctness passes at TP4 and TP8 and the scaling packet
+records the complete supported range.
+
+**Human verification:** require per-rank agreement, complete host and topology
+metadata, raw repetitions, component timings, and no missing world-size or
+shape cells.
+This milestone does not validate top-k.
 
 ### Gate 6: fixed-K top-k
+
+Gate 6 has two formal milestones because exact selection and integrated
+sampling answer different correctness questions.
+
+#### Gate 6a: exact fixed-K candidate selection
 
 Implement the production-relevant fixed K first, initially K=20 or a padded
 K=32.
@@ -1276,20 +1340,28 @@ Use a custom warp-group sorted-array or merge network derived from example
 61.
 Do not put the private `cub::detail::block_topk` API on the critical path.
 
-Reuse `_topk_merge_and_sample` for the global Stage 2.
-Validate against the renormalized global top-k distribution and compare with
-the existing Triton top-k implementation.
-
-**Exit:** exact top-k membership and tie ordering, a passing sampling
-distribution, and the predeclared performance target on H100 and B200.
+**Exit:** exact top-k membership and deterministic tie ordering on H100 and
+B200.
 
 **Human verification:** inspect adversarial membership cases at tile
 boundaries, duplicate cutoff values, all-negative inputs, and K values around
 the internal padded K.
-Save the selected indices, normalized probabilities, distribution statistics,
-and raw latency repetitions for CUTLASS and Triton.
-A distribution pass cannot substitute for exact membership and deterministic
-tie tests.
+Save every selected value and global index.
+A later distribution pass cannot substitute for exact membership.
+
+#### Gate 6b: integrated top-k sampling and performance
+
+Reuse `_topk_merge_and_sample` for the global Stage 2.
+Validate against the renormalized global top-k distribution and compare with
+the existing Triton top-k implementation.
+
+**Exit:** the sampling distribution passes and the predeclared performance
+target passes on H100 and B200.
+
+**Human verification:** retain the approved Gate 6a membership packet, then
+inspect normalized probabilities, distribution statistics, and raw latency
+repetitions for CUTLASS and Triton.
+Record the exact K and padded internal K for every row.
 
 **Fallback:** dispatch top-k to the Triton backend while keeping CUTLASS for
 greedy and unrestricted Gumbel-Max.
