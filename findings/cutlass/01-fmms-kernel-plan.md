@@ -1185,8 +1185,26 @@ passing result is documented in `findings/cutlass/12-greedy-provider.md`.
 
 #### Gate 2b: greedy performance feasibility decision
 
+**Status:** in progress.
+
 Profile the exact provider approved in Gate 2a without changing its
 correctness path.
+
+The first implementation task is removing the diagnostic FP32 `[V,H]` destination allocation and store inherited from Gate 1h.
+The preferred callback-only implementation set `ElementD=void` while retaining the existing split-tree candidate EVT.
+With CUTLASS 4.6.1, this compiles through the SM90 TMA collective after the EVT advertises a non-void `ElementAux` type and inherits its visitor constructors.
+It does not compile through the SM100 TMA collective.
+The SM100 builder accepts a void destination, but `sm100_epilogue_tma_warpspecialized.hpp` still instantiates D shared-memory layout arithmetic, D storage, and a D TMA descriptor with `ElementD=void`.
+The first failures include division by zero in `StrideStageD` and attempts to construct a TMA store from a void element type.
+The same implementation remains in NVIDIA CUTLASS `main` after the pinned 4.6.1 commit, so changing to an unreleased revision does not remove this blocker.
+
+Do not approve an implementation that redirects the full D store into aliased or undersized scratch memory.
+That would remove the logical allocation without removing the unwanted store traffic, and concurrent stores to the same addresses would introduce races.
+Do not maintain separate SM90 and SM100 production semantics merely because the standard SM90 collective supports the void destination.
+
+The revised implementation boundary is an adapted or handwritten SM100 epilogue collective that preserves the validated accumulator ownership, candidate reduction, and Stage 2 comparator while omitting the D shared-memory pipeline, D TMA descriptor, and D global store.
+The CUTLASS GEMM mainloop remains in scope and should not be rewritten.
+After the SM100 path works, use the same no-D semantics on SM90 and rerun the complete Gate 2a matrix before collecting performance data.
 
 Compare:
 
