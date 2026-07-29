@@ -13,7 +13,7 @@ from .utils import add_cutlass_thread_local_max, make_cutlass_image
 app = make_app()
 image = add_cutlass_thread_local_max(make_cutlass_image())
 
-OUTPUT_DIR = Path("benchmarking/modal-results/cutlass-thread-local-max")
+OUTPUT_DIR = Path("benchmarking/modal-results/cutlass/02-thread-local-max")
 ARCHITECTURES = ("sm90", "sm100")
 EXPECTED_CASES = {
     *(f"maximum_in_slot_{slot:02d}" for slot in range(16)),

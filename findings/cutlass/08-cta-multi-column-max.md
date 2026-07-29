@@ -8,8 +8,8 @@ Both deterministic cases used every M position exactly once as a column winner.
 All 512 architecture, case, and column comparisons passed.
 Compute Sanitizer racecheck reported zero hazards, errors, and warnings on both architectures.
 
-Run `make modal-cutlass-cta-multi-column-max`.
-The generated verification packet is under `benchmarking/modal-results/cutlass-cta-multi-column-max/`.
+Run `make modal-cutlass GATE=cta-multi-column-max`.
+The generated verification packet is under `benchmarking/modal-results/cutlass/05-cta-multi-column-max/`.
 
 ## Architecture-specific routing
 

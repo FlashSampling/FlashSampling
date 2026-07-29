@@ -29,35 +29,30 @@ modal-pytest-distributed:
 modal-versions:
 	modal run -m src.fused_mm_sampling.modal_lib.modal_versions
 
-modal-cutlass-toolchain-smoke:
-	mkdir -p benchmarking/modal-results/cutlass-toolchain
-	modal run -m src.fused_mm_sampling.modal_lib.cutlass.toolchain 2>&1 | \
-		tee benchmarking/modal-results/cutlass-toolchain/smoke.txt
+CUTLASS_GATES := toolchain accumulator-layout thread-local-max warp-max cta-max cta-multi-column-max
+CUTLASS_MODULE_toolchain := toolchain
+CUTLASS_MODULE_accumulator-layout := accumulator_layout
+CUTLASS_MODULE_thread-local-max := thread_local_max
+CUTLASS_MODULE_warp-max := warp_max
+CUTLASS_MODULE_cta-max := cta_max
+CUTLASS_MODULE_cta-multi-column-max := cta_multi_column_max
+CUTLASS_RESULT_toolchain := 00-toolchain
+CUTLASS_RESULT_accumulator-layout := 01-accumulator-layout
+CUTLASS_RESULT_thread-local-max := 02-thread-local-max
+CUTLASS_RESULT_warp-max := 03-warp-max
+CUTLASS_RESULT_cta-max := 04-cta-max
+CUTLASS_RESULT_cta-multi-column-max := 05-cta-multi-column-max
+CUTLASS_LOG_toolchain := smoke.txt
 
-modal-cutlass-accumulator-layout:
-	mkdir -p benchmarking/modal-results/cutlass-layout
-	modal run -m src.fused_mm_sampling.modal_lib.cutlass.accumulator_layout 2>&1 | \
-		tee benchmarking/modal-results/cutlass-layout/log.txt
-
-modal-cutlass-thread-local-max:
-	mkdir -p benchmarking/modal-results/cutlass-thread-local-max
-	modal run -m src.fused_mm_sampling.modal_lib.cutlass.thread_local_max 2>&1 | \
-		tee benchmarking/modal-results/cutlass-thread-local-max/log.txt
-
-modal-cutlass-warp-max:
-	mkdir -p benchmarking/modal-results/cutlass-warp-max
-	modal run -m src.fused_mm_sampling.modal_lib.cutlass.warp_max 2>&1 | \
-		tee benchmarking/modal-results/cutlass-warp-max/log.txt
-
-modal-cutlass-cta-max:
-	mkdir -p benchmarking/modal-results/cutlass-cta-max
-	modal run -m src.fused_mm_sampling.modal_lib.cutlass.cta_max 2>&1 | \
-		tee benchmarking/modal-results/cutlass-cta-max/log.txt
-
-modal-cutlass-cta-multi-column-max:
-	mkdir -p benchmarking/modal-results/cutlass-cta-multi-column-max
-	modal run -m src.fused_mm_sampling.modal_lib.cutlass.cta_multi_column_max 2>&1 | \
-		tee benchmarking/modal-results/cutlass-cta-multi-column-max/log.txt
+modal-cutlass:
+	@test -n "$(GATE)" || \
+		(echo "Usage: make modal-cutlass GATE=<gate>"; \
+		 echo "Available gates: $(CUTLASS_GATES)"; exit 1)
+	@test -n "$(CUTLASS_MODULE_$(GATE))" || \
+		(echo "Unknown CUTLASS gate '$(GATE)'. Choose one of: $(CUTLASS_GATES)"; exit 1)
+	mkdir -p benchmarking/modal-results/cutlass/$(CUTLASS_RESULT_$(GATE))
+	modal run -m src.fused_mm_sampling.modal_lib.cutlass.$(CUTLASS_MODULE_$(GATE)) 2>&1 | \
+		tee benchmarking/modal-results/cutlass/$(CUTLASS_RESULT_$(GATE))/$(or $(CUTLASS_LOG_$(GATE)),log.txt)
 
 update-deps:
 	uv lock --upgrade  # Re-resolve all deps to latest compatible versions

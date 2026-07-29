@@ -13,7 +13,7 @@ from .utils import add_cutlass_warp_max, make_cutlass_image
 app = make_app()
 image = add_cutlass_warp_max(make_cutlass_image())
 
-OUTPUT_DIR = Path("benchmarking/modal-results/cutlass-warp-max")
+OUTPUT_DIR = Path("benchmarking/modal-results/cutlass/03-warp-max")
 ARCHITECTURES = ("sm90", "sm100")
 WARPS = set(range(4, 8))
 PARTICIPATING_LANES = {
@@ -114,7 +114,7 @@ def main() -> None:
     case_summary.to_csv(OUTPUT_DIR / "case-summary.csv", index=False)
     summary = {
         "gate": "1c",
-        "command": "make modal-cutlass-warp-max",
+        "command": "make modal-cutlass GATE=warp-max",
         "expected_result": (
             "Exact FP32 value bits and lowest-index tie agreement for every "
             "participating output lane in every warp-local test domain."

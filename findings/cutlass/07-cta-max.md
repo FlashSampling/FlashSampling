@@ -6,8 +6,8 @@ Gate 1d of the CUTLASS FMMS plan passed on H100 and B200 on 2026-07-29.
 The harness combined four simulated CUTLASS consumer-warp winners through shared memory and produced the exact CPU-reference FP32 value bits and lowest tie index in all 14 architecture and case combinations.
 Compute Sanitizer racecheck reported zero hazards, errors, and warnings on both architectures.
 
-Run `make modal-cutlass-cta-max`.
-The generated verification packet is under `benchmarking/modal-results/cutlass-cta-max/`.
+Run `make modal-cutlass GATE=cta-max`.
+The generated verification packet is under `benchmarking/modal-results/cutlass/04-cta-max/`.
 
 ## What this gate proves
 

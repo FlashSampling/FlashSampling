@@ -11,7 +11,7 @@ from .utils import add_cutlass_accumulator_layout, make_cutlass_image
 app = make_app()
 image = add_cutlass_accumulator_layout(make_cutlass_image())
 
-OUTPUT_DIR = Path("benchmarking/modal-results/cutlass-layout")
+OUTPUT_DIR = Path("benchmarking/modal-results/cutlass/01-accumulator-layout")
 M = 128
 N = 128
 

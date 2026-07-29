@@ -8,9 +8,9 @@ No coordinate was missing or had multiple owners.
 
 The diagnostic is implemented in
 `src/fused_mm_sampling/csrc/cutlass/accumulator_layout.cu`.
-Run it with `make modal-cutlass-accumulator-layout`.
+Run it with `make modal-cutlass GATE=accumulator-layout`.
 The runner writes the full log and the raw coordinate mappings to
-`benchmarking/modal-results/cutlass-layout/`.
+`benchmarking/modal-results/cutlass/01-accumulator-layout/`.
 
 ## Method
 

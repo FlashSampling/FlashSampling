@@ -13,7 +13,7 @@ from .utils import add_cutlass_cta_multi_column_max, make_cutlass_image
 app = make_app()
 image = add_cutlass_cta_multi_column_max(make_cutlass_image())
 
-OUTPUT_DIR = Path("benchmarking/modal-results/cutlass-cta-multi-column-max")
+OUTPUT_DIR = Path("benchmarking/modal-results/cutlass/05-cta-multi-column-max")
 ARCHITECTURES = ("sm90", "sm100")
 CASES = ("independent_unique", "all_negative")
 N = 128
@@ -168,7 +168,7 @@ def main() -> None:
     failures = cases.query("`pass` != 1")
     summary = {
         "gate": "1e",
-        "command": "make modal-cutlass-cta-multi-column-max",
+        "command": "make modal-cutlass GATE=cta-multi-column-max",
         "expected_result": (
             "Exact independent FP32 max-with-index results for all 128 N "
             "columns, including both ends of every architecture-specific "

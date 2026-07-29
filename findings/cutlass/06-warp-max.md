@@ -8,8 +8,8 @@ The expected and actual FP32 bit patterns and integer indices agreed in every ro
 
 The shuffle reduction is implemented in `src/fused_mm_sampling/csrc/cutlass/warp_max.cu`.
 It reuses the comparison primitive in `src/fused_mm_sampling/csrc/cutlass/max_with_index.cuh`, which is also used by the Gate 1b harness.
-Run the gate with `make modal-cutlass-warp-max`.
-The generated packet is under `benchmarking/modal-results/cutlass-warp-max/` and remains ignored by Git.
+Run the gate with `make modal-cutlass GATE=warp-max`.
+The generated packet is under `benchmarking/modal-results/cutlass/03-warp-max/` and remains ignored by Git.
 
 ## Architecture-specific warp domains
 
@@ -39,7 +39,7 @@ All 9,728 Gate 1b comparisons still passed.
 
 ## Human verification
 
-Start with `benchmarking/modal-results/cutlass-warp-max/VERIFY.md`.
+Start with `benchmarking/modal-results/cutlass/03-warp-max/VERIFY.md`.
 Then inspect `case-summary.csv`, which has one row per architecture, case, and warp.
 
 The expected outcome is:
@@ -60,9 +60,9 @@ The full output-lane evidence remains in `cases.csv`.
 The quickest shell checks are:
 
 ```bash
-column -s, -t benchmarking/modal-results/cutlass-warp-max/case-summary.csv | less -S
-rg -n '"expected_count"|"actual_count"|"failure_count"' benchmarking/modal-results/cutlass-warp-max/summary.json
-rg -ni 'error|exception|skipped|nan|fallback' benchmarking/modal-results/cutlass-warp-max/log.txt
+column -s, -t benchmarking/modal-results/cutlass/03-warp-max/case-summary.csv | less -S
+rg -n '"expected_count"|"actual_count"|"failure_count"' benchmarking/modal-results/cutlass/03-warp-max/summary.json
+rg -ni 'error|exception|skipped|nan|fallback' benchmarking/modal-results/cutlass/03-warp-max/log.txt
 ```
 
 The first command should show matching expected and actual columns, zero mismatches, and a pass value of one.

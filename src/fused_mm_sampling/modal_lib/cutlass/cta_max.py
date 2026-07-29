@@ -13,7 +13,7 @@ from .utils import add_cutlass_cta_max, make_cutlass_image
 app = make_app()
 image = add_cutlass_cta_max(make_cutlass_image())
 
-OUTPUT_DIR = Path("benchmarking/modal-results/cutlass-cta-max")
+OUTPUT_DIR = Path("benchmarking/modal-results/cutlass/04-cta-max")
 ARCHITECTURES = ("sm90", "sm100")
 EXPECTED_CASES = {
     *(f"maximum_in_warp_{warp}" for warp in range(4, 8)),
@@ -123,7 +123,7 @@ def main() -> None:
     failures = cases.query("`pass` != 1")
     summary = {
         "gate": "1d",
-        "command": "make modal-cutlass-cta-max",
+        "command": "make modal-cutlass GATE=cta-max",
         "expected_result": (
             "Exact FP32 value bits and lowest-index tie agreement across all "
             "four simulated CUTLASS consumer-warp roles, with zero racecheck errors."

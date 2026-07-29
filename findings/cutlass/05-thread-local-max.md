@@ -7,8 +7,8 @@ All 9,728 comparisons matched an independent CPU reference exactly.
 The expected and actual FP32 bit patterns and integer indices agreed in every row.
 
 The primitive is implemented in `src/fused_mm_sampling/csrc/cutlass/thread_local_max.cu`.
-Run it with `make modal-cutlass-thread-local-max`.
-The runner writes `summary.json`, `cases.csv`, and the complete `log.txt` under `benchmarking/modal-results/cutlass-thread-local-max/`.
+Run it with `make modal-cutlass GATE=thread-local-max`.
+The runner writes `summary.json`, `cases.csv`, and the complete `log.txt` under `benchmarking/modal-results/cutlass/02-thread-local-max/`.
 
 ## Method
 
@@ -32,7 +32,7 @@ This produces 9,728 exact comparisons.
 
 ## Human verification
 
-Start with `benchmarking/modal-results/cutlass-thread-local-max/VERIFY.md`.
+Start with `benchmarking/modal-results/cutlass/02-thread-local-max/VERIFY.md`.
 Then inspect `case-summary.csv`, which has one row per architecture, case, and visitation order instead of one row per CUDA thread.
 
 The expected outcome is:
@@ -50,9 +50,9 @@ The full thread-level evidence remains in `cases.csv`.
 The quickest shell checks are:
 
 ```bash
-column -s, -t benchmarking/modal-results/cutlass-thread-local-max/case-summary.csv | less -S
-rg -n '"expected_count"|"actual_count"|"failure_count"' benchmarking/modal-results/cutlass-thread-local-max/summary.json
-rg -ni 'error|exception|skipped|nan|fallback' benchmarking/modal-results/cutlass-thread-local-max/log.txt
+column -s, -t benchmarking/modal-results/cutlass/02-thread-local-max/case-summary.csv | less -S
+rg -n '"expected_count"|"actual_count"|"failure_count"' benchmarking/modal-results/cutlass/02-thread-local-max/summary.json
+rg -ni 'error|exception|skipped|nan|fallback' benchmarking/modal-results/cutlass/02-thread-local-max/log.txt
 ```
 
 The first command should show every `thread_count` as 128, every `mismatch_count` as zero, and matching expected/actual columns.

@@ -7,7 +7,7 @@ tensor-parallel path.
 This plan is informed by deep research into the current state of CUTLASS 4.x,
 CCCL/CUB, Blackwell sm_100, and the closest reference implementations
 (CCE, Liger, FlashInfer, Quack). Research notes live in
-`findings/cutlass-61-topk-softmax-epilogue.md` and the four research reports
+`findings/cutlass/02-topk-softmax-epilogue.md` and the four research reports
 that produced it.
 
 ## TL;DR
@@ -114,7 +114,7 @@ not vocabulary.
 Swapping the operands/output to place V on N would make the example's
 `N <= tile_N` constraint impossible for V=128K-152K and would repeat the
 operand-swap regression documented in
-`findings/2cta-mma-operand-swap-regression.md`.
+`findings/cutlass/00-2cta-mma-operand-swap-regression.md`.
 
 ### The correct starting point: `Sm90RowReduction`
 
@@ -302,7 +302,7 @@ distinct mechanisms:
 
 - **Cluster MMA (TMA multicast, `tcgen05.mma cta_group::2`)**: rejected.
   Cannot reduce the weight matrix HBM traffic (the bottleneck). Empirically
-  confirmed by `findings/2cta-mma-operand-swap-regression.md` (operand swap
+  confirmed by `findings/cutlass/00-2cta-mma-operand-swap-regression.md` (operand swap
   regresses 6-23% at H<64).
 - **DSMEM candidate reduction in the epilogue**: optional experiment.
   A cluster along M can merge adjacent vocabulary-tile candidates before
@@ -310,7 +310,7 @@ distinct mechanisms:
   This reduces candidate count, but the CUTLASS CTA already has a fixed
   `tile_N`; clustering does not change its accumulator shape or solve the
   current persistent Triton kernel's H=256 spill.
-  See `findings/dsmem-cluster-reduction-for-fmms.md`.
+  See `findings/cutlass/03-dsmem-cluster-reduction.md`.
 
 **Explicitly rejected optimizations**:
 
@@ -450,7 +450,7 @@ limited to 8-16 CTAs, far below the 1000+ V tiles in a V=128k problem.
 
 ## DSMEM cluster reduction: optional candidate compression
 
-Deep dive in `findings/dsmem-cluster-reduction-for-fmms.md`. Summary of how
+Deep dive in `findings/cutlass/03-dsmem-cluster-reduction.md`. Summary of how
 it changes the design.
 
 ### What the source review changed
@@ -477,7 +477,7 @@ The single-CTA CUTLASS kernel must be profiled directly.
 - **Cannot reduce weight matrix HBM traffic.** The bottleneck is reading
   W[V,D] (~2 GB). Cluster MMA partitions the output but does not reduce
   per-element W reads. Confirmed empirically by
-  `findings/2cta-mma-operand-swap-regression.md`.
+  `findings/cutlass/00-2cta-mma-operand-swap-regression.md`.
 - **Cannot help with inter-rank TP.** Clusters are strictly intra-GPU
   (one GPC, one CUDA context, max 8 portable / 16 non-portable CTAs).
   Inter-rank reduction still needs NVLink + symm-mem.
@@ -806,7 +806,7 @@ Change them only before seeing the experiment being judged.
 
 Do not mark a gate complete from a successful process exit alone.
 Every gate and micro-gate must leave a human-readable validation packet under
-`benchmarking/modal-results/cutlass-<gate-name>/`.
+`benchmarking/modal-results/cutlass/<number>-<gate-name>/`.
 The packet must contain:
 
 - `VERIFY.md`, as the entry point for the human verifier.
@@ -878,7 +878,7 @@ Use these rules:
    Keep their Modal entrypoints under
    `src/fused_mm_sampling/modal_lib/cutlass/`, and write all generated evidence
    only under the matching
-   `benchmarking/modal-results/cutlass-<gate-name>/` directory.
+   `benchmarking/modal-results/cutlass/<number>-<gate-name>/` directory.
 3. When a primitive becomes part of the next gate or the production kernel,
    move its reusable implementation into one shared header or production
    source.
@@ -946,12 +946,12 @@ This gate proves only the ordinary GEMM toolchain, not the custom epilogue.
 - Host compiler: GCC 13.3.0.
 - Targets: SM90a on H100 and SM100a on B200.
 
-Run `make modal-cutlass-toolchain-smoke` after changing any component of this
+Run `make modal-cutlass GATE=toolchain` after changing any component of this
 baseline.
 The runner builds CUTLASS examples 48 and 71, executes an M=512, N=64, K=256
 ordinary GEMM on each architecture, checks CUTLASS's independent device
 reference, and writes the complete log to
-`benchmarking/modal-results/cutlass-toolchain/smoke.txt`.
+`benchmarking/modal-results/cutlass/00-toolchain/smoke.txt`.
 Both architecture checks passed on 2026-07-29.
 
 ### Gate 1: standalone M-axis max-with-index
@@ -972,9 +972,9 @@ Record the mapping from thread, fragment slot, and epilogue iteration to
 global `(M, N)` coordinates.
 Run it independently on SM90 and SM100 because SM100 loads its accumulator
 from TMEM into registers before the callback.
-The checked-in runner is `make modal-cutlass-accumulator-layout`, and the
+The checked-in runner is `make modal-cutlass GATE=accumulator-layout`, and the
 observed layouts are documented in
-`findings/cutlass-accumulator-layout.md`.
+`findings/cutlass/04-accumulator-layout.md`.
 
 **Exit:** every output coordinate in one complete CTA tile has exactly one
 owner, and the SM90 and SM100 mappings are saved and documented.
@@ -995,8 +995,8 @@ This gate maps ownership only and does not prove any reduction.
 Implement deterministic max-with-index over only the values owned by one
 thread.
 Do not use warp shuffles, shared memory, or partial tiles.
-The checked-in runner is `make modal-cutlass-thread-local-max`, and the result
-is documented in `findings/cutlass-thread-local-max.md`.
+The checked-in runner is `make modal-cutlass GATE=thread-local-max`, and the result
+is documented in `findings/cutlass/05-thread-local-max.md`.
 
 **Exit:** exact value and lowest-index tie agreement with a CPU reference for
 every thread-local fragment.
@@ -1014,8 +1014,8 @@ This gate does not exercise warp communication or shared memory.
 Add shuffle-based max-with-index across the M lanes of one warp.
 Test unique maxima, ties, negative values, and maxima that cross lane
 boundaries.
-The checked-in runner is `make modal-cutlass-warp-max`, and the result is
-documented in `findings/cutlass-warp-max.md`.
+The checked-in runner is `make modal-cutlass GATE=warp-max`, and the result is
+documented in `findings/cutlass/06-warp-max.md`.
 
 **Exit:** exact agreement for every warp-local M domain.
 
@@ -1033,8 +1033,8 @@ This gate does not prove cross-warp reduction.
 
 Combine warp results through shared memory.
 Restrict the problem to one complete M tile and one N column.
-The checked-in runner is `make modal-cutlass-cta-max`, and the result is
-documented in `findings/cutlass-cta-max.md`.
+The checked-in runner is `make modal-cutlass GATE=cta-max`, and the result is
+documented in `findings/cutlass/07-cta-max.md`.
 
 **Exit:** exact max-with-index for one full CTA M tile.
 
@@ -1050,8 +1050,8 @@ This gate covers one full M tile and one N column only.
 
 Extend the CTA reduction to every N column in the epilogue tile.
 Verify that columns remain independent.
-The checked-in runner is `make modal-cutlass-cta-multi-column-max`, and the
-result is documented in `findings/cutlass-cta-multi-column-max.md`.
+The checked-in runner is `make modal-cutlass GATE=cta-multi-column-max`, and the
+result is documented in `findings/cutlass/08-cta-multi-column-max.md`.
 
 **Exit:** exact results for one full CTA tile across its complete N extent.
 
@@ -1488,10 +1488,10 @@ end-to-end improvement plausible.
 
 ### Project findings (this repo)
 
-- `findings/dsmem-cluster-reduction-for-fmms.md` - the deep dive on DSMEM
+- `findings/cutlass/03-dsmem-cluster-reduction.md` - the deep dive on DSMEM
   candidate compression.
   It defines the optional post-TP profiling gate.
-- `findings/cutlass-61-topk-softmax-epilogue.md` - detailed analysis of
+- `findings/cutlass/02-topk-softmax-epilogue.md` - detailed analysis of
   example 61, including the constraints that motivate this plan's
   two-stage architecture.
 - `findings/fused-top-k-top-p-feasibility.md` - earlier analysis that
@@ -1501,7 +1501,7 @@ end-to-end improvement plausible.
   It must not be projected onto a conventionally tiled CUTLASS kernel.
 - `findings/arithmetic-intensity-decode-matmul.md` - why FMMS is
   memory-bound at H<128, the regime where the CUTLASS port matters least.
-- `findings/2cta-mma-operand-swap-regression.md` - why swapping V onto N
+- `findings/cutlass/00-2cta-mma-operand-swap-regression.md` - why swapping V onto N
   to reuse example 61 is out, and why 2-CTA MMA is not the baseline path.
 - `findings/tma-store-blackwell-singleton-dims.md` - why per-tile candidate
   writes use plain `st.global`, not TMA.
