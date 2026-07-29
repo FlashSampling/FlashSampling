@@ -14,14 +14,22 @@ using namespace cute;
 using namespace fmms_evt_candidates;
 
 using PlainElementC = void;
-using PlainElementD = float;
+using PlainElementD = cutlass::bfloat16_t;
+constexpr int PlainAlignmentD = 8;
+using PlainMainloopSchedule =
+    cutlass::gemm::collective::KernelScheduleAuto;
+using PlainEpilogueSchedule =
+    cutlass::epilogue::collective::EpilogueScheduleAuto;
+using PlainEpilogueTile =
+    cutlass::epilogue::collective::EpilogueTileAuto;
+using PlainTileShape = Shape<_128, _128, _64>;
 using PlainCollectiveEpilogue =
     typename cutlass::epilogue::collective::CollectiveBuilder<
         ArchTag,
         cutlass::arch::OpClassTensorOp,
-        TileShape,
+        PlainTileShape,
         ClusterShape,
-        EpilogueTile,
+        PlainEpilogueTile,
         ElementAccumulator,
         ElementAccumulator,
         PlainElementC,
@@ -29,8 +37,8 @@ using PlainCollectiveEpilogue =
         kAlignmentC,
         PlainElementD,
         LayoutD,
-        kAlignmentD,
-        EpilogueSchedule>::CollectiveOp;
+        PlainAlignmentD,
+        PlainEpilogueSchedule>::CollectiveOp;
 using PlainCollectiveMainloop =
     typename cutlass::gemm::collective::CollectiveBuilder<
         ArchTag,
@@ -42,17 +50,109 @@ using PlainCollectiveMainloop =
         LayoutB,
         kAlignmentB,
         ElementAccumulator,
-        TileShape,
+        PlainTileShape,
         ClusterShape,
         cutlass::gemm::collective::StageCountAutoCarveout<
             static_cast<int>(sizeof(typename PlainCollectiveEpilogue::SharedStorage))>,
-        MainloopSchedule>::CollectiveOp;
+        PlainMainloopSchedule>::CollectiveOp;
 using PlainGemmKernel = cutlass::gemm::kernel::GemmUniversal<
     Shape<int, int, int, int>,
     PlainCollectiveMainloop,
     PlainCollectiveEpilogue>;
 using PlainGemm =
     cutlass::gemm::device::GemmUniversalAdapter<PlainGemmKernel>;
+
+template <int N>
+__global__ void small_n_gemv_kernel(
+    __nv_bfloat16 const* weights,
+    __nv_bfloat16 const* hidden_states,
+    __nv_bfloat16* output,
+    int m,
+    int k) {
+  int row = blockIdx.x * (blockDim.x / 32) + threadIdx.x / 32;
+  int lane = threadIdx.x % 32;
+  if (row >= m) {
+    return;
+  }
+  float sums[N] = {};
+  for (int column = lane * 2; column < k; column += 64) {
+    auto weight_pair = *reinterpret_cast<__nv_bfloat162 const*>(
+        weights + int64_t(row) * k + column);
+    float2 weight = __bfloat1622float2(weight_pair);
+    CUTLASS_PRAGMA_UNROLL
+    for (int n = 0; n < N; ++n) {
+      auto hidden_pair = *reinterpret_cast<__nv_bfloat162 const*>(
+          hidden_states + int64_t(n) * k + column);
+      float2 hidden = __bfloat1622float2(hidden_pair);
+      sums[n] += weight.x * hidden.x + weight.y * hidden.y;
+    }
+  }
+  CUTLASS_PRAGMA_UNROLL
+  for (int n = 0; n < N; ++n) {
+    for (int offset = 16; offset > 0; offset /= 2) {
+      sums[n] += __shfl_down_sync(0xffffffff, sums[n], offset);
+    }
+    if (lane == 0) {
+      output[int64_t(row) * N + n] = __float2bfloat16_rn(sums[n]);
+    }
+  }
+}
+
+void launch_small_n_gemv(
+    torch::Tensor weights,
+    torch::Tensor hidden_states,
+    torch::Tensor output) {
+  TORCH_CHECK(weights.is_cuda() && hidden_states.is_cuda(),
+              "inputs must be CUDA tensors");
+  TORCH_CHECK(weights.scalar_type() == torch::kBFloat16 &&
+              hidden_states.scalar_type() == torch::kBFloat16,
+              "inputs must be bfloat16");
+  TORCH_CHECK(weights.is_contiguous() && hidden_states.is_contiguous(),
+              "inputs must be contiguous");
+  TORCH_CHECK(weights.dim() == 2 && hidden_states.dim() == 2,
+              "inputs must be matrices");
+  TORCH_CHECK(weights.size(1) == hidden_states.size(1),
+              "hidden dimensions must match");
+  int m = int(weights.size(0));
+  int n = int(hidden_states.size(0));
+  int k = int(weights.size(1));
+  TORCH_CHECK(n >= 1 && n <= 8, "small-N GEMV supports H=1 through H=8");
+  TORCH_CHECK(output.is_cuda() && output.scalar_type() == torch::kBFloat16 &&
+              output.is_contiguous() && output.size(0) == m &&
+              output.size(1) == n, "output must be contiguous BF16 [V, H]");
+  constexpr int threads = 256;
+  int blocks = (m + threads / 32 - 1) / (threads / 32);
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream(weights.get_device());
+  auto* weights_ptr =
+      reinterpret_cast<__nv_bfloat16 const*>(weights.data_ptr());
+  auto* hidden_ptr =
+      reinterpret_cast<__nv_bfloat16 const*>(hidden_states.data_ptr());
+  auto* output_ptr = reinterpret_cast<__nv_bfloat16*>(output.data_ptr());
+#define FMMS_LAUNCH_SMALL_N_GEMV(N)                                           \
+  small_n_gemv_kernel<N><<<blocks, threads, 0, stream>>>(                     \
+      weights_ptr, hidden_ptr, output_ptr, m, k)
+  switch (n) {
+    case 1: FMMS_LAUNCH_SMALL_N_GEMV(1); break;
+    case 2: FMMS_LAUNCH_SMALL_N_GEMV(2); break;
+    case 3: FMMS_LAUNCH_SMALL_N_GEMV(3); break;
+    case 4: FMMS_LAUNCH_SMALL_N_GEMV(4); break;
+    case 5: FMMS_LAUNCH_SMALL_N_GEMV(5); break;
+    case 6: FMMS_LAUNCH_SMALL_N_GEMV(6); break;
+    case 7: FMMS_LAUNCH_SMALL_N_GEMV(7); break;
+    case 8: FMMS_LAUNCH_SMALL_N_GEMV(8); break;
+  }
+#undef FMMS_LAUNCH_SMALL_N_GEMV
+  TORCH_CHECK(cudaGetLastError() == cudaSuccess,
+              "small-N BF16 GEMV launch failed");
+}
+
+torch::Tensor small_n_gemv(
+    torch::Tensor weights, torch::Tensor hidden_states) {
+  auto output = torch::empty(
+      {weights.size(0), hidden_states.size(0)}, weights.options());
+  launch_small_n_gemv(weights, hidden_states, output);
+  return output;
+}
 
 __global__ void stage2_indices_kernel(
     PackedCandidate const* candidates,
@@ -228,24 +328,28 @@ pybind11::tuple make_greedy_buffers(
       padded_hidden_states, candidates, output, gemm_n, rounded_n, m_tiles);
 }
 
-torch::Tensor plain_gemm(torch::Tensor weights, torch::Tensor hidden_states) {
-  TORCH_CHECK(weights.is_cuda() && hidden_states.is_cuda(), "inputs must be CUDA tensors");
+void launch_plain_gemm(
+    torch::Tensor weights,
+    torch::Tensor padded_hidden_states,
+    torch::Tensor output) {
+  TORCH_CHECK(weights.is_cuda() && padded_hidden_states.is_cuda() && output.is_cuda(),
+              "inputs and output must be CUDA tensors");
   TORCH_CHECK(weights.scalar_type() == torch::kBFloat16, "weights must be bfloat16");
-  TORCH_CHECK(hidden_states.scalar_type() == torch::kBFloat16, "hidden_states must be bfloat16");
-  TORCH_CHECK(weights.is_contiguous() && hidden_states.is_contiguous(), "inputs must be contiguous");
-  TORCH_CHECK(weights.dim() == 2 && hidden_states.dim() == 2, "inputs must be matrices");
-  TORCH_CHECK(weights.size(1) == hidden_states.size(1), "hidden dimensions must match");
+  TORCH_CHECK(padded_hidden_states.scalar_type() == torch::kBFloat16,
+              "hidden states must be bfloat16");
+  TORCH_CHECK(output.scalar_type() == torch::kBFloat16, "output must be bfloat16");
+  TORCH_CHECK(weights.is_contiguous() && padded_hidden_states.is_contiguous() &&
+              output.is_contiguous(), "inputs and output must be contiguous");
+  TORCH_CHECK(weights.dim() == 2 && padded_hidden_states.dim() == 2 &&
+              output.dim() == 2, "inputs and output must be matrices");
+  TORCH_CHECK(weights.size(1) == padded_hidden_states.size(1),
+              "hidden dimensions must match");
 
   int m = int(weights.size(0));
-  int n = int(hidden_states.size(0));
+  int gemm_n = int(padded_hidden_states.size(0));
   int k = int(weights.size(1));
-  int gemm_n = ((n + 3) / 4) * 4;
-  int rounded_n = ((gemm_n + kTileN - 1) / kTileN) * kTileN;
-  auto padded_hidden_states =
-      torch::zeros({gemm_n, k}, hidden_states.options());
-  padded_hidden_states.narrow(0, 0, n).copy_(hidden_states);
-  auto output = torch::empty(
-      {m, rounded_n}, weights.options().dtype(torch::kFloat32));
+  TORCH_CHECK(output.size(0) == m && output.size(1) == gemm_n,
+              "output shape must match the GEMM problem");
   auto byte_options = weights.options().dtype(torch::kUInt8);
 
   using StrideA = typename PlainGemmKernel::StrideA;
@@ -257,7 +361,7 @@ torch::Tensor plain_gemm(torch::Tensor weights, torch::Tensor hidden_states) {
   StrideB stride_b =
       cutlass::make_cute_packed_stride(StrideB{}, make_shape(gemm_n, k, 1));
   StrideC stride_c{};
-  StrideD stride_d{int64_t(rounded_n), _1{}, int64_t(m) * rounded_n};
+  StrideD stride_d{int64_t(gemm_n), _1{}, int64_t(m) * gemm_n};
   cutlass::KernelHardwareInfo hardware_info =
       cutlass::KernelHardwareInfo::make_kernel_hardware_info<PlainGemmKernel>(
           weights.get_device());
@@ -274,7 +378,7 @@ torch::Tensor plain_gemm(torch::Tensor weights, torch::Tensor hidden_states) {
           {},
           nullptr,
           stride_c,
-          output.data_ptr<float>(),
+          reinterpret_cast<PlainElementD*>(output.data_ptr()),
           stride_d,
       },
       hardware_info};
@@ -293,6 +397,27 @@ torch::Tensor plain_gemm(torch::Tensor weights, torch::Tensor hidden_states) {
   TORCH_CHECK(
       gemm.run(stream) == cutlass::Status::kSuccess,
       "CUTLASS plain GEMM launch failed");
+}
+
+pybind11::tuple make_plain_gemm_buffers(
+    torch::Tensor weights, torch::Tensor hidden_states) {
+  int m = int(weights.size(0));
+  int n = int(hidden_states.size(0));
+  int k = int(weights.size(1));
+  int gemm_n = ((n + PlainAlignmentD - 1) / PlainAlignmentD) * PlainAlignmentD;
+  auto padded_hidden_states =
+      torch::zeros({gemm_n, k}, hidden_states.options());
+  padded_hidden_states.narrow(0, 0, n).copy_(hidden_states);
+  auto output = torch::empty({m, gemm_n}, weights.options());
+  return pybind11::make_tuple(padded_hidden_states, output, gemm_n);
+}
+
+torch::Tensor plain_gemm(torch::Tensor weights, torch::Tensor hidden_states) {
+  auto buffers = make_plain_gemm_buffers(weights, hidden_states);
+  auto padded_hidden_states = buffers[0].cast<torch::Tensor>();
+  auto output = buffers[1].cast<torch::Tensor>();
+  int n = int(hidden_states.size(0));
+  launch_plain_gemm(weights, padded_hidden_states, output);
   return output.narrow(1, 0, n);
 }
 
@@ -359,7 +484,23 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
   module.def(
       "plain_gemm",
       &fmms_cutlass_greedy::plain_gemm,
-      "Plain CUTLASS BF16 GEMM with FP32 output");
+      "Plain CUTLASS BF16 GEMM with BF16 output");
+  module.def(
+      "make_plain_gemm_buffers",
+      &fmms_cutlass_greedy::make_plain_gemm_buffers,
+      "Allocate identically padded plain GEMM buffers");
+  module.def(
+      "launch_plain_gemm",
+      &fmms_cutlass_greedy::launch_plain_gemm,
+      "Launch plain CUTLASS BF16 GEMM into preallocated output");
+  module.def(
+      "small_n_gemv",
+      &fmms_cutlass_greedy::small_n_gemv,
+      "Launch the BF16 H=1 through H=8 specialization");
+  module.def(
+      "launch_small_n_gemv",
+      &fmms_cutlass_greedy::launch_small_n_gemv,
+      "Launch preallocated BF16 H=1 through H=8 specialization");
   module.def(
       "kernel_attributes",
       &fmms_cutlass_greedy::kernel_attributes,

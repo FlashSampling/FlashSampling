@@ -29,7 +29,7 @@ modal-pytest-distributed:
 modal-versions:
 	modal run -m src.fused_mm_sampling.modal_lib.modal_versions
 
-CUTLASS_GATES := toolchain accumulator-layout thread-local-max warp-max cta-max cta-multi-column-max cta-boundary-max evt-candidates stage2 greedy-provider greedy-performance greedy-profile greedy-ncu
+CUTLASS_GATES := toolchain accumulator-layout thread-local-max warp-max cta-max cta-multi-column-max cta-boundary-max evt-candidates stage2 greedy-provider greedy-performance greedy-profile greedy-ncu ordinary-gemm
 CUTLASS_MODULE_toolchain := toolchain
 CUTLASS_MODULE_accumulator-layout := accumulator_layout
 CUTLASS_MODULE_thread-local-max := thread_local_max
@@ -43,6 +43,7 @@ CUTLASS_MODULE_greedy-provider := greedy_provider
 CUTLASS_MODULE_greedy-performance := greedy_performance
 CUTLASS_MODULE_greedy-profile := greedy_profile
 CUTLASS_MODULE_greedy-ncu := greedy_ncu
+CUTLASS_MODULE_ordinary-gemm := ordinary_gemm
 CUTLASS_RESULT_toolchain := 00-toolchain
 CUTLASS_RESULT_accumulator-layout := 01-accumulator-layout
 CUTLASS_RESULT_thread-local-max := 02-thread-local-max
@@ -56,6 +57,7 @@ CUTLASS_RESULT_greedy-provider := 09-greedy-provider
 CUTLASS_RESULT_greedy-performance := 10-greedy-performance
 CUTLASS_RESULT_greedy-profile := 11-greedy-profile
 CUTLASS_RESULT_greedy-ncu := 12-greedy-ncu
+CUTLASS_RESULT_ordinary-gemm := 13-ordinary-gemm
 CUTLASS_LOG_toolchain := smoke.txt
 
 modal-cutlass:

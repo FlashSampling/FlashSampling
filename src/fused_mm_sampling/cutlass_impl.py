@@ -32,8 +32,33 @@ def fused_mm_sample_cutlass_greedy(
 def cutlass_plain_gemm(
     weights: torch.Tensor, hidden_states: torch.Tensor
 ) -> torch.Tensor:
-    """Return an FP32 `[V, H]` output from the matching plain CUTLASS GEMM."""
+    """Return a BF16 `[V, H]` output from the matching plain CUTLASS GEMM."""
     return _get_module().plain_gemm(weights, hidden_states)
+
+
+def cutlass_make_plain_gemm_buffers(
+    weights: torch.Tensor, hidden_states: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor, int]:
+    """Allocate the padded input and BF16 output for ordinary GEMM timing."""
+    return _get_module().make_plain_gemm_buffers(weights, hidden_states)
+
+
+def cutlass_launch_plain_gemm(
+    weights: torch.Tensor,
+    padded_hidden_states: torch.Tensor,
+    output: torch.Tensor,
+) -> None:
+    """Launch ordinary CUTLASS GEMM into a preallocated BF16 output."""
+    _get_module().launch_plain_gemm(weights, padded_hidden_states, output)
+
+
+def cutlass_launch_small_n_gemv(
+    weights: torch.Tensor,
+    hidden_states: torch.Tensor,
+    output: torch.Tensor,
+) -> None:
+    """Launch the preallocated BF16 H=1 or H=2 specialization."""
+    _get_module().launch_small_n_gemv(weights, hidden_states, output)
 
 
 def cutlass_greedy_kernel_attributes() -> dict[str, int]:
