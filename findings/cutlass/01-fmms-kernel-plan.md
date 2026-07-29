@@ -1124,6 +1124,8 @@ result is documented in `findings/cutlass/10-evt-candidates.md`.
 
 #### Gate 1h: integrate Stage 2 and close deterministic correctness
 
+**Status:** complete on 2026-07-29.
+
 Merge the Gate 1g candidates across M tiles with the existing GPU Stage 2.
 Run the complete deterministic boundary and tie matrix on H100 and B200 in
 the same packet.
@@ -1145,6 +1147,9 @@ and final-output failures.
 Cross-tile ties must choose the lowest global index.
 This gate closes deterministic reduction correctness but does not prove
 sampling or production performance.
+
+The checked-in runner is `make modal-cutlass GATE=stage2`, and the result is
+documented in `findings/cutlass/11-stage2.md`.
 
 **Fallback:** if a generic EVT stops expressing the reduction cleanly or
 reliably during Gate 1, switch at that point to a handwritten CUTLASS

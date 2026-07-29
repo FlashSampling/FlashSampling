@@ -375,9 +375,41 @@ float logit_for(int pattern, int m, int tile) {
   if (pattern == 3) {
     return local_m == 5 ? 11.0f : -30.0f;
   }
+  if (pattern == 5) {
+    return m == 0 ? 17.0f : -50.0f;
+  }
+  if (pattern == 6) {
+    return m == 128 ? 18.0f : -50.0f;
+  }
+  if (pattern == 7) {
+    return m == 256 ? 19.0f : -50.0f;
+  }
+  if (pattern == 8) {
+    return m == 7 || m == 263 ? 20.0f : -50.0f;
+  }
   int winner = tile % 2 == 0 ? 0 : 127;
   return local_m == winner ? 13.0f : -40.0f;
 }
+
+#if defined(FMMS_GATE_STAGE2)
+__global__ void stage2_kernel(
+    PackedCandidate const* candidates,
+    PackedCandidate* final_candidates,
+    int m_tiles,
+    int candidate_stride,
+    int n) {
+  int column = blockIdx.x * blockDim.x + threadIdx.x;
+  if (column >= n) {
+    return;
+  }
+  PackedCandidate winner = pack_candidate(-INFINITY, INT_MAX);
+  for (int tile = 0; tile < m_tiles; ++tile) {
+    winner = choose_candidate(
+        winner, candidates[tile * candidate_stride + column]);
+  }
+  final_candidates[column] = winner;
+}
+#endif
 
 void run_case(Case const& test_case) {
   int m_tiles = (test_case.m + kTileM - 1) / kTileM;
@@ -396,6 +428,9 @@ void run_case(Case const& test_case) {
   ElementB* device_b;
   ElementD* device_d;
   PackedCandidate* device_candidates;
+#if defined(FMMS_GATE_STAGE2)
+  PackedCandidate* device_final_candidates;
+#endif
   check_cuda(cudaMalloc(&device_a, matrix_a.size() * sizeof(ElementA)), "malloc A");
   check_cuda(cudaMalloc(&device_b, matrix_b.size() * sizeof(ElementB)), "malloc B");
   check_cuda(
@@ -406,6 +441,13 @@ void run_case(Case const& test_case) {
           &device_candidates,
           m_tiles * rounded_n * sizeof(PackedCandidate)),
       "malloc candidates");
+#if defined(FMMS_GATE_STAGE2)
+  check_cuda(
+      cudaMalloc(
+          &device_final_candidates,
+          test_case.n * sizeof(PackedCandidate)),
+      "malloc final candidates");
+#endif
   check_cuda(
       cudaMemcpy(
           device_a,
@@ -457,6 +499,18 @@ void run_case(Case const& test_case) {
   check_cutlass(gemm.can_implement(arguments), "can_implement");
   check_cutlass(gemm.initialize(arguments, workspace), "initialize");
   check_cutlass(gemm.run(), "run");
+#if defined(FMMS_GATE_STAGE2)
+  constexpr int kStage2Threads = 256;
+  stage2_kernel<<<
+      (test_case.n + kStage2Threads - 1) / kStage2Threads,
+      kStage2Threads>>>(
+      device_candidates,
+      device_final_candidates,
+      m_tiles,
+      rounded_n,
+      test_case.n);
+  check_cuda(cudaGetLastError(), "launch Stage 2");
+#endif
   check_cuda(cudaDeviceSynchronize(), "synchronize");
 
   std::vector<PackedCandidate> candidates(m_tiles * rounded_n);
@@ -467,6 +521,17 @@ void run_case(Case const& test_case) {
           candidates.size() * sizeof(PackedCandidate),
           cudaMemcpyDeviceToHost),
       "copy candidates");
+
+#if defined(FMMS_GATE_STAGE2)
+  std::vector<PackedCandidate> final_candidates(test_case.n);
+  check_cuda(
+      cudaMemcpy(
+          final_candidates.data(),
+          device_final_candidates,
+          final_candidates.size() * sizeof(PackedCandidate),
+          cudaMemcpyDeviceToHost),
+      "copy final candidates");
+#endif
 
   for (int tile = 0; tile < m_tiles; ++tile) {
     int begin = tile * kTileM;
@@ -482,6 +547,16 @@ void run_case(Case const& test_case) {
       }
       PackedCandidate actual = candidates[tile * rounded_n + n];
       int passed = actual == expected;
+#if defined(FMMS_GATE_STAGE2)
+      std::cout << kArchitecture << ',' << test_case.family << ','
+                << test_case.name << ',' << test_case.m << ','
+                << test_case.n << ',' << kK << ",candidate," << tile << ','
+                << n << ',' << begin << ',' << end << ','
+                << uint32_t(expected >> 32) << ','
+                << uint32_t(actual >> 32) << ','
+                << candidate_index(expected) << ','
+                << candidate_index(actual) << ',' << passed << '\n';
+#else
       std::cout << kArchitecture << ',' << test_case.family << ','
                 << test_case.name << ',' << test_case.m << ','
                 << test_case.n << ',' << kK << ',' << tile << ',' << n
@@ -490,11 +565,39 @@ void run_case(Case const& test_case) {
                 << uint32_t(actual >> 32) << ','
                 << candidate_index(expected) << ','
                 << candidate_index(actual) << ',' << passed << '\n';
+#endif
       if (!passed) {
         std::exit(EXIT_FAILURE);
       }
     }
   }
+
+#if defined(FMMS_GATE_STAGE2)
+  for (int n = 0; n < test_case.n; ++n) {
+    PackedCandidate expected = identity;
+    for (int m = 0; m < test_case.m; ++m) {
+      expected = choose_candidate(
+          expected,
+          pack_candidate(
+              float(matrix_a[m * kK]) * float(matrix_b[n * kK]),
+              m));
+    }
+    PackedCandidate actual = final_candidates[n];
+    int passed = actual == expected;
+    std::cout << kArchitecture << ',' << test_case.family << ','
+              << test_case.name << ',' << test_case.m << ','
+              << test_case.n << ',' << kK << ",final,-1," << n
+              << ",0," << test_case.m << ','
+              << uint32_t(expected >> 32) << ','
+              << uint32_t(actual >> 32) << ','
+              << candidate_index(expected) << ','
+              << candidate_index(actual) << ',' << passed << '\n';
+    if (!passed) {
+      std::exit(EXIT_FAILURE);
+    }
+  }
+  check_cuda(cudaFree(device_final_candidates), "free final candidates");
+#endif
 
   if (workspace != nullptr) {
     check_cuda(cudaFree(workspace), "free workspace");
@@ -509,6 +612,22 @@ void run_case(Case const& test_case) {
 
 int main() {
   using fmms_evt_candidates::Case;
+#if defined(FMMS_GATE_STAGE2)
+  std::vector<Case> cases{
+      {"winner_tiles", "winner_first_tile", 257, 4, 5},
+      {"winner_tiles", "winner_middle_tile", 257, 68, 6},
+      {"winner_tiles", "winner_last_tile", 257, 132, 7},
+      {"boundaries", "complete_tiles", 256, 128, 4},
+      {"boundaries", "partial_m_n", 129, 68, 0},
+      {"negative_ties", "all_negative", 255, 4, 1},
+      {"negative_ties", "within_tile_tie", 128, 64, 2},
+      {"cross_tile_ties", "equal_global_maxima", 264, 4, 8},
+  };
+  std::cout
+      << "architecture,family,case,m,n,k,row_type,m_tile,column,tile_begin,"
+         "tile_end,expected_value_bits,actual_value_bits,expected_index,"
+         "actual_index,pass\n";
+#else
   std::vector<Case> cases{
       {"boundaries", "complete_tiles", 256, 128, 4},
       {"tile_offsets", "edge_winners", 257, 132, 0},
@@ -520,6 +639,7 @@ int main() {
   std::cout
       << "architecture,family,case,m,n,k,m_tile,column,tile_begin,tile_end,"
          "expected_value_bits,actual_value_bits,expected_index,actual_index,pass\n";
+#endif
   for (Case const& test_case : cases) {
     fmms_evt_candidates::run_case(test_case);
   }

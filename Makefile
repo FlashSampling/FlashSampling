@@ -29,7 +29,7 @@ modal-pytest-distributed:
 modal-versions:
 	modal run -m src.fused_mm_sampling.modal_lib.modal_versions
 
-CUTLASS_GATES := toolchain accumulator-layout thread-local-max warp-max cta-max cta-multi-column-max cta-boundary-max evt-candidates
+CUTLASS_GATES := toolchain accumulator-layout thread-local-max warp-max cta-max cta-multi-column-max cta-boundary-max evt-candidates stage2
 CUTLASS_MODULE_toolchain := toolchain
 CUTLASS_MODULE_accumulator-layout := accumulator_layout
 CUTLASS_MODULE_thread-local-max := thread_local_max
@@ -38,6 +38,7 @@ CUTLASS_MODULE_cta-max := cta_max
 CUTLASS_MODULE_cta-multi-column-max := cta_multi_column_max
 CUTLASS_MODULE_cta-boundary-max := cta_boundary_max
 CUTLASS_MODULE_evt-candidates := evt_candidates
+CUTLASS_MODULE_stage2 := stage2
 CUTLASS_RESULT_toolchain := 00-toolchain
 CUTLASS_RESULT_accumulator-layout := 01-accumulator-layout
 CUTLASS_RESULT_thread-local-max := 02-thread-local-max
@@ -46,6 +47,7 @@ CUTLASS_RESULT_cta-max := 04-cta-max
 CUTLASS_RESULT_cta-multi-column-max := 05-cta-multi-column-max
 CUTLASS_RESULT_cta-boundary-max := 06-cta-boundary-max
 CUTLASS_RESULT_evt-candidates := 07-evt-candidates
+CUTLASS_RESULT_stage2 := 08-stage2
 CUTLASS_LOG_toolchain := smoke.txt
 
 modal-cutlass:
