@@ -39,14 +39,16 @@ def make_cutlass_image() -> modal.Image:
     )
 
 
-def make_cutlass_provider_image() -> modal.Image:
+def make_cutlass_provider_image(
+    base_image: modal.Image | None = None,
+) -> modal.Image:
     """Layer pinned CUTLASS sources onto the standard FMMS runtime image."""
     void_d_patch = (
         _repo_root
         / "src/fused_mm_sampling/csrc/cutlass/sm100-void-d.patch"
     )
     return (
-        make_image()
+        (base_image or make_image())
         .apt_install("git", "ninja-build")
         .add_local_file(
             str(void_d_patch),

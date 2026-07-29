@@ -1210,13 +1210,29 @@ The production provider now uses the same `ElementD=void` semantics on SM90 and 
 The complete Gate 2a matrix passed again with 52/52 cases and 18/18 shared pytest cases per architecture.
 The implementation and evidence are documented in `findings/cutlass/13-void-d-epilogue.md`.
 
-The complete H100 and B200 performance sweep failed the predeclared 5%
+The first complete H100 and B200 performance sweep failed the predeclared 5%
 threshold in 24 of 36 configurations.
-The worst ratio was 1.38 at V=151,936, D=4,096, H=1 on B200.
+Profiling identified a serial 1,187-candidate dependency chain in Stage 2.
+A cooperative one-CTA-per-column reduction reduced Stage 2 from 0.092-0.144
+ms to 0.004-0.006 ms and passed the full Gate 2a regression.
+The updated sweep passes 29 of 36 configurations.
+The remaining seven failures are confined to H=1,2,4, and the worst ratio is
+1.14.
 Do not begin Gate 3 on the current implementation.
-Rework the epilogue or wrapper path and rerun Gate 2b, or stop the CUTLASS port.
+Before more fused-epilogue work, establish a dtype-matched ordinary CUTLASS
+GEMM that remains within 5% of cuBLAS for every primary shape and H value.
+The current diagnostic CUTLASS GEMM plus argmax is slower than cuBLAS plus
+argmax in all 36 configurations, with median ratios of 1.17 on H100 and 1.27
+on B200.
+The current comparison mixes FP32 CUTLASS output with BF16 cuBLAS output, so
+build a matched comparison before deciding whether CUTLASS tuning can close
+the gap.
+Stop the CUTLASS port if the ordinary-GEMM prerequisite cannot pass.
+Only after it passes should the implementation reduce the fused epilogue's
+low-H resource cost and rerun Gate 2b against both baselines.
 The decision and evidence are documented in
-`findings/cutlass/14-greedy-performance.md`.
+`findings/cutlass/14-greedy-performance.md` and
+`findings/cutlass/15-greedy-profile-stage2.md`.
 
 **TODO:** Replace the downstream CUTLASS source patch with an upstream NVIDIA/CUTLASS fix.
 Before opening the issue or pull request, extract a minimal SM100 `ElementD=void` reproducer with an EVT auxiliary output and add a focused regression test.

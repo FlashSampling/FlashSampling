@@ -60,44 +60,47 @@ __global__ void stage2_indices_kernel(
     int m_tiles,
     int candidate_stride,
     int n) {
-  int column = blockIdx.x * blockDim.x + threadIdx.x;
+  int column = blockIdx.x;
   if (column >= n) {
     return;
   }
+  __shared__ PackedCandidate partials[256];
   PackedCandidate winner = pack_candidate(-INFINITY, INT_MAX);
-  for (int tile = 0; tile < m_tiles; ++tile) {
+  for (int tile = threadIdx.x; tile < m_tiles; tile += blockDim.x) {
     winner = choose_candidate(
         winner, candidates[tile * candidate_stride + column]);
   }
-  indices[column] = candidate_index(winner);
+  partials[threadIdx.x] = winner;
+  __syncthreads();
+  for (int offset = blockDim.x / 2; offset > 0; offset /= 2) {
+    if (threadIdx.x < offset) {
+      partials[threadIdx.x] = choose_candidate(
+          partials[threadIdx.x], partials[threadIdx.x + offset]);
+    }
+    __syncthreads();
+  }
+  if (threadIdx.x == 0) {
+    indices[column] = candidate_index(partials[0]);
+  }
 }
 
-torch::Tensor greedy(torch::Tensor weights, torch::Tensor hidden_states) {
-  TORCH_CHECK(weights.is_cuda() && hidden_states.is_cuda(), "inputs must be CUDA tensors");
-  TORCH_CHECK(weights.scalar_type() == torch::kBFloat16, "weights must be bfloat16");
-  TORCH_CHECK(hidden_states.scalar_type() == torch::kBFloat16, "hidden_states must be bfloat16");
-  TORCH_CHECK(weights.is_contiguous(), "weights must be contiguous");
-  TORCH_CHECK(hidden_states.is_contiguous(), "hidden_states must be contiguous");
-  TORCH_CHECK(weights.dim() == 2 && hidden_states.dim() == 2, "inputs must be matrices");
-  TORCH_CHECK(weights.size(1) == hidden_states.size(1), "hidden dimensions must match");
-  TORCH_CHECK(weights.size(1) % 8 == 0, "hidden dimension must be a multiple of 8");
-  TORCH_CHECK(weights.size(0) > 0 && hidden_states.size(0) > 0, "dimensions must be nonzero");
-  TORCH_CHECK(weights.size(0) <= INT_MAX && hidden_states.size(0) <= INT_MAX &&
-              weights.size(1) <= INT_MAX, "dimensions exceed CUTLASS int32 limits");
-
+void launch_greedy_gemm(
+    torch::Tensor weights,
+    torch::Tensor padded_hidden_states,
+    torch::Tensor candidates,
+    int gemm_n,
+    int rounded_n) {
   int m = int(weights.size(0));
-  int n = int(hidden_states.size(0));
   int k = int(weights.size(1));
-  int gemm_n = ((n + 3) / 4) * 4;
   int m_tiles = (m + kTileM - 1) / kTileM;
-  int rounded_n = ((gemm_n + kTileN - 1) / kTileN) * kTileN;
-  auto byte_options = weights.options().dtype(torch::kUInt8);
-  auto padded_hidden_states =
-      torch::zeros({gemm_n, k}, hidden_states.options());
-  padded_hidden_states.narrow(0, 0, n).copy_(hidden_states);
-  auto candidates = torch::empty(
-      {m_tiles, rounded_n * int64_t(sizeof(PackedCandidate))}, byte_options);
-  auto output = torch::empty({n, 1}, weights.options().dtype(torch::kInt64));
+  TORCH_CHECK(
+      padded_hidden_states.size(0) == gemm_n &&
+          padded_hidden_states.size(1) == k,
+      "padded hidden-state shape does not match the GEMM problem");
+  TORCH_CHECK(
+      candidates.numel() ==
+          m_tiles * int64_t(rounded_n) * int64_t(sizeof(PackedCandidate)),
+      "candidate storage has the wrong size");
 
   using StrideA = typename GemmKernel::StrideA;
   using StrideB = typename GemmKernel::StrideB;
@@ -140,7 +143,8 @@ torch::Tensor greedy(torch::Tensor weights, torch::Tensor hidden_states) {
   Gemm gemm;
   cudaStream_t stream = at::cuda::getCurrentCUDAStream(weights.get_device());
   size_t workspace_size = Gemm::get_workspace_size(arguments);
-  auto workspace = torch::empty({int64_t(workspace_size)}, byte_options);
+  auto workspace = torch::empty(
+      {int64_t(workspace_size)}, weights.options().dtype(torch::kUInt8));
   TORCH_CHECK(
       gemm.can_implement(arguments) == cutlass::Status::kSuccess,
       "CUTLASS cannot implement this shape");
@@ -148,17 +152,80 @@ torch::Tensor greedy(torch::Tensor weights, torch::Tensor hidden_states) {
       gemm.initialize(arguments, workspace.data_ptr(), stream) ==
           cutlass::Status::kSuccess,
       "CUTLASS initialization failed");
-  TORCH_CHECK(gemm.run(stream) == cutlass::Status::kSuccess, "CUTLASS launch failed");
+  TORCH_CHECK(
+      gemm.run(stream) == cutlass::Status::kSuccess,
+      "CUTLASS launch failed");
+}
 
+void launch_greedy_stage2(
+    torch::Tensor candidates,
+    torch::Tensor output,
+    int m_tiles,
+    int rounded_n,
+    int n) {
   constexpr int threads = 256;
-  stage2_indices_kernel<<<(n + threads - 1) / threads, threads, 0, stream>>>(
+  cudaStream_t stream = at::cuda::getCurrentCUDAStream(candidates.get_device());
+  auto* candidate_ptr =
+      reinterpret_cast<PackedCandidate*>(candidates.data_ptr<uint8_t>());
+  stage2_indices_kernel<<<n, threads, 0, stream>>>(
       candidate_ptr,
       output.data_ptr<int64_t>(),
       m_tiles,
       rounded_n,
       n);
   TORCH_CHECK(cudaGetLastError() == cudaSuccess, "CUTLASS Stage 2 launch failed");
+}
+
+torch::Tensor greedy(torch::Tensor weights, torch::Tensor hidden_states) {
+  TORCH_CHECK(weights.is_cuda() && hidden_states.is_cuda(), "inputs must be CUDA tensors");
+  TORCH_CHECK(weights.scalar_type() == torch::kBFloat16, "weights must be bfloat16");
+  TORCH_CHECK(hidden_states.scalar_type() == torch::kBFloat16, "hidden_states must be bfloat16");
+  TORCH_CHECK(weights.is_contiguous(), "weights must be contiguous");
+  TORCH_CHECK(hidden_states.is_contiguous(), "hidden_states must be contiguous");
+  TORCH_CHECK(weights.dim() == 2 && hidden_states.dim() == 2, "inputs must be matrices");
+  TORCH_CHECK(weights.size(1) == hidden_states.size(1), "hidden dimensions must match");
+  TORCH_CHECK(weights.size(1) % 8 == 0, "hidden dimension must be a multiple of 8");
+  TORCH_CHECK(weights.size(0) > 0 && hidden_states.size(0) > 0, "dimensions must be nonzero");
+  TORCH_CHECK(weights.size(0) <= INT_MAX && hidden_states.size(0) <= INT_MAX &&
+              weights.size(1) <= INT_MAX, "dimensions exceed CUTLASS int32 limits");
+
+  int m = int(weights.size(0));
+  int n = int(hidden_states.size(0));
+  int k = int(weights.size(1));
+  int gemm_n = ((n + 3) / 4) * 4;
+  int m_tiles = (m + kTileM - 1) / kTileM;
+  int rounded_n = ((gemm_n + kTileN - 1) / kTileN) * kTileN;
+  auto byte_options = weights.options().dtype(torch::kUInt8);
+  auto padded_hidden_states =
+      torch::zeros({gemm_n, k}, hidden_states.options());
+  padded_hidden_states.narrow(0, 0, n).copy_(hidden_states);
+  auto candidates = torch::empty(
+      {m_tiles, rounded_n * int64_t(sizeof(PackedCandidate))}, byte_options);
+  auto output = torch::empty({n, 1}, weights.options().dtype(torch::kInt64));
+
+  launch_greedy_gemm(
+      weights, padded_hidden_states, candidates, gemm_n, rounded_n);
+  launch_greedy_stage2(candidates, output, m_tiles, rounded_n, n);
   return output;
+}
+
+pybind11::tuple make_greedy_buffers(
+    torch::Tensor weights, torch::Tensor hidden_states) {
+  int m = int(weights.size(0));
+  int n = int(hidden_states.size(0));
+  int k = int(weights.size(1));
+  int gemm_n = ((n + 3) / 4) * 4;
+  int m_tiles = (m + kTileM - 1) / kTileM;
+  int rounded_n = ((gemm_n + kTileN - 1) / kTileN) * kTileN;
+  auto padded_hidden_states =
+      torch::zeros({gemm_n, k}, hidden_states.options());
+  padded_hidden_states.narrow(0, 0, n).copy_(hidden_states);
+  auto candidates = torch::empty(
+      {m_tiles, rounded_n * int64_t(sizeof(PackedCandidate))},
+      weights.options().dtype(torch::kUInt8));
+  auto output = torch::empty({n, 1}, weights.options().dtype(torch::kInt64));
+  return pybind11::make_tuple(
+      padded_hidden_states, candidates, output, gemm_n, rounded_n, m_tiles);
 }
 
 torch::Tensor plain_gemm(torch::Tensor weights, torch::Tensor hidden_states) {
@@ -277,6 +344,18 @@ pybind11::dict kernel_attributes() {
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
   module.def("greedy", &fmms_cutlass_greedy::greedy, "CUTLASS BF16 TP1 greedy FMMS");
+  module.def(
+      "make_greedy_buffers",
+      &fmms_cutlass_greedy::make_greedy_buffers,
+      "Allocate and populate diagnostic greedy buffers");
+  module.def(
+      "launch_greedy_gemm",
+      &fmms_cutlass_greedy::launch_greedy_gemm,
+      "Launch only the preallocated greedy GEMM");
+  module.def(
+      "launch_greedy_stage2",
+      &fmms_cutlass_greedy::launch_greedy_stage2,
+      "Launch only the preallocated greedy Stage 2 reduction");
   module.def(
       "plain_gemm",
       &fmms_cutlass_greedy::plain_gemm,

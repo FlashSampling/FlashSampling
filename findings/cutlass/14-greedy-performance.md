@@ -1,6 +1,6 @@
 # Gate 2b greedy performance feasibility
 
-Gate 2b reached a no-go decision under the predeclared 5% threshold.
+Gate 2b initially reached a no-go decision under the predeclared 5% threshold.
 
 The benchmark compares the correctness-approved no-D CUTLASS FMMS provider with
 plain CUTLASS GEMM, CUTLASS GEMM plus argmax, Triton FMMS, and cuBLAS plus
@@ -34,6 +34,21 @@ including allocations and input padding.
 The project must not begin Gate 3 stateless Philox work on this implementation.
 The epilogue or wrapper path must first be reworked and Gate 2b rerun, or the
 CUTLASS port should stop.
+
+## Profiling follow-up
+
+Targeted component and Nsight Compute profiling found that the original Stage
+2 kernel serially scanned all vocabulary-tile candidates in one active thread
+per hidden state.
+The parallel Stage 2 rewrite reduced that component from 0.092-0.144 ms to
+0.004-0.006 ms and passed the complete Gate 2a matrix.
+
+The updated Gate 2b sweep passes 29 of 36 configurations.
+H100 passes 15/18 and B200 passes 14/18.
+The worst ratio is now 1.14.
+Gate 2b remains no-go because seven low-H configurations still exceed 1.05.
+The profile, optimization, and current next step are documented in
+`findings/cutlass/15-greedy-profile-stage2.md`.
 
 ## Static resources
 

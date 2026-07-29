@@ -41,6 +41,39 @@ def cutlass_greedy_kernel_attributes() -> dict[str, int]:
     return _get_module().kernel_attributes()
 
 
+def cutlass_make_greedy_buffers(
+    weights: torch.Tensor, hidden_states: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int, int, int]:
+    """Allocate the padded input, candidates, and output used for profiling."""
+    return _get_module().make_greedy_buffers(weights, hidden_states)
+
+
+def cutlass_launch_greedy_gemm(
+    weights: torch.Tensor,
+    padded_hidden_states: torch.Tensor,
+    candidates: torch.Tensor,
+    gemm_n: int,
+    rounded_n: int,
+) -> None:
+    """Launch only the greedy CUTLASS GEMM into preallocated candidates."""
+    _get_module().launch_greedy_gemm(
+        weights, padded_hidden_states, candidates, gemm_n, rounded_n
+    )
+
+
+def cutlass_launch_greedy_stage2(
+    candidates: torch.Tensor,
+    output: torch.Tensor,
+    m_tiles: int,
+    rounded_n: int,
+    n_hidden_states: int,
+) -> None:
+    """Launch only Stage 2 using preallocated candidates and output."""
+    _get_module().launch_greedy_stage2(
+        candidates, output, m_tiles, rounded_n, n_hidden_states
+    )
+
+
 def _get_module():
     global _module
     if _module is None:
@@ -60,6 +93,7 @@ def _get_module():
             extra_include_paths=include_dirs,
             extra_cuda_cflags=[
                 "-O3",
+                "-lineinfo",
                 "--expt-relaxed-constexpr",
                 f"-arch=sm_{architecture}a",
                 f"-DFMMS_ARCH_SM{architecture}",
