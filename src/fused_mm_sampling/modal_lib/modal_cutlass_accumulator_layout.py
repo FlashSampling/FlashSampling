@@ -5,10 +5,10 @@ import subprocess
 from io import StringIO
 from pathlib import Path
 
-from .utils import make_app, make_cutlass_image
+from .utils import add_cutlass_accumulator_layout, make_app, make_cutlass_image
 
 app = make_app()
-image = make_cutlass_image()
+image = add_cutlass_accumulator_layout(make_cutlass_image())
 
 OUTPUT_DIR = Path("benchmarking/modal-results/cutlass-layout")
 M = 128

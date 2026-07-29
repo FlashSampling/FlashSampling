@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pandas as pd
 
-from .utils import make_app, make_cutlass_image
+from .utils import add_cutlass_thread_local_max, make_app, make_cutlass_image
 
 app = make_app()
-image = make_cutlass_image()
+image = add_cutlass_thread_local_max(make_cutlass_image())
 
 OUTPUT_DIR = Path("benchmarking/modal-results/cutlass-thread-local-max")
 ARCHITECTURES = ("sm90", "sm100")

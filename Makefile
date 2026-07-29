@@ -44,6 +44,11 @@ modal-cutlass-thread-local-max:
 	modal run -m src.fused_mm_sampling.modal_lib.modal_cutlass_thread_local_max 2>&1 | \
 		tee benchmarking/modal-results/cutlass-thread-local-max/log.txt
 
+modal-cutlass-warp-max:
+	mkdir -p benchmarking/modal-results/cutlass-warp-max
+	modal run -m src.fused_mm_sampling.modal_lib.modal_cutlass_warp_max 2>&1 | \
+		tee benchmarking/modal-results/cutlass-warp-max/log.txt
+
 update-deps:
 	uv lock --upgrade  # Re-resolve all deps to latest compatible versions
 	uv sync --all-extras  # Install exact versions from lockfile, including optional groups

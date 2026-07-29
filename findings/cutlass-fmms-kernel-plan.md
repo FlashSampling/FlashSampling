@@ -1008,9 +1008,13 @@ This gate does not exercise warp communication or shared memory.
 
 #### Gate 1c: reduce within one warp
 
+**Status:** complete on 2026-07-29.
+
 Add shuffle-based max-with-index across the M lanes of one warp.
 Test unique maxima, ties, negative values, and maxima that cross lane
 boundaries.
+The checked-in runner is `make modal-cutlass-warp-max`, and the result is
+documented in `findings/cutlass-warp-max.md`.
 
 **Exit:** exact agreement for every warp-local M domain.
 

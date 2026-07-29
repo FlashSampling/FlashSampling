@@ -8,34 +8,25 @@
 
 #include <cuda_runtime.h>
 
+#include "cutlass_max_with_index.cuh"
+
 #if !defined(FMMS_ARCH_SM90) && !defined(FMMS_ARCH_SM100)
 #error "Compile with FMMS_ARCH_SM90 or FMMS_ARCH_SM100"
 #endif
 
 namespace fmms_thread_local_max {
 
+using fmms_cutlass::MaxWithIndex;
+using fmms_cutlass::choose_max;
+using fmms_cutlass::float_bits;
+
 constexpr int kConsumerThreads = 128;
 constexpr int kFragmentSize = 16;
-
-struct MaxWithIndex {
-  float value;
-  int index;
-};
 
 enum class VisitOrder : int {
   kAscending,
   kDescending,
 };
-
-__device__ MaxWithIndex choose_max(
-    MaxWithIndex current,
-    MaxWithIndex candidate) {
-  if (candidate.value > current.value ||
-      (candidate.value == current.value && candidate.index < current.index)) {
-    return candidate;
-  }
-  return current;
-}
 
 __device__ MaxWithIndex reduce_thread_fragment(
     float const* values,
@@ -130,21 +121,11 @@ std::vector<TestCase> make_cases() {
 MaxWithIndex host_reference(TestCase const& test_case) {
   MaxWithIndex result{test_case.values[0], test_case.indices[0]};
   for (int slot = 1; slot < kFragmentSize; ++slot) {
-    MaxWithIndex candidate{test_case.values[slot], test_case.indices[slot]};
-    if (candidate.value > result.value ||
-        (candidate.value == result.value && candidate.index < result.index)) {
-      result = candidate;
-    }
+    result = choose_max(
+        result,
+        {test_case.values[slot], test_case.indices[slot]});
   }
   return result;
-}
-
-uint32_t float_bits(float value) {
-  union {
-    float value;
-    uint32_t bits;
-  } representation{value};
-  return representation.bits;
 }
 
 void run_tests() {
