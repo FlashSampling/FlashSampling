@@ -31,22 +31,22 @@ modal-versions:
 
 modal-cutlass-toolchain-smoke:
 	mkdir -p benchmarking/modal-results/cutlass-toolchain
-	modal run -m src.fused_mm_sampling.modal_lib.modal_cutlass_toolchain 2>&1 | \
+	modal run -m src.fused_mm_sampling.modal_lib.cutlass.toolchain 2>&1 | \
 		tee benchmarking/modal-results/cutlass-toolchain/smoke.txt
 
 modal-cutlass-accumulator-layout:
 	mkdir -p benchmarking/modal-results/cutlass-layout
-	modal run -m src.fused_mm_sampling.modal_lib.modal_cutlass_accumulator_layout 2>&1 | \
+	modal run -m src.fused_mm_sampling.modal_lib.cutlass.accumulator_layout 2>&1 | \
 		tee benchmarking/modal-results/cutlass-layout/log.txt
 
 modal-cutlass-thread-local-max:
 	mkdir -p benchmarking/modal-results/cutlass-thread-local-max
-	modal run -m src.fused_mm_sampling.modal_lib.modal_cutlass_thread_local_max 2>&1 | \
+	modal run -m src.fused_mm_sampling.modal_lib.cutlass.thread_local_max 2>&1 | \
 		tee benchmarking/modal-results/cutlass-thread-local-max/log.txt
 
 modal-cutlass-warp-max:
 	mkdir -p benchmarking/modal-results/cutlass-warp-max
-	modal run -m src.fused_mm_sampling.modal_lib.modal_cutlass_warp_max 2>&1 | \
+	modal run -m src.fused_mm_sampling.modal_lib.cutlass.warp_max 2>&1 | \
 		tee benchmarking/modal-results/cutlass-warp-max/log.txt
 
 update-deps:

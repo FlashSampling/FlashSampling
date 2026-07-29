@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from .utils import add_cutlass_warp_max, make_app, make_cutlass_image
+from ..utils import make_app
+from .utils import add_cutlass_warp_max, make_cutlass_image
 
 app = make_app()
 image = add_cutlass_warp_max(make_cutlass_image())

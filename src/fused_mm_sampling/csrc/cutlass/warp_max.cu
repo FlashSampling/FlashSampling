@@ -7,7 +7,7 @@
 
 #include <cuda_runtime.h>
 
-#include "cutlass_max_with_index.cuh"
+#include "max_with_index.cuh"
 
 #if !defined(FMMS_ARCH_SM90) && !defined(FMMS_ARCH_SM100)
 #error "Compile with FMMS_ARCH_SM90 or FMMS_ARCH_SM100"

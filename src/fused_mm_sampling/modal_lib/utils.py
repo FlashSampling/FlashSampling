@@ -7,9 +7,6 @@ from pydantic_settings import BaseSettings
 _repo_root = Path(__file__).resolve().parents[3]
 
 PYTORCH_CUDA_IMAGE = "pytorch/pytorch:2.11.0-cuda13.0-cudnn9-devel"
-CUTLASS_VERSION = "4.2.1"
-CUTLASS_SHA = "f3fde58372d33e9a5650ba7b80fc48b3b49d40c8"
-CUTLASS_ROOT = "/opt/cutlass"
 
 
 class ModalEnvConfig(BaseSettings):
@@ -62,108 +59,6 @@ def make_image():
         .apt_install("numactl")
         .run_commands("pip install --break-system-packages uv")
         .run_commands(f"uv pip install --system {deps_str}")
-    )
-
-
-def make_cutlass_image() -> modal.Image:
-    """Build the pinned CUTLASS toolchain and ordinary-GEMM smoke binaries."""
-    return (
-        modal.Image.from_registry(PYTORCH_CUDA_IMAGE)
-        .apt_install("cmake", "git", "ninja-build")
-        .run_commands("pip install --break-system-packages pandas pydantic-settings")
-        .run_commands(
-            f"git clone https://github.com/NVIDIA/cutlass.git {CUTLASS_ROOT}",
-            f"cd {CUTLASS_ROOT} && git checkout --detach {CUTLASS_SHA}",
-            f'test "$(cd {CUTLASS_ROOT} && git rev-parse HEAD)" = "{CUTLASS_SHA}"',
-            f"cmake -S {CUTLASS_ROOT} -B {CUTLASS_ROOT}/build-h100 -G Ninja"
-            " -DCUTLASS_NVCC_ARCHS=90a"
-            " -DCUTLASS_ENABLE_TESTS=OFF"
-            " -DCUTLASS_ENABLE_EXAMPLES=ON",
-            f"cmake --build {CUTLASS_ROOT}/build-h100"
-            " --target 48_hopper_warp_specialized_gemm --parallel 2",
-            f"cmake -S {CUTLASS_ROOT} -B {CUTLASS_ROOT}/build-b200 -G Ninja"
-            " -DCUTLASS_NVCC_ARCHS=100a"
-            " -DCUTLASS_ENABLE_TESTS=OFF"
-            " -DCUTLASS_ENABLE_EXAMPLES=ON",
-            f"cmake --build {CUTLASS_ROOT}/build-b200"
-            " --target 71_blackwell_gemm_with_collective_builder --parallel 2",
-        )
-    )
-
-
-def add_cutlass_thread_local_max(image: modal.Image) -> modal.Image:
-    """Add the Gate 1b thread-local max-with-index binaries."""
-    csrc_root = _repo_root / "src/fused_mm_sampling/csrc"
-    return (
-        image.add_local_file(
-            str(csrc_root / "cutlass_max_with_index.cuh"),
-            remote_path="/opt/fmms/cutlass_max_with_index.cuh",
-            copy=True,
-        )
-        .add_local_file(
-            str(csrc_root / "cutlass_thread_local_max.cu"),
-            remote_path="/opt/fmms/cutlass_thread_local_max.cu",
-            copy=True,
-        )
-        .run_commands(
-            "nvcc -std=c++17 -O2 -arch=sm_90a -DFMMS_ARCH_SM90"
-            " -I/opt/fmms"
-            " /opt/fmms/cutlass_thread_local_max.cu"
-            " -o /opt/fmms/cutlass_thread_local_max_sm90",
-            "nvcc -std=c++17 -O2 -arch=sm_100a -DFMMS_ARCH_SM100"
-            " -I/opt/fmms"
-            " /opt/fmms/cutlass_thread_local_max.cu"
-            " -o /opt/fmms/cutlass_thread_local_max_sm100",
-        )
-    )
-
-
-def add_cutlass_warp_max(image: modal.Image) -> modal.Image:
-    """Add the Gate 1c warp-local max-with-index binaries."""
-    csrc_root = _repo_root / "src/fused_mm_sampling/csrc"
-    return (
-        image.add_local_file(
-            str(csrc_root / "cutlass_max_with_index.cuh"),
-            remote_path="/opt/fmms/cutlass_max_with_index.cuh",
-            copy=True,
-        )
-        .add_local_file(
-            str(csrc_root / "cutlass_warp_max.cu"),
-            remote_path="/opt/fmms/cutlass_warp_max.cu",
-            copy=True,
-        )
-        .run_commands(
-            "nvcc -std=c++17 -O2 -arch=sm_90a -DFMMS_ARCH_SM90"
-            " -I/opt/fmms /opt/fmms/cutlass_warp_max.cu"
-            " -o /opt/fmms/cutlass_warp_max_sm90",
-            "nvcc -std=c++17 -O2 -arch=sm_100a -DFMMS_ARCH_SM100"
-            " -I/opt/fmms /opt/fmms/cutlass_warp_max.cu"
-            " -o /opt/fmms/cutlass_warp_max_sm100",
-        )
-    )
-
-
-def add_cutlass_accumulator_layout(image: modal.Image) -> modal.Image:
-    """Add the Gate 1a accumulator-layout diagnostic binaries."""
-    csrc_root = _repo_root / "src/fused_mm_sampling/csrc"
-    return (
-        image.add_local_file(
-            str(csrc_root / "cutlass_accumulator_layout.cu"),
-            remote_path="/opt/fmms/cutlass_accumulator_layout.cu",
-            copy=True,
-        )
-        .run_commands(
-            f"nvcc -std=c++17 -O2 --expt-relaxed-constexpr"
-            " -arch=sm_90a -DFMMS_ARCH_SM90"
-            f" -I{CUTLASS_ROOT}/include -I{CUTLASS_ROOT}/tools/util/include"
-            " /opt/fmms/cutlass_accumulator_layout.cu"
-            " -o /opt/fmms/cutlass_accumulator_layout_sm90",
-            f"nvcc -std=c++17 -O2 --expt-relaxed-constexpr"
-            " -arch=sm_100a -DFMMS_ARCH_SM100"
-            f" -I{CUTLASS_ROOT}/include -I{CUTLASS_ROOT}/tools/util/include"
-            " /opt/fmms/cutlass_accumulator_layout.cu"
-            " -o /opt/fmms/cutlass_accumulator_layout_sm100",
-        )
     )
 
 

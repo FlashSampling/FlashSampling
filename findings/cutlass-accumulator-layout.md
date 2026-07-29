@@ -7,7 +7,7 @@ The diagnostic covered all 16,384 coordinates of one 128 by 128 CTA output tile 
 No coordinate was missing or had multiple owners.
 
 The diagnostic is implemented in
-`src/fused_mm_sampling/csrc/cutlass_accumulator_layout.cu`.
+`src/fused_mm_sampling/csrc/cutlass/accumulator_layout.cu`.
 Run it with `make modal-cutlass-accumulator-layout`.
 The runner writes the full log and the raw coordinate mappings to
 `benchmarking/modal-results/cutlass-layout/`.

@@ -6,8 +6,8 @@ Gate 1c of the CUTLASS FMMS plan passed on H100 and B200 on 2026-07-29.
 All 4,832 output-lane comparisons matched an independent CPU reference exactly.
 The expected and actual FP32 bit patterns and integer indices agreed in every row.
 
-The shuffle reduction is implemented in `src/fused_mm_sampling/csrc/cutlass_warp_max.cu`.
-It reuses the comparison primitive in `src/fused_mm_sampling/csrc/cutlass_max_with_index.cuh`, which is also used by the Gate 1b harness.
+The shuffle reduction is implemented in `src/fused_mm_sampling/csrc/cutlass/warp_max.cu`.
+It reuses the comparison primitive in `src/fused_mm_sampling/csrc/cutlass/max_with_index.cuh`, which is also used by the Gate 1b harness.
 Run the gate with `make modal-cutlass-warp-max`.
 The generated packet is under `benchmarking/modal-results/cutlass-warp-max/` and remains ignored by Git.
 

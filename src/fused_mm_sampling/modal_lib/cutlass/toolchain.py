@@ -5,12 +5,11 @@ import platform
 import subprocess
 from pathlib import Path
 
+from ..utils import PYTORCH_CUDA_IMAGE, make_app
 from .utils import (
     CUTLASS_ROOT,
     CUTLASS_SHA,
     CUTLASS_VERSION,
-    PYTORCH_CUDA_IMAGE,
-    make_app,
     make_cutlass_image,
 )
 

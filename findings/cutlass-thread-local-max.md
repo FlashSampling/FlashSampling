@@ -6,7 +6,7 @@ Gate 1b of the CUTLASS FMMS plan passed on H100 and B200 on 2026-07-29.
 All 9,728 comparisons matched an independent CPU reference exactly.
 The expected and actual FP32 bit patterns and integer indices agreed in every row.
 
-The primitive is implemented in `src/fused_mm_sampling/csrc/cutlass_thread_local_max.cu`.
+The primitive is implemented in `src/fused_mm_sampling/csrc/cutlass/thread_local_max.cu`.
 Run it with `make modal-cutlass-thread-local-max`.
 The runner writes `summary.json`, `cases.csv`, and the complete `log.txt` under `benchmarking/modal-results/cutlass-thread-local-max/`.
 

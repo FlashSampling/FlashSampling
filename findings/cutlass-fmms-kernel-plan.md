@@ -873,10 +873,11 @@ Use these rules:
    Make target, one artifact directory, and one finding.
    Do not retain alternate files with suffixes such as `new`, `fixed`, or
    `final`.
-2. Keep gate-only CUDA harnesses clearly named `cutlass_<gate-name>.cu` under
-   `src/fused_mm_sampling/csrc/`.
-   Keep their Modal entrypoints named `modal_cutlass_<gate-name>.py`, and write
-   all generated evidence only under the matching
+2. Keep gate-only CUDA harnesses under
+   `src/fused_mm_sampling/csrc/cutlass/`.
+   Keep their Modal entrypoints under
+   `src/fused_mm_sampling/modal_lib/cutlass/`, and write all generated evidence
+   only under the matching
    `benchmarking/modal-results/cutlass-<gate-name>/` directory.
 3. When a primitive becomes part of the next gate or the production kernel,
    move its reusable implementation into one shared header or production
