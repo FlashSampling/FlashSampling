@@ -29,6 +29,11 @@ modal-pytest-distributed:
 modal-versions:
 	modal run -m src.fused_mm_sampling.modal_lib.modal_versions
 
+modal-cutlass-toolchain-smoke:
+	mkdir -p benchmarking/modal-results/cutlass-toolchain
+	modal run -m src.fused_mm_sampling.modal_lib.modal_cutlass_toolchain 2>&1 | \
+		tee benchmarking/modal-results/cutlass-toolchain/smoke.txt
+
 update-deps:
 	uv lock --upgrade  # Re-resolve all deps to latest compatible versions
 	uv sync --all-extras  # Install exact versions from lockfile, including optional groups

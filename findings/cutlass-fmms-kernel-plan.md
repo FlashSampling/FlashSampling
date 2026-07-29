@@ -49,8 +49,9 @@ This design:
 The implementation is organized as stage gates.
 Each gate produces the smallest artifact that can disprove the current
 approach, has a numerical success threshold, and preserves a fallback.
-The critical path is toolchain, M-axis reduction, greedy FMMS performance,
-early B200 validation, stateless Philox, Gumbel-Max, and TP.
+The critical path is a reproducible toolchain baseline, M-axis reduction,
+greedy FMMS performance, early B200 validation, stateless Philox, Gumbel-Max,
+and TP.
 Top-k follows the working sampling kernel.
 DSMEM is outside the critical path and is attempted only if profiling shows
 candidate traffic is material.
@@ -788,7 +789,7 @@ Initial thresholds:
 
 | Gate | Required result | Failure response |
 |---|---|---|
-| Toolchain | Reproducible H100 and B200 builds | Fix the build before kernel work |
+| Toolchain baseline | Reproducible H100 and B200 builds | Fix the build before kernel work |
 | M reduction | Exact max-with-index across boundary shapes | Leave generic EVT and use a handwritten epilogue |
 | Greedy FMMS | No more than 5% slower than plain CUTLASS GEMM plus the unavoidable reduction work | Rework or abandon the epilogue design |
 | Gumbel-Max | Correct large-vocab distribution with no RNG-caused spill | Replace the RNG implementation or schedule |
@@ -799,17 +800,40 @@ Initial thresholds:
 The 5% and 3% values are starting policy, not facts.
 Change them only before seeing the experiment being judged.
 
-### Gate 0: freeze the toolchain
+### Gate 0: establish a reproducible toolchain baseline
 
-Pin exact CUTLASS, CCCL, CUDA, PyTorch, compiler, and architecture versions.
-Check the selected versions into the build metadata and log them in every
-benchmark.
+Use a versioned Modal image and pin the CUTLASS revision used by each
+benchmark series.
+Record the base image, CUTLASS revision, CUDA toolkit, CUDA runtime, PyTorch,
+host compiler, GPU, and architecture in every run.
+Dependencies may be upgraded whenever the implementation needs a newer fix or
+feature.
+Treat an upgrade as a new baseline, record the new versions, and rerun the
+ordinary-GEMM smoke checks before comparing kernel changes across it.
 
 Build minimal ordinary-output GEMMs for H100 and B200.
-Verify their outputs against PyTorch and preserve the build commands in CI.
+Verify their outputs against an independent reference and preserve the build
+commands in the Modal runner.
 Do not expose a sampling provider yet.
 
 **Exit:** both architectures build reproducibly and a small GEMM passes.
+
+**Current baseline (validated 2026-07-29):**
+
+- Modal base image: `pytorch/pytorch:2.11.0-cuda13.0-cudnn9-devel`.
+- CUTLASS: 4.2.1 at commit `f3fde58372d33e9a5650ba7b80fc48b3b49d40c8`.
+- CUDA toolkit: 13.0.88.
+- PyTorch: 2.11.0+cu130.
+- Host compiler: GCC 13.3.0.
+- Targets: SM90a on H100 and SM100a on B200.
+
+Run `make modal-cutlass-toolchain-smoke` after changing any component of this
+baseline.
+The runner builds CUTLASS examples 48 and 71, executes an M=512, N=64, K=256
+ordinary GEMM on each architecture, checks CUTLASS's independent device
+reference, and writes the complete log to
+`benchmarking/modal-results/cutlass-toolchain/smoke.txt`.
+Both architecture checks passed on 2026-07-29.
 
 ### Gate 1: standalone M-axis max-with-index
 
