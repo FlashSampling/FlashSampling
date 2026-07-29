@@ -276,14 +276,18 @@ def verify_sampling_distribution_tp() -> None:
         tp.rank0_print(f"✅ Passed: {provider} V={vocab_size} H={n_hidden_states}")
 
 
-def verify_greedy_tp() -> None:
-    """Verify greedy sampling for the initialized tensor-parallel world."""
+def verify_greedy_tp(
+    provider: str = "greedy",
+    vocab_sizes: tuple[int, ...] = (100, 256, 512),
+    hidden_state_counts: tuple[int, ...] = (1, 2),
+) -> None:
+    """Verify a greedy provider for the initialized tensor-parallel world."""
     tp = TPInfo.from_world()
-    for vocab_size, n_hidden_states in product([100, 256, 512], [1, 2]):
+    for vocab_size, n_hidden_states in product(vocab_sizes, hidden_state_counts):
         inputs = make_synthetic_inputs(
             vocab_size=vocab_size, n_hidden_states=n_hidden_states, tp=tp
         )
-        sampler = get_sampler("greedy", weights=inputs.weights)
+        sampler = get_sampler(provider, weights=inputs.weights)
         sampler.prepare()
         samples = sampler.sample(
             weights=inputs.weights,
@@ -294,7 +298,7 @@ def verify_greedy_tp() -> None:
         )
         expected = inputs.logits.argmax(dim=-1)
         torch.testing.assert_close(samples[:, 0], expected)
-        tp.rank0_print(f"✅ Passed: greedy V={vocab_size} H={n_hidden_states}")
+        tp.rank0_print(f"✅ Passed: {provider} V={vocab_size} H={n_hidden_states}")
 
 
 def shift_logits_negative(

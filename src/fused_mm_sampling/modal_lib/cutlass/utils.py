@@ -4,7 +4,7 @@ from pathlib import Path
 
 import modal
 
-from ..utils import PYTORCH_CUDA_IMAGE
+from ..utils import PYTORCH_CUDA_IMAGE, make_image
 
 _repo_root = Path(__file__).resolve().parents[4]
 
@@ -35,6 +35,20 @@ def make_cutlass_image() -> modal.Image:
             " -DCUTLASS_ENABLE_EXAMPLES=ON",
             f"cmake --build {CUTLASS_ROOT}/build-b200"
             " --target 71_blackwell_gemm_with_collective_builder --parallel 2",
+        )
+    )
+
+
+def make_cutlass_provider_image() -> modal.Image:
+    """Layer pinned CUTLASS sources onto the standard FMMS runtime image."""
+    return (
+        make_image()
+        .apt_install("git", "ninja-build")
+        .run_commands(
+            f"git clone https://github.com/NVIDIA/cutlass.git {CUTLASS_ROOT}",
+            f"cd {CUTLASS_ROOT} && git checkout --detach {CUTLASS_SHA}",
+            f'test "$(cd {CUTLASS_ROOT} && git rev-parse HEAD)" = "{CUTLASS_SHA}"',
+            "pip install --break-system-packages pytest",
         )
     )
 
@@ -215,6 +229,31 @@ def add_cutlass_stage2(image: modal.Image) -> modal.Image:
             " /opt/fmms/evt_candidates.cu"
             " -o /opt/fmms/cutlass_stage2_sm100",
         )
+    )
+
+
+def add_cutlass_greedy_provider(image: modal.Image) -> modal.Image:
+    """Add the package sources needed by the Gate 2a production provider."""
+    return (
+        image.add_local_dir(
+            str(_repo_root / "src"),
+            remote_path="/opt/fmms/repo/src",
+            copy=True,
+        )
+        .add_local_file(
+            str(_repo_root / "pyproject.toml"),
+            remote_path="/opt/fmms/repo/pyproject.toml",
+            copy=True,
+        )
+        .add_local_dir(
+            str(_repo_root / "tests"),
+            remote_path="/opt/fmms/repo/tests",
+            copy=True,
+        )
+        .run_commands(
+            "pip install --break-system-packages --no-deps -e /opt/fmms/repo"
+        )
+        .env({"CUTLASS_ROOT": CUTLASS_ROOT})
     )
 
 

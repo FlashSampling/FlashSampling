@@ -5,10 +5,14 @@ os.environ.setdefault("HELION_AUTOTUNE_EFFORT", "none")
 
 import pytest
 import torch
-
 from fused_mm_sampling.bench.speed_test import run_speed_test
 from fused_mm_sampling.bench.triton_benchmark_lib import Args
-from fused_mm_sampling.core import JLSampler, bsz_h, fused_mm_sample_triton, get_sampler
+from fused_mm_sampling.core import (
+    JLSampler,
+    bsz_h,
+    fused_mm_sample_triton,
+    get_sampler,
+)
 from fused_mm_sampling.testing import (
     assert_sampling_distribution,
     make_synthetic_inputs,
@@ -216,18 +220,24 @@ def test_fused_triton_return_logits(vocab_size: int, n_hidden_states: int):
 
 
 @pytest.mark.parametrize("n_hidden_states", [1, 2])
-@pytest.mark.parametrize("vocab_size", [100, 200, 256])
-def test_greedy_sampling(vocab_size, n_hidden_states):
-    """Verify that greedy_sampling=True returns the argmax token for each sequence."""
+@pytest.mark.parametrize("vocab_size", [100, 127, 128, 129, 200, 255, 256, 257, 512])
+@pytest.mark.parametrize(
+    "provider",
+    [
+        "fused-triton-greedy",
+        "fused-cutlass-greedy",
+    ],
+)
+def test_greedy_sampling(provider, vocab_size, n_hidden_states):
+    """Verify that each greedy provider returns the argmax token per sequence."""
     inputs = make_synthetic_inputs(vocab_size=vocab_size, n_hidden_states=n_hidden_states)
-
-    samples = fused_mm_sample_triton(
+    sampler = get_sampler(provider, weights=inputs.weights)
+    sampler.prepare()
+    samples = sampler.sample(
         weights=inputs.weights,
         hidden_states=inputs.hidden_states,
         num_samples=1,
         temperature=torch.empty((), device=device),
-        seed=0,
-        greedy_sampling=True,
     )
 
     ref_logits = inputs.hidden_states.float() @ inputs.weights.float().T  # [H, V]

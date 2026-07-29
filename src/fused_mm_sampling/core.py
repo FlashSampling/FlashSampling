@@ -763,6 +763,10 @@ def get_sampler(provider: str, weights: torch.Tensor) -> Sampler:
                     **{"seed": 0, "greedy_sampling": True, **kwargs}
                 )
             )
+        case S.fused_cutlass_greedy:
+            from .cutlass_impl import fused_mm_sample_cutlass_greedy
+
+            return SimpleSampler(fused_mm_sample_cutlass_greedy)
         case S.naive_pt:
             return SimpleSampler(sample)
         case S.naive_compiled:

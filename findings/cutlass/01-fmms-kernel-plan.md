@@ -1178,6 +1178,9 @@ validated in Gate 1h.
 Missing shapes, fallback to another provider, compilation graph breaks, or any
 output mismatch fails the gate.
 
+The checked-in runner is `make modal-cutlass GATE=greedy-provider`, and the
+passing result is documented in `findings/cutlass/12-greedy-provider.md`.
+
 #### Gate 2b: greedy performance feasibility decision
 
 Profile the exact provider approved in Gate 2a without changing its

@@ -610,6 +610,7 @@ void run_case(Case const& test_case) {
 
 }  // namespace fmms_evt_candidates
 
+#if !defined(FMMS_CUTLASS_LIBRARY)
 int main() {
   using fmms_evt_candidates::Case;
 #if defined(FMMS_GATE_STAGE2)
@@ -645,3 +646,4 @@ int main() {
   }
   return 0;
 }
+#endif
