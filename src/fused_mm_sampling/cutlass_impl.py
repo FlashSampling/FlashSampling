@@ -52,6 +52,18 @@ def cutlass_launch_plain_gemm(
     _get_module().launch_plain_gemm(weights, padded_hidden_states, output)
 
 
+def cutlass_launch_plain_gemm_variant(
+    variant: str,
+    weights: torch.Tensor,
+    padded_hidden_states: torch.Tensor,
+    output: torch.Tensor,
+) -> None:
+    """Launch one named ordinary-GEMM tuning variant."""
+    _get_module().launch_plain_gemm_variant(
+        variant, weights, padded_hidden_states, output
+    )
+
+
 def cutlass_launch_small_n_gemv(
     weights: torch.Tensor,
     hidden_states: torch.Tensor,

@@ -11,5 +11,8 @@ Is this step perhaps too ambitious? We are tackling difficult problems. We would
 
 Continuously reassess whether the plan has the right task granularity as implementation work reveals new information. Split steps that are too broad to execute or validate reliably, and combine steps whose separation adds overhead without isolating a meaningful risk or decision. Update the remaining plan when that assessment changes instead of treating its initial structure as fixed.
 
+## Document Next Steps
+We work step by step. After each step is done we assume that a new agent with no context whatsoever could pick up the next step and work on it. This means in practice that the previous agent needs to document where it left off, what it believes are the most sensible next steps, and where to continue the work without pre-solving the next step.
+
 ## Prevent Sprawl
 Working incrementally in steps means that a lot of intermediate code, runners, and artifacts will be created. This is good, but it can also lead to sprawl. The plan should mention how to keep the intermediate code and artifacts organized, and how to clean up after each step. This will help prevent confusion and make it easier to track progress.

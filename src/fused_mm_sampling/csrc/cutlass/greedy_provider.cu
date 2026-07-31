@@ -16,51 +16,70 @@ using namespace fmms_evt_candidates;
 using PlainElementC = void;
 using PlainElementD = cutlass::bfloat16_t;
 constexpr int PlainAlignmentD = 8;
-using PlainMainloopSchedule =
-    cutlass::gemm::collective::KernelScheduleAuto;
-using PlainEpilogueSchedule =
-    cutlass::epilogue::collective::EpilogueScheduleAuto;
-using PlainEpilogueTile =
-    cutlass::epilogue::collective::EpilogueTileAuto;
-using PlainTileShape = Shape<_128, _128, _64>;
-using PlainCollectiveEpilogue =
-    typename cutlass::epilogue::collective::CollectiveBuilder<
-        ArchTag,
-        cutlass::arch::OpClassTensorOp,
-        PlainTileShape,
-        ClusterShape,
-        PlainEpilogueTile,
-        ElementAccumulator,
-        ElementAccumulator,
-        PlainElementC,
-        LayoutC,
-        kAlignmentC,
-        PlainElementD,
-        LayoutD,
-        PlainAlignmentD,
-        PlainEpilogueSchedule>::CollectiveOp;
-using PlainCollectiveMainloop =
-    typename cutlass::gemm::collective::CollectiveBuilder<
-        ArchTag,
-        cutlass::arch::OpClassTensorOp,
-        ElementA,
-        LayoutA,
-        kAlignmentA,
-        ElementB,
-        LayoutB,
-        kAlignmentB,
-        ElementAccumulator,
-        PlainTileShape,
-        ClusterShape,
-        cutlass::gemm::collective::StageCountAutoCarveout<
-            static_cast<int>(sizeof(typename PlainCollectiveEpilogue::SharedStorage))>,
-        PlainMainloopSchedule>::CollectiveOp;
-using PlainGemmKernel = cutlass::gemm::kernel::GemmUniversal<
-    Shape<int, int, int, int>,
-    PlainCollectiveMainloop,
-    PlainCollectiveEpilogue>;
-using PlainGemm =
-    cutlass::gemm::device::GemmUniversalAdapter<PlainGemmKernel>;
+template <
+    class TileShape_,
+    class MainloopSchedule_ = cutlass::gemm::collective::KernelScheduleAuto,
+    class EpilogueSchedule_ =
+        cutlass::epilogue::collective::EpilogueScheduleAuto>
+struct PlainGemmVariant {
+  using MainloopSchedule = MainloopSchedule_;
+  using EpilogueSchedule = EpilogueSchedule_;
+  using EpilogueTile =
+      cutlass::epilogue::collective::EpilogueTileAuto;
+  using CollectiveEpilogue =
+      typename cutlass::epilogue::collective::CollectiveBuilder<
+          ArchTag,
+          cutlass::arch::OpClassTensorOp,
+          TileShape_,
+          ClusterShape,
+          EpilogueTile,
+          ElementAccumulator,
+          ElementAccumulator,
+          PlainElementC,
+          LayoutC,
+          kAlignmentC,
+          PlainElementD,
+          LayoutD,
+          PlainAlignmentD,
+          EpilogueSchedule>::CollectiveOp;
+  using CollectiveMainloop =
+      typename cutlass::gemm::collective::CollectiveBuilder<
+          ArchTag,
+          cutlass::arch::OpClassTensorOp,
+          ElementA,
+          LayoutA,
+          kAlignmentA,
+          ElementB,
+          LayoutB,
+          kAlignmentB,
+          ElementAccumulator,
+          TileShape_,
+          ClusterShape,
+          cutlass::gemm::collective::StageCountAutoCarveout<
+              static_cast<int>(
+                  sizeof(typename CollectiveEpilogue::SharedStorage))>,
+          MainloopSchedule>::CollectiveOp;
+  using Kernel = cutlass::gemm::kernel::GemmUniversal<
+      Shape<int, int, int, int>,
+      CollectiveMainloop,
+      CollectiveEpilogue>;
+  using Gemm = cutlass::gemm::device::GemmUniversalAdapter<Kernel>;
+};
+
+using PlainVariant64x128 =
+    PlainGemmVariant<Shape<_64, _128, _64>>;
+using PlainVariant128x64 =
+    PlainGemmVariant<Shape<_128, _64, _64>>;
+using PlainVariant128x128 =
+    PlainGemmVariant<Shape<_128, _128, _64>>;
+using PlainVariant64x128Native =
+    PlainGemmVariant<Shape<_64, _128, _64>, MainloopSchedule, EpilogueSchedule>;
+using PlainVariant128x64Native =
+    PlainGemmVariant<Shape<_128, _64, _64>, MainloopSchedule, EpilogueSchedule>;
+using PlainVariant128x128Native =
+    PlainGemmVariant<Shape<_128, _128, _64>, MainloopSchedule, EpilogueSchedule>;
+using PlainGemmKernel = typename PlainVariant128x128::Kernel;
+using PlainGemm = typename PlainVariant128x128::Gemm;
 
 template <int N>
 __global__ void small_n_gemv_kernel(
@@ -328,7 +347,8 @@ pybind11::tuple make_greedy_buffers(
       padded_hidden_states, candidates, output, gemm_n, rounded_n, m_tiles);
 }
 
-void launch_plain_gemm(
+template <class Variant>
+void launch_plain_gemm_variant_impl(
     torch::Tensor weights,
     torch::Tensor padded_hidden_states,
     torch::Tensor output) {
@@ -352,10 +372,12 @@ void launch_plain_gemm(
               "output shape must match the GEMM problem");
   auto byte_options = weights.options().dtype(torch::kUInt8);
 
-  using StrideA = typename PlainGemmKernel::StrideA;
-  using StrideB = typename PlainGemmKernel::StrideB;
-  using StrideC = typename PlainGemmKernel::StrideC;
-  using StrideD = typename PlainGemmKernel::StrideD;
+  using Kernel = typename Variant::Kernel;
+  using Gemm = typename Variant::Gemm;
+  using StrideA = typename Kernel::StrideA;
+  using StrideB = typename Kernel::StrideB;
+  using StrideC = typename Kernel::StrideC;
+  using StrideD = typename Kernel::StrideD;
   StrideA stride_a =
       cutlass::make_cute_packed_stride(StrideA{}, make_shape(m, k, 1));
   StrideB stride_b =
@@ -363,9 +385,9 @@ void launch_plain_gemm(
   StrideC stride_c{};
   StrideD stride_d{int64_t(gemm_n), _1{}, int64_t(m) * gemm_n};
   cutlass::KernelHardwareInfo hardware_info =
-      cutlass::KernelHardwareInfo::make_kernel_hardware_info<PlainGemmKernel>(
+      cutlass::KernelHardwareInfo::make_kernel_hardware_info<Kernel>(
           weights.get_device());
-  typename PlainGemm::Arguments arguments{
+  typename Gemm::Arguments arguments{
       cutlass::gemm::GemmUniversalMode::kGemm,
       {m, gemm_n, k, 1},
       {
@@ -383,9 +405,9 @@ void launch_plain_gemm(
       },
       hardware_info};
 
-  PlainGemm gemm;
+  Gemm gemm;
   cudaStream_t stream = at::cuda::getCurrentCUDAStream(weights.get_device());
-  size_t workspace_size = PlainGemm::get_workspace_size(arguments);
+  size_t workspace_size = Gemm::get_workspace_size(arguments);
   auto workspace = torch::empty({int64_t(workspace_size)}, byte_options);
   TORCH_CHECK(
       gemm.can_implement(arguments) == cutlass::Status::kSuccess,
@@ -397,6 +419,42 @@ void launch_plain_gemm(
   TORCH_CHECK(
       gemm.run(stream) == cutlass::Status::kSuccess,
       "CUTLASS plain GEMM launch failed");
+}
+
+void launch_plain_gemm(
+    torch::Tensor weights,
+    torch::Tensor padded_hidden_states,
+    torch::Tensor output) {
+  launch_plain_gemm_variant_impl<PlainVariant128x128>(
+      weights, padded_hidden_states, output);
+}
+
+void launch_plain_gemm_variant(
+    std::string const& variant,
+    torch::Tensor weights,
+    torch::Tensor padded_hidden_states,
+    torch::Tensor output) {
+  if (variant == "tile-64x128x64-auto") {
+    launch_plain_gemm_variant_impl<PlainVariant64x128>(
+        weights, padded_hidden_states, output);
+  } else if (variant == "tile-128x64x64-auto") {
+    launch_plain_gemm_variant_impl<PlainVariant128x64>(
+        weights, padded_hidden_states, output);
+  } else if (variant == "tile-128x128x64-auto") {
+    launch_plain_gemm_variant_impl<PlainVariant128x128>(
+        weights, padded_hidden_states, output);
+  } else if (variant == "tile-64x128x64-native") {
+    launch_plain_gemm_variant_impl<PlainVariant64x128Native>(
+        weights, padded_hidden_states, output);
+  } else if (variant == "tile-128x64x64-native") {
+    launch_plain_gemm_variant_impl<PlainVariant128x64Native>(
+        weights, padded_hidden_states, output);
+  } else if (variant == "tile-128x128x64-native") {
+    launch_plain_gemm_variant_impl<PlainVariant128x128Native>(
+        weights, padded_hidden_states, output);
+  } else {
+    TORCH_CHECK(false, "Unknown plain GEMM variant: ", variant);
+  }
 }
 
 pybind11::tuple make_plain_gemm_buffers(
@@ -493,6 +551,10 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
       "launch_plain_gemm",
       &fmms_cutlass_greedy::launch_plain_gemm,
       "Launch plain CUTLASS BF16 GEMM into preallocated output");
+  module.def(
+      "launch_plain_gemm_variant",
+      &fmms_cutlass_greedy::launch_plain_gemm_variant,
+      "Launch a named diagnostic CUTLASS BF16 GEMM variant");
   module.def(
       "small_n_gemv",
       &fmms_cutlass_greedy::small_n_gemv,

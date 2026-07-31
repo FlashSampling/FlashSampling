@@ -6,6 +6,12 @@ from pathlib import Path
 import pandas as pd
 
 from ..utils import make_app
+from .ordinary_gemm_common import (
+    HIDDEN_STATES,
+    MAXIMUM_RATIO,
+    MODEL_SHAPES,
+    benchmark,
+)
 from .utils import add_cutlass_greedy_provider, make_cutlass_provider_image
 
 app = make_app()
@@ -13,12 +19,7 @@ image = add_cutlass_greedy_provider(make_cutlass_provider_image())
 
 OUTPUT_DIR = Path("benchmarking/modal-results/cutlass/13-ordinary-gemm")
 ARCHITECTURES = ("sm90", "sm100")
-MODEL_SHAPES = ((151_936, 4_096), (128_256, 8_192))
-HIDDEN_STATES = (1, 2, 4, 8, 16, 32, 64, 128, 256)
 PROVIDERS = ("cutlass", "cublas")
-WARMUP_REPETITIONS = 25
-BENCHMARK_REPETITIONS = 100
-MAXIMUM_RATIO = 1.05
 
 
 @app.function(gpu="H100", image=image, timeout=60 * 60)
@@ -108,7 +109,7 @@ def _run(architecture: str) -> dict:
                 "cublas": cublas,
             }.items():
                 for repetition, latency_ms in enumerate(
-                    _benchmark(function)
+                    benchmark(function)
                 ):
                     rows.append(
                         {
@@ -124,32 +125,6 @@ def _run(architecture: str) -> dict:
                     )
         del weights
     return {"timings": rows, "correctness": correctness}
-
-
-def _benchmark(function) -> list[float]:
-    import torch
-
-    cache = torch.empty(
-        256 * 1024 * 1024 // 4, dtype=torch.int, device="cuda"
-    )
-    for _ in range(WARMUP_REPETITIONS):
-        function()
-    torch.cuda.synchronize()
-    starts = [
-        torch.cuda.Event(enable_timing=True)
-        for _ in range(BENCHMARK_REPETITIONS)
-    ]
-    ends = [
-        torch.cuda.Event(enable_timing=True)
-        for _ in range(BENCHMARK_REPETITIONS)
-    ]
-    for start, end in zip(starts, ends):
-        cache.zero_()
-        start.record()
-        function()
-        end.record()
-    torch.cuda.synchronize()
-    return [start.elapsed_time(end) for start, end in zip(starts, ends)]
 
 
 def _write_packet(results: list[dict]) -> None:

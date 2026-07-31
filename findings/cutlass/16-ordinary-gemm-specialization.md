@@ -62,6 +62,8 @@ Do not transplant a new schedule into the fused epilogue until the ordinary-GEMM
 
 ## Handoff
 
+This handoff is superseded by `findings/cutlass/17-ordinary-gemm-tuning.md`.
+
 The active implementation is in `src/fused_mm_sampling/csrc/cutlass/greedy_provider.cu`.
 
 `small_n_gemv_kernel<N>` is the diagnostic H=1 and H=2 specialization.
