@@ -1,0 +1,28 @@
+[
+  {
+    "m": 151936,
+    "n": 256,
+    "k": 4096,
+    "batch_count": 1,
+    "layout": "ttt",
+    "dtype_a": "bf16",
+    "dtype_b": "bf16",
+    "dtype_d": "bf16",
+    "dtype_acc": "f32",
+    "beta": 0.0,
+    "use_fast_acc": false
+  },
+  {
+    "m": 128256,
+    "n": 256,
+    "k": 8192,
+    "batch_count": 1,
+    "layout": "ttt",
+    "dtype_a": "bf16",
+    "dtype_b": "bf16",
+    "dtype_d": "bf16",
+    "dtype_acc": "f32",
+    "beta": 0.0,
+    "use_fast_acc": false
+  }
+]

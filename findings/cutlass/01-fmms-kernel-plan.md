@@ -1369,7 +1369,14 @@ This gate does not prove RNG correctness.
 
 #### Gate 2c: official plain-GEMM kernel discovery
 
-**Status:** planned for B200 only.
+**Status:** complete on 2026-08-01. Two independent confirmation runs each
+selected a CUTLASS dispatch within 5% of `torch.mm` in all 18 B200 cells
+(worst cell across both runs 1.049). The result, coverage audit, and
+dispatch families are documented in
+`findings/cutlass/19-gemm-heuristics.md`.
+The checked-in runner is `make modal-cutlass GATE=ordinary-gemm-tuning`
+with `PHASE=discover` and `PHASE=confirm RUN=<n>`; evidence is under
+`benchmarking/modal-results/cutlass/14-ordinary-gemm-tuning/gate-2c-*`.
 
 This gate replaces manual Cartesian tuning with NVIDIA's supported discovery
 workflow.

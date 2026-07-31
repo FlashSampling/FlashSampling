@@ -20,7 +20,8 @@ template <
     class TileShape_,
     class MainloopSchedule_ = cutlass::gemm::collective::KernelScheduleAuto,
     class EpilogueSchedule_ =
-        cutlass::epilogue::collective::EpilogueScheduleAuto>
+        cutlass::epilogue::collective::EpilogueScheduleAuto,
+    class ClusterShape_ = ClusterShape>
 struct PlainGemmVariant {
   using MainloopSchedule = MainloopSchedule_;
   using EpilogueSchedule = EpilogueSchedule_;
@@ -31,7 +32,7 @@ struct PlainGemmVariant {
           ArchTag,
           cutlass::arch::OpClassTensorOp,
           TileShape_,
-          ClusterShape,
+          ClusterShape_,
           EpilogueTile,
           ElementAccumulator,
           ElementAccumulator,
@@ -54,7 +55,7 @@ struct PlainGemmVariant {
           kAlignmentB,
           ElementAccumulator,
           TileShape_,
-          ClusterShape,
+          ClusterShape_,
           cutlass::gemm::collective::StageCountAutoCarveout<
               static_cast<int>(
                   sizeof(typename CollectiveEpilogue::SharedStorage))>,
@@ -80,6 +81,71 @@ using PlainVariant128x128Native =
     PlainGemmVariant<Shape<_128, _128, _64>, MainloopSchedule, EpilogueSchedule>;
 using PlainGemmKernel = typename PlainVariant128x128::Kernel;
 using PlainGemm = typename PlainVariant128x128::Gemm;
+
+#if defined(FMMS_ARCH_SM100)
+// Gate 2c heuristic winners transplanted from the cutlass_profiler search.
+// Every family uses the 2-SM Blackwell schedule; the raster order is a
+// runtime argument selected by the variant name suffix.
+using KernelSchedule2Sm = cutlass::gemm::KernelTmaWarpSpecialized2SmSm100;
+using EpilogueSchedule2Sm = cutlass::epilogue::TmaWarpSpecialized2Sm;
+using HeurVariant256x64x128C2 = PlainGemmVariant<
+    Shape<_256, _64, _128>, KernelSchedule2Sm, EpilogueSchedule2Sm,
+    Shape<_2, _1, _1>>;
+using HeurVariant128x64x128C2 = PlainGemmVariant<
+    Shape<_128, _64, _128>, KernelSchedule2Sm, EpilogueSchedule2Sm,
+    Shape<_2, _1, _1>>;
+using HeurVariant256x128x64C2 = PlainGemmVariant<
+    Shape<_256, _128, _64>, KernelSchedule2Sm, EpilogueSchedule2Sm,
+    Shape<_2, _1, _1>>;
+using HeurVariant256x64x64C4 = PlainGemmVariant<
+    Shape<_256, _64, _64>, KernelSchedule2Sm, EpilogueSchedule2Sm,
+    Shape<_4, _1, _1>>;
+using HeurVariant128x64x64C4 = PlainGemmVariant<
+    Shape<_128, _64, _64>, KernelSchedule2Sm, EpilogueSchedule2Sm,
+    Shape<_4, _1, _1>>;
+using HeurVariant256x64x128C4 = PlainGemmVariant<
+    Shape<_256, _64, _128>, KernelSchedule2Sm, EpilogueSchedule2Sm,
+    Shape<_4, _1, _1>>;
+using HeurVariant256x128x64C4 = PlainGemmVariant<
+    Shape<_256, _128, _64>, KernelSchedule2Sm, EpilogueSchedule2Sm,
+    Shape<_4, _1, _1>>;
+// N=256 top-32 expansion families and the explicit 1-SM cluster-(1,2,1)
+// control (the family nvidia-matmul-heuristics never emits but cuBLAS uses
+// at H=256: weight multicast across the two hidden-state tile CTAs).
+using HeurVariant256x128x128C2 = PlainGemmVariant<
+    Shape<_256, _128, _128>, KernelSchedule2Sm, EpilogueSchedule2Sm,
+    Shape<_2, _1, _1>>;
+using HeurVariant256x128x128C4 = PlainGemmVariant<
+    Shape<_256, _128, _128>, KernelSchedule2Sm, EpilogueSchedule2Sm,
+    Shape<_4, _1, _1>>;
+using HeurVariant128x128x64C4 = PlainGemmVariant<
+    Shape<_128, _128, _64>, KernelSchedule2Sm, EpilogueSchedule2Sm,
+    Shape<_4, _1, _1>>;
+using HeurVariant128x128x128C4 = PlainGemmVariant<
+    Shape<_128, _128, _128>, KernelSchedule2Sm, EpilogueSchedule2Sm,
+    Shape<_4, _1, _1>>;
+using HeurVariant256x192x64C2 = PlainGemmVariant<
+    Shape<_256, _192, _64>, KernelSchedule2Sm, EpilogueSchedule2Sm,
+    Shape<_2, _1, _1>>;
+using HeurVariant256x192x64C4 = PlainGemmVariant<
+    Shape<_256, _192, _64>, KernelSchedule2Sm, EpilogueSchedule2Sm,
+    Shape<_4, _1, _1>>;
+using HeurVariant128x128x64C1x2 = PlainGemmVariant<
+    Shape<_128, _128, _64>, cutlass::gemm::KernelTmaWarpSpecialized1SmSm100,
+    cutlass::epilogue::TmaWarpSpecialized1Sm, Shape<_1, _2, _1>>;
+// Full-H CTA tiles for the two H=256 cells that the audited heuristic
+// search leaves outside the 1.05 threshold. Neither nvidia-matmul-heuristics
+// nor the manual controls cover N-tile=256 families.
+using HeurVariant128x256x64C1x1 = PlainGemmVariant<
+    Shape<_128, _256, _64>, cutlass::gemm::KernelTmaWarpSpecialized1SmSm100,
+    cutlass::epilogue::TmaWarpSpecialized1Sm, Shape<_1, _1, _1>>;
+using HeurVariant128x256x64C2x1 = PlainGemmVariant<
+    Shape<_128, _256, _64>, cutlass::gemm::KernelTmaWarpSpecialized1SmSm100,
+    cutlass::epilogue::TmaWarpSpecialized1Sm, Shape<_2, _1, _1>>;
+using HeurVariant256x256x64C2x1 = PlainGemmVariant<
+    Shape<_256, _256, _64>, KernelSchedule2Sm, EpilogueSchedule2Sm,
+    Shape<_2, _1, _1>>;
+#endif
 
 template <int N>
 __global__ void small_n_gemv_kernel(
@@ -351,7 +417,9 @@ template <class Variant>
 void launch_plain_gemm_variant_impl(
     torch::Tensor weights,
     torch::Tensor padded_hidden_states,
-    torch::Tensor output) {
+    torch::Tensor output,
+    cutlass::gemm::kernel::detail::RasterOrderOptions raster_order =
+        cutlass::gemm::kernel::detail::RasterOrderOptions::Heuristic) {
   TORCH_CHECK(weights.is_cuda() && padded_hidden_states.is_cuda() && output.is_cuda(),
               "inputs and output must be CUDA tensors");
   TORCH_CHECK(weights.scalar_type() == torch::kBFloat16, "weights must be bfloat16");
@@ -409,6 +477,11 @@ void launch_plain_gemm_variant_impl(
   cudaStream_t stream = at::cuda::getCurrentCUDAStream(weights.get_device());
   size_t workspace_size = Gemm::get_workspace_size(arguments);
   auto workspace = torch::empty({int64_t(workspace_size)}, byte_options);
+  if (raster_order !=
+      cutlass::gemm::kernel::detail::RasterOrderOptions::Heuristic) {
+    arguments.scheduler.raster_order = raster_order;
+    arguments.scheduler.max_swizzle_size = 1;
+  }
   TORCH_CHECK(
       gemm.can_implement(arguments) == cutlass::Status::kSuccess,
       "CUTLASS cannot implement the plain GEMM shape");
@@ -434,6 +507,11 @@ void launch_plain_gemm_variant(
     torch::Tensor weights,
     torch::Tensor padded_hidden_states,
     torch::Tensor output) {
+  using RasterOrderOptions = cutlass::gemm::kernel::detail::RasterOrderOptions;
+  const bool along_n = variant.size() >= 3 &&
+                       variant.compare(variant.size() - 3, 3, "-rn") == 0;
+  const RasterOrderOptions raster =
+      along_n ? RasterOrderOptions::AlongN : RasterOrderOptions::AlongM;
   if (variant == "tile-64x128x64-auto") {
     launch_plain_gemm_variant_impl<PlainVariant64x128>(
         weights, padded_hidden_states, output);
@@ -452,6 +530,76 @@ void launch_plain_gemm_variant(
   } else if (variant == "tile-128x128x64-native") {
     launch_plain_gemm_variant_impl<PlainVariant128x128Native>(
         weights, padded_hidden_states, output);
+#if defined(FMMS_ARCH_SM100)
+  } else if (variant == "heur-256x64x128-c2x1x1" ||
+             variant == "heur-256x64x128-c2x1x1-rn") {
+    launch_plain_gemm_variant_impl<HeurVariant256x64x128C2>(
+        weights, padded_hidden_states, output, raster);
+  } else if (variant == "heur-128x64x128-c2x1x1" ||
+             variant == "heur-128x64x128-c2x1x1-rn") {
+    launch_plain_gemm_variant_impl<HeurVariant128x64x128C2>(
+        weights, padded_hidden_states, output, raster);
+  } else if (variant == "heur-256x128x64-c2x1x1" ||
+             variant == "heur-256x128x64-c2x1x1-rn") {
+    launch_plain_gemm_variant_impl<HeurVariant256x128x64C2>(
+        weights, padded_hidden_states, output, raster);
+  } else if (variant == "heur-256x64x64-c4x1x1" ||
+             variant == "heur-256x64x64-c4x1x1-rn") {
+    launch_plain_gemm_variant_impl<HeurVariant256x64x64C4>(
+        weights, padded_hidden_states, output, raster);
+  } else if (variant == "heur-128x64x64-c4x1x1" ||
+             variant == "heur-128x64x64-c4x1x1-rn") {
+    launch_plain_gemm_variant_impl<HeurVariant128x64x64C4>(
+        weights, padded_hidden_states, output, raster);
+  } else if (variant == "heur-256x64x128-c4x1x1" ||
+             variant == "heur-256x64x128-c4x1x1-rn") {
+    launch_plain_gemm_variant_impl<HeurVariant256x64x128C4>(
+        weights, padded_hidden_states, output, raster);
+  } else if (variant == "heur-256x128x64-c4x1x1" ||
+             variant == "heur-256x128x64-c4x1x1-rn") {
+    launch_plain_gemm_variant_impl<HeurVariant256x128x64C4>(
+        weights, padded_hidden_states, output, raster);
+  } else if (variant == "heur-256x128x128-c2x1x1" ||
+             variant == "heur-256x128x128-c2x1x1-rn") {
+    launch_plain_gemm_variant_impl<HeurVariant256x128x128C2>(
+        weights, padded_hidden_states, output, raster);
+  } else if (variant == "heur-256x128x128-c4x1x1" ||
+             variant == "heur-256x128x128-c4x1x1-rn") {
+    launch_plain_gemm_variant_impl<HeurVariant256x128x128C4>(
+        weights, padded_hidden_states, output, raster);
+  } else if (variant == "heur-128x128x64-c4x1x1" ||
+             variant == "heur-128x128x64-c4x1x1-rn") {
+    launch_plain_gemm_variant_impl<HeurVariant128x128x64C4>(
+        weights, padded_hidden_states, output, raster);
+  } else if (variant == "heur-128x128x128-c4x1x1" ||
+             variant == "heur-128x128x128-c4x1x1-rn") {
+    launch_plain_gemm_variant_impl<HeurVariant128x128x128C4>(
+        weights, padded_hidden_states, output, raster);
+  } else if (variant == "heur-256x192x64-c2x1x1" ||
+             variant == "heur-256x192x64-c2x1x1-rn") {
+    launch_plain_gemm_variant_impl<HeurVariant256x192x64C2>(
+        weights, padded_hidden_states, output, raster);
+  } else if (variant == "heur-256x192x64-c4x1x1" ||
+             variant == "heur-256x192x64-c4x1x1-rn") {
+    launch_plain_gemm_variant_impl<HeurVariant256x192x64C4>(
+        weights, padded_hidden_states, output, raster);
+  } else if (variant == "heur-128x128x64-1sm-c1x2x1" ||
+             variant == "heur-128x128x64-1sm-c1x2x1-rn") {
+    launch_plain_gemm_variant_impl<HeurVariant128x128x64C1x2>(
+        weights, padded_hidden_states, output, raster);
+  } else if (variant == "heur-128x256x64-1sm" ||
+             variant == "heur-128x256x64-1sm-rn") {
+    launch_plain_gemm_variant_impl<HeurVariant128x256x64C1x1>(
+        weights, padded_hidden_states, output, raster);
+  } else if (variant == "heur-128x256x64-1sm-c2x1x1" ||
+             variant == "heur-128x256x64-1sm-c2x1x1-rn") {
+    launch_plain_gemm_variant_impl<HeurVariant128x256x64C2x1>(
+        weights, padded_hidden_states, output, raster);
+  } else if (variant == "heur-256x256x64-c2x1x1" ||
+             variant == "heur-256x256x64-c2x1x1-rn") {
+    launch_plain_gemm_variant_impl<HeurVariant256x256x64C2x1>(
+        weights, padded_hidden_states, output, raster);
+#endif
   } else {
     TORCH_CHECK(false, "Unknown plain GEMM variant: ", variant);
   }

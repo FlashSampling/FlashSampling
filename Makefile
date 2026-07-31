@@ -30,6 +30,9 @@ modal-versions:
 	modal run -m src.fused_mm_sampling.modal_lib.modal_versions
 
 CUTLASS_GATES := toolchain accumulator-layout thread-local-max warp-max cta-max cta-multi-column-max cta-boundary-max evt-candidates stage2 greedy-provider greedy-performance greedy-profile greedy-ncu ordinary-gemm ordinary-gemm-tuning
+# PHASE and RUN select the Gate 2c sub-run of the ordinary-gemm-tuning gate.
+PHASE := discover
+RUN := 1
 CUTLASS_MODULE_toolchain := toolchain
 CUTLASS_MODULE_accumulator-layout := accumulator_layout
 CUTLASS_MODULE_thread-local-max := thread_local_max
@@ -61,6 +64,7 @@ CUTLASS_RESULT_greedy-ncu := 12-greedy-ncu
 CUTLASS_RESULT_ordinary-gemm := 13-ordinary-gemm
 CUTLASS_RESULT_ordinary-gemm-tuning := 14-ordinary-gemm-tuning
 CUTLASS_LOG_toolchain := smoke.txt
+CUTLASS_LOG_ordinary-gemm-tuning := gate-2c-$(PHASE)-run$(RUN)-log.txt
 
 modal-cutlass:
 	@test -n "$(GATE)" || \
@@ -69,6 +73,7 @@ modal-cutlass:
 	@test -n "$(CUTLASS_MODULE_$(GATE))" || \
 		(echo "Unknown CUTLASS gate '$(GATE)'. Choose one of: $(CUTLASS_GATES)"; exit 1)
 	mkdir -p benchmarking/modal-results/cutlass/$(CUTLASS_RESULT_$(GATE))
+	PHASE=$(PHASE) RUN=$(RUN) \
 	modal run -m src.fused_mm_sampling.modal_lib.cutlass.$(CUTLASS_MODULE_$(GATE)) 2>&1 | \
 		tee benchmarking/modal-results/cutlass/$(CUTLASS_RESULT_$(GATE))/$(or $(CUTLASS_LOG_$(GATE)),log.txt)
 

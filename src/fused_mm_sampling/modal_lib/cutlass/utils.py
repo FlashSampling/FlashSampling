@@ -11,6 +11,88 @@ _repo_root = Path(__file__).resolve().parents[4]
 CUTLASS_VERSION = "4.6.1"
 CUTLASS_SHA = "e05f953a5b3d38adc240df2ff928e0421c2abba3"
 CUTLASS_ROOT = "/opt/cutlass"
+NVMMH_VERSION = "0.1.0.27"
+HEURISTICS_BUILD_DIR = f"{CUTLASS_ROOT}/build-heuristics-b200"
+HEURISTICS_TESTLIST = "/opt/fmms/heuristics-testlist.csv"
+HEURISTICS_BUILD_DIR_N256 = f"{CUTLASS_ROOT}/build-heuristics-b200-n256"
+HEURISTICS_TESTLIST_N256 = "/opt/fmms/heuristics-testlist-n256.csv"
+
+
+def make_cutlass_heuristics_image() -> modal.Image:
+    """Build the Gate 2c heuristic kernel-discovery toolchain.
+
+    Generates B200 kernel candidates with nvidia-matmul-heuristics at image
+    build time (the builders have no GPU, so the heuristics GPU is pinned to
+    B200) and compiles cutlass_profiler with the emitted kernel set.
+    """
+    problems_json = (
+        _repo_root
+        / "src/fused_mm_sampling/modal_lib/cutlass/gemm_problems_b200.json"
+    )
+    problems_n256_json = (
+        _repo_root
+        / "src/fused_mm_sampling/modal_lib/cutlass/gemm_problems_b200_n256.json"
+    )
+    return (
+        modal.Image.from_registry(PYTORCH_CUDA_IMAGE)
+        .apt_install("cmake", "git", "ninja-build")
+        .run_commands(
+            "pip install --break-system-packages pandas"
+            f" nvidia-matmul-heuristics=={NVMMH_VERSION}",
+            "pip show nvidia-matmul-heuristics | grep -E '^(Name|Version)'",
+        )
+        .run_commands(
+            f"git clone https://github.com/NVIDIA/cutlass.git {CUTLASS_ROOT}",
+            f"cd {CUTLASS_ROOT} && git checkout --detach {CUTLASS_SHA}",
+            f'test "$(cd {CUTLASS_ROOT} && git rev-parse HEAD)" = "{CUTLASS_SHA}"',
+        )
+        .add_local_file(
+            str(problems_json),
+            remote_path="/opt/fmms/gemm_problems_b200.json",
+            copy=True,
+        )
+        .run_commands(
+            f"cmake -S {CUTLASS_ROOT} -B {HEURISTICS_BUILD_DIR} -G Ninja"
+            " -DCUTLASS_NVCC_ARCHS=100a"
+            " -DCUTLASS_ENABLE_TESTS=OFF"
+            " -DCUTLASS_ENABLE_EXAMPLES=OFF"
+            " -DCUTLASS_LIBRARY_HEURISTICS_PROBLEMS_FILE="
+            "/opt/fmms/gemm_problems_b200.json"
+            " -DCUTLASS_LIBRARY_HEURISTICS_CONFIGS_PER_PROBLEM=16"
+            f" -DCUTLASS_LIBRARY_HEURISTICS_TESTLIST_FILE={HEURISTICS_TESTLIST}"
+            " -DCUTLASS_LIBRARY_HEURISTICS_GPU=B200",
+            f"cmake --build {HEURISTICS_BUILD_DIR}"
+            " --target cutlass_profiler --parallel 8",
+            f"test -x {HEURISTICS_BUILD_DIR}/tools/profiler/cutlass_profiler",
+            f"test -s {HEURISTICS_TESTLIST}",
+        )
+        # Gate 2c stop-rule expansion: the two N=256 problems that failed the
+        # top-16 search get the top-32 heuristic population.
+        .add_local_file(
+            str(problems_n256_json),
+            remote_path="/opt/fmms/gemm_problems_b200_n256.json",
+            copy=True,
+        )
+        .run_commands(
+            f"cmake -S {CUTLASS_ROOT} -B {HEURISTICS_BUILD_DIR_N256} -G Ninja"
+            " -DCUTLASS_NVCC_ARCHS=100a"
+            " -DCUTLASS_ENABLE_TESTS=OFF"
+            " -DCUTLASS_ENABLE_EXAMPLES=OFF"
+            " -DCUTLASS_LIBRARY_HEURISTICS_PROBLEMS_FILE="
+            "/opt/fmms/gemm_problems_b200_n256.json"
+            " -DCUTLASS_LIBRARY_HEURISTICS_CONFIGS_PER_PROBLEM=32"
+            " -DCUTLASS_LIBRARY_HEURISTICS_TESTLIST_FILE="
+            f"{HEURISTICS_TESTLIST_N256}"
+            " -DCUTLASS_LIBRARY_HEURISTICS_GPU=B200",
+            f"cmake --build {HEURISTICS_BUILD_DIR_N256}"
+            " --target cutlass_profiler --parallel 8",
+            f"test -x {HEURISTICS_BUILD_DIR_N256}/tools/profiler/cutlass_profiler",
+            f"test -s {HEURISTICS_TESTLIST_N256}",
+        )
+        # Runtime-only deps for the Modal submission module. Kept in a
+        # trailing layer so fixes here never invalidate the profiler build.
+        .run_commands("pip install --break-system-packages pydantic-settings")
+    )
 
 
 def make_cutlass_image() -> modal.Image:
