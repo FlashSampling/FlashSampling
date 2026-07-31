@@ -1,5 +1,18 @@
 # Ordinary GEMM retained-candidate tuning
 
+The explicit-stage follow-up reached the bounded manual-search stop condition.
+
+See `findings/cutlass/18-ordinary-gemm-stage-no-go.md` for that family's result.
+
+The active handoff is now Gate 2c in
+`findings/cutlass/01-fmms-kernel-plan.md`.
+It replaces the manual stage-and-cluster proposal below with NVIDIA Matmul
+Heuristics, `cutlass_profiler`, an explicit supported-family coverage audit,
+and `torch.mm` as the sole strong baseline.
+The active search targets B200 only.
+Hopper kernel discovery is deferred until the complete B200 implementation
+passes the pointwise superiority gate.
+
 The ordinary-GEMM prerequisite now has a persistent multi-variant tuning runner.
 
 Run it with:
@@ -28,13 +41,13 @@ The runner retains every raw repetition and candidate result instead of overwrit
 
 ## Result
 
-All 216 candidate outputs matched cuBLAS bit-for-bit and were finite.
+All 216 candidate outputs matched `torch.mm` bit-for-bit and were finite.
 
 Selecting the fastest measured variant per architecture, model shape, and H passed 31 of 36 configurations.
 
 The five remaining failures were:
 
-| Architecture | V | D | H | Selected variant | CUTLASS/cuBLAS |
+| Architecture | V | D | H | Selected variant | CUTLASS/torch.mm |
 |---|---:|---:|---:|---|---:|
 | B200 | 128,256 | 8,192 | 256 | 128x128x64 native | 1.18 |
 | B200 | 151,936 | 4,096 | 128 | 128x128x64 auto | 1.06 |
@@ -48,11 +61,16 @@ Neither schedule family closes the high-H throughput gap.
 
 The ordinary-GEMM prerequisite therefore remains tuning-required.
 
-The worst ratio changed across the two tuning runs because the cuBLAS medians also changed.
+The worst ratio changed across the two tuning runs because the `torch.mm` medians also changed.
 
 The packet records p10, p90, standard deviation, and all raw repetitions so that schedule decisions do not rely on the worst ratio alone.
 
-## Next step
+## Superseded manual follow-up
+
+The instructions below record the bounded manual search that produced Gate 18.
+Do not use them as the active implementation plan.
+The active Gate 2c workflow is in
+`findings/cutlass/01-fmms-kernel-plan.md`.
 
 Keep the six current variants as controls.
 
@@ -60,11 +78,11 @@ Add explicit stage-count candidates for the 128x64x64 and 128x128x64 tiles, then
 
 Preserve the full H sweep in the runner so a high-H improvement cannot silently regress smaller H values.
 
-Do not add runtime production dispatch until one selected implementation passes `CUTLASS/cuBLAS <= 1.05` everywhere.
+Do not add runtime production dispatch until one selected implementation passes `CUTLASS/torch.mm <= 1.05` everywhere.
 
 Do not move any schedule into the fused epilogue until the ordinary prerequisite passes and Gate 1a re-derives any changed epilogue visitation.
 
-## Handoff for the next agent
+### Historical handoff for the manual search
 
 Continue the ordinary-GEMM prerequisite before doing more work on the fused epilogue.
 
@@ -72,7 +90,7 @@ The current bounded question is whether CUTLASS stage-count or cluster specializ
 
 Use the existing retained-candidate runner, keep the current variants as controls, and preserve correctness and raw timing evidence.
 
-The important decision boundary is unchanged: the selected ordinary CUTLASS path must remain within 5% of cuBLAS in all 36 configurations before its schedule is moved into the fused kernel.
+The historical decision boundary required the selected ordinary CUTLASS path to remain within 5% of `torch.mm` in all 36 configurations before its schedule moved into the fused kernel.
 
 If a reasonable bounded search cannot meet that threshold, record a no-go decision before adding Philox, tensor parallelism, or top-k.
 
@@ -110,7 +128,7 @@ The 64x128x64 tile did not win any unresolved H=128 or H=256 case.
 
 Keep the existing six variants as controls in every final sweep.
 
-Use BF16 inputs and outputs, preallocated buffers, identical padding for CUTLASS and cuBLAS, cold-L2 timing, and CUDA events.
+Use BF16 inputs and outputs, preallocated buffers, identical padding for CUTLASS and `torch.mm`, cold-L2 timing, and CUDA events.
 
 Continue to require exact BF16 equality and finite outputs for every compiled candidate.
 
@@ -164,9 +182,9 @@ For the first screen, benchmark only both primary model shapes at H=128 and H=25
 
 Use 25 warmups and 30 measured repetitions for this screen.
 
-Retain cuBLAS and the six existing variants as controls.
+Retain `torch.mm` and the six existing variants as controls.
 
-Promote a stage candidate only if it either passes `CUTLASS/cuBLAS <= 1.05` or improves the matching best control by at least 3% in at least one unresolved configuration without regressing another screened configuration by more than 3%.
+Promote a stage candidate only if it either passes `CUTLASS/torch.mm <= 1.05` or improves the matching best control by at least 3% in at least one unresolved configuration without regressing another screened configuration by more than 3%.
 
 Discard all other stage candidates before adding cluster variants.
 
@@ -215,9 +233,9 @@ The final packet must contain:
 - Review instructions in `VERIFY.md`.
 - Complete stdout and stderr in `log.txt`.
 
-Do not select a candidate from one run and compare it with a cuBLAS median from another run.
+Do not select a candidate from one run and compare it with a `torch.mm` median from another run.
 
-The ordinary prerequisite passes only when the selected candidate satisfies `CUTLASS/cuBLAS <= 1.05` in all 36 configurations in the same final packet.
+The ordinary prerequisite passes only when the selected candidate satisfies `CUTLASS/torch.mm <= 1.05` in all 36 configurations in the same final packet.
 
 If the final sweep fails, repeat it once before attributing a regression to noise.
 
@@ -236,7 +254,7 @@ Only after the ordinary prerequisite passes:
 3. Move only the approved schedule into a separate fused-kernel experiment.
 4. Rerun Gate 1a because a changed tile or epilogue schedule may change accumulator ownership.
 5. Rerun every correctness gate that depends on Gate 1a through Gate 2a.
-6. Rerun Gate 2b against both cuBLAS plus argmax and the approved ordinary CUTLASS baseline.
+6. Rerun Gate 2b against both `torch.mm` plus argmax and the approved ordinary CUTLASS baseline.
 7. Begin Philox Gate 3 only if Gate 2b passes its existing threshold.
 
 ### Stop condition

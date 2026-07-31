@@ -14,6 +14,18 @@ They keep the research context and completed gates in a stable reading order.
 9. `08-cta-multi-column-max.md`
 10. `09-cta-boundary-max.md`
 11. `10-evt-candidates.md`
+12. `11-stage2.md`
+13. `12-greedy-provider.md`
+14. `13-void-d-epilogue.md`
+15. `14-greedy-performance.md`
+16. `15-greedy-profile-stage2.md`
+17. `16-ordinary-gemm-specialization.md`
+18. `17-ordinary-gemm-tuning.md`
+19. `18-ordinary-gemm-stage-no-go.md`
+
+The active roadmap in `01-fmms-kernel-plan.md` is B200-first.
+Gates 2c through 7 complete and validate the Blackwell implementation before
+Gate 8 begins the Hopper port.
 
 Run a gate with `make modal-cutlass GATE=<gate>`.
 The top-level `Makefile` contains the available gate names and maps each one to a numbered directory under `benchmarking/modal-results/cutlass/`.

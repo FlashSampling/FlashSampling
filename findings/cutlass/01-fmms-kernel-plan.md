@@ -10,6 +10,70 @@ CCCL/CUB, Blackwell sm_100, and the closest reference implementations
 `findings/cutlass/02-topk-softmax-epilogue.md` and the four research reports
 that produced it.
 
+## 2026-07-31 revision: reopen GEMM kernel discovery
+
+The deterministic reduction and production integration work through Gate 2a
+is still valid.
+The Gate 18 performance stop applies only to the small manually selected
+family that was measured: six tile/schedule controls plus explicit stage
+counts, all with a `1x1x1` cluster and no explicit Blackwell 2-SM coverage
+audit.
+It does not establish that CUTLASS cannot match `torch.mm`.
+
+The earlier plan treated stage-count improvement as a prerequisite for cluster
+tuning and rejected several scheduler families from qualitative reasoning.
+That was too restrictive.
+NVIDIA's supported workflow treats CTA and instruction shapes, persistent
+schedules, 1-SM versus 2-SM MMA, clusters, split-K, raster order, and swizzle
+as a joint kernel-selection problem.
+The revised plan therefore reopens Gate 2 with an official
+`nvidia-matmul-heuristics` plus `cutlass_profiler` search before any more FMMS
+features are implemented.
+
+This revision makes two distinctions explicit:
+
+1. `torch.mm` is the sole strong matmul baseline.
+   It exercises the production PyTorch path and dispatches to NVIDIA's cuBLAS
+   backend, which is the comparison that matters for this project.
+2. A plain CUTLASS winner is only a schedule donor.
+   The custom candidate epilogue must still revalidate correctness and measure
+   its own performance after the schedule is transplanted.
+
+## 2026-07-31 priority: complete Blackwell before Hopper
+
+The active implementation target is B200 (`sm_100a`) only.
+The goal is a complete B200 CUTLASS provider, not a cross-architecture partial
+implementation.
+
+The B200 milestone includes:
+
+- Plain-GEMM kernel discovery and production dispatch.
+- Greedy TP1 FMMS.
+- Stateless Philox and unrestricted Gumbel-Max sampling.
+- TP2, TP4, and TP8 correctness and performance.
+- Fixed-K top-k and the supported top-p-on-survivors sampling path.
+- Memory-traffic validation and end-to-end vLLM benchmarks.
+- Every small and large benchmark dimension and every declared hidden-state,
+  tensor-parallel, and sampling configuration supported by Triton
+  FlashSampling on B200.
+
+Hopper implementation work is deferred until the B200 completion gate passes.
+Existing H100 correctness and toolchain evidence remains valid historical
+coverage, but it does not impose work on the B200 critical path.
+
+The B200 completion gate is intentionally strict.
+The CUTLASS implementation must beat the corresponding Triton FlashSampling
+provider pointwise in every declared B200 performance cell.
+Do not use an average, geometric mean, pointwise minimum across runs, or a win
+in one regime to offset a loss in another.
+Correctness, supported features, output contracts, and memory safety must also
+match before the Hopper port begins.
+
+After B200 passes, Gate 8 ports the complete design to H100/H200.
+The Hopper phase repeats kernel discovery and accumulator-layout derivation for
+sm_90 rather than forcing Blackwell schedule or ownership assumptions onto
+Hopper.
+
 ## TL;DR
 
 Build a CUTLASS C++ GEMM with a **custom Epilogue Visitor Tree (EVT)** that
@@ -49,9 +113,9 @@ This design:
 The implementation is organized as stage gates.
 Each gate produces the smallest artifact that can disprove the current
 approach, has a numerical success threshold, and preserves a fallback.
-The critical path is a reproducible toolchain baseline, M-axis reduction,
-greedy FMMS performance, early B200 validation, stateless Philox, Gumbel-Max,
-and TP.
+The critical path is the completed cross-architecture toolchain and reduction
+foundation, followed by B200-only plain-GEMM kernel discovery, greedy FMMS,
+stateless Philox, Gumbel-Max, TP, top-k, and end-to-end validation.
 Top-k follows the working sampling kernel.
 DSMEM is outside the critical path and is attempted only if profiling shows
 candidate traffic is material.
@@ -291,8 +355,8 @@ visitor.
 
 | Arch | Chips | CUTLASS support | FMMS path |
 |---|---|---|---|
-| sm_90 | H100, H200 | CUTLASS 3.x WGMMA + TMA + clusters | Primary target. EVT visitors ship natively. |
-| sm_100 | B100, B200, B300 | CUTLASS 4.x tcgen05.mma + TMEM + clusters (max 8) | Primary target. EVT callbacks alias to sm90. |
+| sm_90 | H100, H200 | CUTLASS 3.x WGMMA + TMA + clusters | Deferred Gate 8 target after the complete B200 gate passes. Existing correctness evidence is retained. |
+| sm_100 | B100, B200, B300 | CUTLASS 4.x tcgen05.mma + TMEM + clusters (max 8) | Active target. Develop and approve on B200 first. |
 | sm_103 | B300 Ultra | Ultra FP4 paths | Not relevant for BF16 FMMS. |
 | sm_120 | RTX 5080 (GeForce) | No TMA multicast, no clusters | Use `ClusterShape<1,1,1>`; same kernel runs. |
 | sm_80 (A100) | A100 | CUTLASS 3.x SIMT path | Out of scope for the CUTLASS port. The Triton kernel remains the A100 fallback. |
@@ -300,10 +364,18 @@ visitor.
 **Clarification: cluster MMA vs DSMEM candidate reduction.** These are
 distinct mechanisms:
 
-- **Cluster MMA (TMA multicast, `tcgen05.mma cta_group::2`)**: rejected.
-  Cannot reduce the weight matrix HBM traffic (the bottleneck). Empirically
-  confirmed by `findings/cutlass/00-2cta-mma-operand-swap-regression.md` (operand swap
-  regresses 6-23% at H<64).
+- **GEMM scheduling clusters and Blackwell 2-SM MMA**: required candidates in
+  the reopened plain-GEMM search.
+  A cluster along M can multicast the hidden-state B tile reused by adjacent
+  vocabulary tiles, even though it does not reduce the streaming weight
+  traffic.
+  Blackwell `tcgen05.mma cta_group::2` must be tested through CUTLASS's native
+  2-SM dispatch and legal tile shapes.
+  The rejected experiment in
+  `findings/cutlass/00-2cta-mma-operand-swap-regression.md` swapped GEMM
+  operands to keep a Triton reduction inside one CTA.
+  Its 6-23% low-H regression does not test CUTLASS's native 2-SM GEMM
+  orientation and cannot exclude that family.
 - **DSMEM candidate reduction in the epilogue**: optional experiment.
   A cluster along M can merge adjacent vocabulary-tile candidates before
   HBM.
@@ -312,13 +384,23 @@ distinct mechanisms:
   current persistent Triton kernel's H=256 spill.
   See `findings/cutlass/03-dsmem-cluster-reduction.md`.
 
-**Explicitly rejected optimizations**:
+**Required B200 plain-GEMM search dimensions**:
 
-- **2-CTA MMA (`cta_group::2`)**: as above.
-- **Stream-K**: addresses compute-bound load imbalance on large square
-  GEMMs. FMMS is memory-bound on weight streaming with no K-reduction.
-- **Cluster MMA preferred clusters**: helps compute-dense GEMM saturate SMs
-  via multicast. FMMS is bandwidth-limited, not SM-limited.
+- Blackwell 1-SM and 2-SM dense BF16 dispatch policies with their legal CTA,
+  instruction, epilogue, and cluster shapes.
+- Static clusters and preferred/fallback flexible clusters on sm_100a.
+- Runtime raster order and tile swizzle.
+- Split-K or Stream-K candidates when NVIDIA's heuristic emits them.
+  The large M dimension may make them unnecessary, but that is a measured
+  outcome rather than a prior exclusion.
+
+Do not infer that a mechanism is irrelevant solely because the arithmetic
+intensity model labels a case memory-bound.
+Scheduling, multicast, and rasterization can still change reuse, memory-level
+parallelism, and the fraction of peak bandwidth achieved.
+
+Hopper non-persistent, persistent ping-pong, and persistent cooperative
+schedules move to the Gate 8 search after B200 completion.
 
 ## The kernel design
 
@@ -679,17 +761,20 @@ complexity is added.
 The first shippable scope is intentionally narrow:
 
 - BF16.
-- TP1 first, then TP2.
-- H100 and B200.
+- TP1 first, then TP2, TP4, and TP8.
+- B200 only until the complete B200 gate passes.
 - Greedy and unrestricted Gumbel-Max.
 - The small and large model shape families already used by the benchmarks.
 - The full hidden-state sweep (H=1 through H=256). All H values are in
   scope for the CUTLASS backend.
 - Existing two-stage candidate merge.
 - Triton remains the fallback backend.
+- Offline kernel discovery and B200 per-shape dispatch are part
+  of the initial milestone because one schedule is not expected to cover
+  H=1 through H=256.
 
-Top-k, DSMEM, A100, FP8/FP4, broad autotuning, H200, and B300 are not
-required to prove the core CUTLASS backend.
+Candidate-compression DSMEM is optional within the B200 milestone.
+A100, FP8/FP4, H200, and B300 are outside the active B200 scope.
 
 ### Testing strategy
 
@@ -703,7 +788,10 @@ sampler:
 - Extension build/import and ordinary GEMM output.
 - Standalone packed max-with-index reduction.
 - Stateless Philox stream generation and coordinate mapping.
-- H100/B200 compile-and-run coverage.
+- B200 compile-and-run coverage for every new gate.
+- Existing H100 compile-and-run evidence remains a regression record but is
+  not rerun unless shared code changes make a targeted compatibility check
+  necessary.
 
 Only register `fused-cutlass` after greedy FMMS produces valid candidates.
 
@@ -793,6 +881,7 @@ Initial thresholds:
 |---|---|---|
 | Toolchain baseline | Reproducible H100 and B200 builds | Fix the build before kernel work |
 | M reduction | Exact max-with-index across boundary shapes | Leave generic EVT and use a handwritten epilogue |
+| B200 plain-GEMM discovery | A measured CUTLASS dispatch is within 5% of `torch.mm` for all 18 B200 model-shape and H cells | Expand only the official heuristic-selected population or document the remaining unsupported Blackwell family before stopping |
 | Greedy FMMS | No more than 5% slower than plain CUTLASS GEMM plus the unavoidable reduction work | Rework or abandon the epilogue design |
 | Gumbel-Max | Correct large-vocab distribution with no RNG-caused spill | Replace the RNG implementation or schedule |
 | Top-k | Matches or beats the existing Triton top-k path | Keep Triton top-k as the dispatched fallback |
@@ -1185,7 +1274,8 @@ passing result is documented in `findings/cutlass/12-greedy-provider.md`.
 
 #### Gate 2b: greedy performance feasibility decision
 
-**Status:** no-go.
+**Status:** the current hand-selected schedule is no-go, but Gate 2 is reopened
+for official kernel discovery in Gate 2c.
 
 Profile the exact provider approved in Gate 2a without changing its
 correctness path.
@@ -1220,16 +1310,22 @@ The remaining seven failures are confined to H=1,2,4, and the worst ratio is
 1.14.
 Do not begin Gate 3 on the current implementation.
 Before more fused-epilogue work, establish a dtype-matched ordinary CUTLASS
-GEMM that remains within 5% of cuBLAS for every primary shape and H value.
-The current diagnostic CUTLASS GEMM plus argmax is slower than cuBLAS plus
+GEMM that remains within 5% of `torch.mm` for every primary shape and H value.
+The current diagnostic CUTLASS GEMM plus argmax is slower than `torch.mm` plus
 argmax in all 36 configurations, with median ratios of 1.17 on H100 and 1.27
 on B200.
-The current comparison mixes FP32 CUTLASS output with BF16 cuBLAS output, so
+The initial comparison mixed FP32 CUTLASS output with BF16 `torch.mm` output, so
 build a matched comparison before deciding whether CUTLASS tuning can close
 the gap.
-Stop the CUTLASS port if the ordinary-GEMM prerequisite cannot pass.
-Only after it passes should the implementation reduce the fused epilogue's
-low-H resource cost and rerun Gate 2b against both baselines.
+The bounded explicit-stage search did not pass the prerequisite.
+That search covered only a manually selected 1-SM, `1x1x1` cluster family.
+Its rule requiring a stage-count promotion before testing clusters was not a
+valid exclusion of cluster scheduling because cluster multicast changes data
+reuse independently of pipeline depth.
+Treat `findings/cutlass/18-ordinary-gemm-stage-no-go.md` as the no-go record
+for that narrow family, not for CUTLASS as a whole.
+Only after Gate 2c passes should the approved plain-GEMM schedule be moved to
+the fused epilogue experiment in Gate 2d.
 The decision and evidence are documented in
 `findings/cutlass/14-greedy-performance.md` and
 `findings/cutlass/15-greedy-profile-stage2.md`.
@@ -1244,7 +1340,7 @@ Compare:
 - CUTLASS GEMM plus a separate argmax.
 - Greedy CUTLASS FMMS.
 - Greedy Triton FMMS.
-- cuBLAS plus argmax.
+- `torch.mm` plus argmax.
 
 Measure registers, local-memory traffic, occupancy, GEMM duration, Stage 2,
 and total latency.
@@ -1256,8 +1352,10 @@ choice decided from these measurements.
 This milestone decides whether the custom epilogue preserves enough GEMM
 performance to justify continuing.
 
-**Exit:** the predeclared performance threshold passes on both architectures,
-or the project records a no-go decision before adding RNG, TP, or top-k.
+**Exit:** the currently composed fused provider did not pass the predeclared
+threshold.
+Gate 2 remains open through Gate 2c and Gate 2d, while RNG, TP, and top-k stay
+blocked.
 
 **Human verification:** confirm that the Gate 2a correctness packet still
 passes, then inspect raw repetitions, medians, dispersion, registers, local-memory
@@ -1269,7 +1367,172 @@ Do not accept pointwise minima, missing slow shapes, or a comparison made
 across different toolchain baselines.
 This gate does not prove RNG correctness.
 
-### Gate 3: stateless Philox prototype
+#### Gate 2c: official plain-GEMM kernel discovery
+
+**Status:** planned for B200 only.
+
+This gate replaces manual Cartesian tuning with NVIDIA's supported discovery
+workflow.
+It must run before any new fused-epilogue experiment.
+
+##### 1. Define the baseline
+
+Measure the exact BF16 operation `W[V,D] @ H[D,H]` with FP32 accumulation and
+BF16 output through `torch.mm`.
+
+`torch.mm` is the sole strong matmul baseline the provider must beat or stay
+within 5% of.
+It is the production PyTorch path and dispatches to NVIDIA's cuBLAS backend.
+No separate library ceiling is in scope.
+
+Log the PyTorch, CUDA, cuBLAS, driver, GPU, and clock versions.
+Enable cuBLAS logging or use Nsight Systems to identify the kernel selected by
+`torch.mm` where the tooling exposes it.
+Kernel identification is diagnostic and must not change the baseline.
+
+CUTLASS and `torch.mm` must use the same logical M/N/K, operand layouts,
+BF16 inputs and output, FP32 accumulation, beta=0 semantics, alignment,
+padding policy, preallocated buffers, stream, and cache state.
+Record warm-L2 and cold-L2 results separately.
+The production decision uses the state that matches decode-time execution;
+the cold-L2 experiment remains useful for isolating weight streaming.
+Never combine repetitions or baselines from different runs.
+
+##### 2. Generate candidates with NVIDIA Matmul Heuristics
+
+Create one problem JSON containing both primary `(V,D)` shapes and every
+H value in `{1,2,4,8,16,32,64,128,256}` with the exact CUTLASS layout and
+datatype description.
+Run the generator on B200 for `sm_100a`.
+Do not generate or profile Hopper candidates in this gate.
+
+Build at least the top 16 heuristic configurations per problem initially.
+If a failing shape's top candidates cluster tightly or omit a supported
+family listed below, increase that shape to 32 candidates before making a
+stop decision.
+Use `CUTLASS_LIBRARY_HEURISTICS_PROBLEMS_FILE`,
+`CUTLASS_LIBRARY_HEURISTICS_CONFIGS_PER_PROBLEM`, and the emitted profiler
+test list.
+Do not translate heuristic results by hand before measuring them.
+
+##### 3. Required candidate coverage audit
+
+The generated manifest and profiler output must make the following dimensions
+visible:
+
+- CTA tile, instruction tile, pipeline stages, mainloop schedule, epilogue
+  schedule, cluster shape, split-K, raster order, and swizzle.
+- B200 1-SM and 2-SM dense BF16 schedules with their legal per-SM epilogues.
+- Nontrivial static M-axis clusters on B200.
+- Preferred and fallback flexible clusters on sm_100a when emitted or legal.
+- Runtime raster order and swizzle variants for persistent schedulers.
+- Split-K or Stream-K when emitted by the heuristic.
+
+The heuristic is a search-space reducer, not a completeness proof.
+If it omits one of these supported families for every problem, add a small
+explicit control from that family or record the exact CUTLASS constraint that
+makes it illegal.
+Do not silently equate “not emitted” with “not useful.”
+
+##### 4. Profile and select
+
+Use `cutlass_profiler` with its emitted test list and retain complete
+procedural kernel names plus runtime arguments.
+Use locked clocks when the platform permits them.
+Otherwise record clock samples and repeat any threshold-adjacent result.
+Give each candidate enough profiling duration to make sub-5% distinctions;
+NVIDIA's documented 50 ms fixed-duration example is the minimum starting
+point, not a universal measurement guarantee.
+
+Select the fastest measured CUTLASS candidate separately for each B200 model
+shape and H.
+Do not require one universal kernel.
+Then determine the smallest piecewise dispatch that remains within 1% of the
+per-case oracle and report the cost of simplifying that dispatch.
+
+##### 5. Promotion and stop rules
+
+Gate 2c passes when the selected CUTLASS dispatch is no more than 5% slower
+than `torch.mm` in all 18 B200 production cases in one complete confirmation
+run.
+
+Repeat the full confirmation once.
+Summarize runs independently with pandas and do not use pointwise minima
+across runs.
+
+A no-go decision is allowed only after:
+
+1. The top-16 heuristic population has been measured for every problem.
+2. Every failing problem has been expanded to top 32 or the heuristic has
+   exhausted its distinct supported suggestions.
+3. The required coverage audit has tested or formally excluded persistent
+   B200 1-SM and 2-SM MMA, nontrivial clusters, flexible clusters,
+   raster/swizzle, and heuristic-emitted split-K.
+4. The `torch.mm` baseline has been measured under the matched protocol.
+5. Two complete confirmation packets agree on the remaining failures.
+
+##### 6. Gate 2c packet
+
+The canonical packet must include:
+
+- The B200 problem JSON and heuristic-generated test list.
+- The generated kernel manifest and every rejection with its build,
+  `can_implement`, or launch diagnostic.
+- Raw CUTLASS profiler output and parsed pandas tables.
+- Raw `torch.mm` timings.
+- Per-candidate metadata and timings, the per-case oracle, and the simplified
+  selected dispatch.
+- Warm-L2 and cold-L2 summaries.
+- Two independent full confirmation summaries.
+- Toolchain, clock, workspace, padding, layout, and cache-policy metadata.
+
+**Exit:** one reproducible plain-CUTLASS dispatch passes all 18 B200
+production comparisons twice, or the fully audited Blackwell search records a
+new no-go.
+
+**Human verification:** confirm that every problem appears in both baseline
+and CUTLASS tables, inspect the required-family coverage audit, verify that
+the selected row comes from the same run as its baselines, and reject any
+packet based on cross-run minima or undocumented padding/layout differences.
+
+#### Gate 2d: transplant the winning B200 schedules into FMMS
+
+**Status:** blocked on Gate 2c.
+
+Reproduce only the measured B200 winning schedule families in the production
+C++ builder.
+Preserve their CTA and instruction shapes, 1-SM or 2-SM policy, cluster shape,
+stage policy, tile scheduler, raster order, swizzle, and epilogue contract.
+
+A changed schedule, CTA tile, epilogue tile, or 2-SM ownership model can change
+which consumer thread owns each accumulator element.
+Rerun Gate 1a on B200 first, derive the sm_100 ownership formulas from
+evidence, and then rerun Gates 1b through 2a on B200.
+Do not adapt the old ownership formulas by inspection.
+
+After correctness passes, compare:
+
+- Winning plain CUTLASS GEMM.
+- Winning plain CUTLASS GEMM plus separate argmax.
+- Greedy CUTLASS FMMS with the candidate epilogue.
+- `torch.mm` plus argmax.
+- Greedy Triton FMMS.
+
+Measure GEMM, candidate epilogue, Stage 2, and total latency separately.
+Collect registers, local memory, shared memory, occupancy, achieved tensor-core
+throughput, HBM traffic, TMA traffic, and cluster utilization where supported.
+
+**Exit:** the correctness-approved fused path passes the existing Gate 2b
+threshold against both the winning plain CUTLASS schedule plus unavoidable
+reduction work and the production `torch.mm` baseline.
+Only then may Gate 3 begin.
+
+**Human verification:** verify that the fused kernel really uses the winning
+plain schedule and runtime parameters, that all dependent correctness gates
+were rerun, and that the component timings explain the difference between
+plain and fused performance.
+
+### Gate 3: B200 stateless Philox prototype
 
 Implement or adapt a counter-based Philox primitive from an established CUDA
 implementation such as FlashInfer.
@@ -1287,7 +1550,7 @@ Phase A validates:
 - Stream uniqueness across tiles and samples.
 - Invariance under different launch and tile shapes.
 - Uniform-distribution checks.
-- Reproducibility on H100 and B200.
+- Reproducibility on B200 across every promoted tile and scheduler family.
 
 Phase B records:
 
@@ -1303,14 +1566,14 @@ the pipe rather than only instruction count.
 
 **Human verification:** inspect stream-collision counts, reproducibility
 comparisons, launch-shape invariance, uniformity statistics, instruction
-counts, register use, and SFU utilization on both architectures.
+counts, register use, and SFU utilization on B200.
 The packet must record the predeclared statistical significance and cost
 thresholds.
 A p-value alone is insufficient without sample count, test statistic, and
 multiple-test policy.
 This gate tests uniform Philox output, not the Gumbel transform inside GEMM.
 
-### Gate 4: Gumbel-Max TP1
+### Gate 4: B200 Gumbel-Max TP1
 
 Add the validated stateless Philox and Gumbel transform to the working greedy
 kernel.
@@ -1324,11 +1587,11 @@ Gate 4 has three ordered acceptance phases in one integration packet:
 3. Only after both pass, profile registers, local-memory traffic, latency, and
    SM/SFU pipe utilization against the identical greedy kernel.
 
-**Exit:** correct sampling distribution on H100 and B200, no RNG-caused
-spill, and acceptable incremental latency.
+**Exit:** correct sampling distribution on B200, no RNG-caused spill, and
+acceptable incremental latency.
 
 **Human verification:** require provider-agnostic test rows and the complete
-10M-sample large-vocabulary statistics for both architectures.
+10M-sample large-vocabulary statistics on B200.
 Inspect reduced chi-squared, p-value, covered probability mass, excluded-bin
 count, reproducibility, registers, local-memory traffic, SFU utilization, and
 paired greedy-versus-Gumbel latency.
@@ -1340,7 +1603,7 @@ This gate is TP1 and does not prove distributed stream uniqueness.
 non-warp-specialized epilogue schedule.
 Pre-generated noise is not an acceptable production fallback.
 
-### Gate 5: tensor parallelism
+### Gate 5: B200 tensor parallelism
 
 Implement TP before top-k and DSMEM.
 Gate 5 has three formal milestones because each introduces a separate
@@ -1392,7 +1655,7 @@ metadata, raw repetitions, component timings, and no missing world-size or
 shape cells.
 This milestone does not validate top-k.
 
-### Gate 6: fixed-K top-k
+### Gate 6: B200 fixed-K top-k and top-p
 
 Gate 6 has two formal milestones because exact selection and integrated
 sampling answer different correctness questions.
@@ -1405,8 +1668,7 @@ Use a custom warp-group sorted-array or merge network derived from example
 61.
 Do not put the private `cub::detail::block_topk` API on the critical path.
 
-**Exit:** exact top-k membership and deterministic tie ordering on H100 and
-B200.
+**Exit:** exact top-k membership and deterministic tie ordering on B200.
 
 **Human verification:** inspect adversarial membership cases at tile
 boundaries, duplicate cutoff values, all-negative inputs, and K values around
@@ -1419,61 +1681,147 @@ A later distribution pass cannot substitute for exact membership.
 Reuse `_topk_merge_and_sample` for the global Stage 2.
 Validate against the renormalized global top-k distribution and compare with
 the existing Triton top-k implementation.
+Exercise every production top-p value supported on the selected top-k
+survivors and verify the final allowed set and distribution.
 
 **Exit:** the sampling distribution passes and the predeclared performance
-target passes on H100 and B200.
+target passes on B200.
 
 **Human verification:** retain the approved Gate 6a membership packet, then
 inspect normalized probabilities, distribution statistics, and raw latency
 repetitions for CUTLASS and Triton.
 Record the exact K and padded internal K for every row.
 
-**Fallback:** dispatch top-k to the Triton backend while keeping CUTLASS for
-greedy and unrestricted Gumbel-Max.
+**Development fallback:** dispatch top-k to the Triton backend while keeping
+CUTLASS for greedy and unrestricted Gumbel-Max.
+This hybrid path cannot pass Gate 7 and therefore cannot unlock Hopper work.
 
-### Gate 7: tuning and end-to-end validation
+### Optional B200 optimization before Gate 7: DSMEM candidate compression
 
-Tune only mechanisms that survived the earlier gates:
+This optional gate concerns candidate reduction through DSMEM after the GEMM.
+It is distinct from the GEMM scheduling clusters and TMA multicast required in
+Gate 2c.
+Profile candidate writes, Stage 2, and TP exchange first.
+Attempt candidate compression only if those operations consume enough latency
+for a 3% total improvement to be plausible or if it is needed to win a
+specific declared Gate 7 cell.
 
-- GEMM tile and epilogue tile shapes.
-- Pipeline stages.
-- Warp-specialized versus non-warp-specialized schedules.
+Prototype the DSMEM max-with-index exchange outside GEMM, then integrate a
+cluster along M.
+Compare cluster sizes 1, 2, 4, and 8 with paired end-to-end runs on B200.
+Keep it only if the complete path improves by at least the predeclared
+threshold and does not regress another required cell.
+
+**Human verification:** inspect paired raw runs for cluster sizes 1, 2, 4,
+and 8, including candidate traffic, Stage 2, TP exchange, and total latency.
+The mean or median total improvement must exceed 3% with repeatability across
+the declared shapes, unless the experiment was admitted to fix a named Gate 7
+cell, in which case that cell must become a repeatable pointwise win without
+creating a loss elsewhere.
+An isolated microbenchmark improvement or candidate-byte reduction does not
+pass this optional gate.
+
+### Gate 7: complete B200 implementation and superiority gate
+
+Do not defer plain-GEMM kernel discovery to this gate.
+Gate 2c must already have selected B200 shape-specific schedules.
+Tune only fused-path mechanisms that survived the earlier gates:
+
+- Small adjustments around the Gate 2c winning GEMM and epilogue shapes.
+- Pipeline stages only when the custom epilogue changes shared-memory
+  carveout enough to invalidate the plain winner.
+- Cluster, raster, swizzle, or scheduler settings already validated by the
+  winning plain family.
 - H bucket dispatch.
-- Architecture-specific H100 and B200 configurations.
+- B200-specific dispatch simplification that remains within the declared
+  pointwise performance requirement.
 
 Run the full benchmark matrix, memory-traffic profiles, and end-to-end vLLM
 TPOT experiments.
-Add H200 and B300 after H100 and B200 are stable.
+The vLLM integration must invoke the CUTLASS implementation for the complete
+sampling path under test.
+A hidden fallback to Triton, `torch.mm`, or another provider fails the gate.
+Record provider selection and kernel names in the server log for every
+end-to-end run.
 
-**Exit:** all earlier correctness packets remain green and the full benchmark
-and end-to-end matrices meet their predeclared acceptance criteria.
+Before launching the final packet, materialize the complete B200 comparison
+matrix in a checked-in or packet-local manifest.
+It must include every configuration supported by the corresponding Triton
+FlashSampling provider:
+
+- Both primary `(V,D)` model-shape families.
+- Every H value in `{1,2,4,8,16,32,64,128,256}`.
+- TP1, TP2, TP4, and TP8 wherever the Triton provider supports that world
+  size.
+- Greedy, unrestricted Gumbel-Max, production fixed-K top-k, and every
+  supported top-p-on-survivors mode.
+- Every sample-count, temperature, and other benchmark dimension exposed by
+  the canonical runner for those providers.
+- Every declared vLLM model and concurrency cell in the B200 end-to-end
+  benchmark.
+
+The manifest is the definition of “every dimension and configuration.”
+Missing or skipped cells fail the gate unless the same cell is unsupported by
+the Triton provider and the exclusion is recorded before measurement.
+
+For every kernel-level cell, compare paired raw repetitions from CUTLASS and
+Triton FlashSampling on the same host and run.
+For every end-to-end cell, compare matched vLLM runs with the same model,
+request distribution, concurrency, TP degree, server configuration, and host
+class.
+
+The CUTLASS median latency or TPOT must be strictly lower than Triton's in
+every cell in each of two independent confirmation runs.
+Do not average across H, shapes, TP degrees, features, models, or concurrency.
+Do not use pointwise minima across runs.
+Report ratios as `Triton / CUTLASS`, so every required performance ratio must
+be greater than 1.0.
+
+Memory traffic and temporary allocation must not regress enough to invalidate
+the fused design.
+Any allowed metric tolerance must be declared before the final runs and may
+not weaken the strict pointwise latency and TPOT requirement.
+
+**Exit:** all B200 correctness packets remain green, feature coverage matches
+the declared Triton FlashSampling surface, and CUTLASS is strictly faster in
+every kernel and end-to-end performance cell in both confirmation runs.
+Only this exit unlocks Gate 8.
 
 **Human verification:** require raw repetitions, host and toolchain metadata,
 memory-traffic reports, and end-to-end summaries for every declared cell.
 Check missing cells, dispersion, warmup policy, autotune state, and whether
 kernel-level changes agree with end-to-end bounds.
 This gate supports production selection but does not generalize beyond the
-tested models, shapes, and hardware.
+tested B200 models, shapes, and host classes.
 
-### Optional gate: DSMEM candidate compression
+### Gate 8: Hopper port after B200 completion
 
-DSMEM is not part of the initial production milestone.
-Profile candidate writes, Stage 2, and TP exchange first.
-Attempt clustering only if those operations consume enough latency for a 3%
-total improvement to be plausible.
+**Status:** blocked on Gate 7.
 
-Prototype the DSMEM max-with-index exchange outside GEMM, then integrate a
-cluster along M.
-Compare cluster sizes 1, 2, 4, and 8 with paired end-to-end runs.
-Keep it only if the complete path improves by at least the predeclared
-threshold.
+Port the complete, approved B200 feature surface to H100 first and H200 after
+H100 is stable.
+Reuse architecture-independent contracts for API shape, deterministic ties,
+RNG coordinates, Stage 2, TP behavior, and top-k semantics.
+Do not reuse Blackwell-specific GEMM schedules, TMEM ownership, 2-SM
+assumptions, cluster constraints, or accumulator visitation formulas.
 
-**Human verification:** inspect paired raw runs for cluster sizes 1, 2, 4,
-and 8, including candidate traffic, Stage 2, TP exchange, and total latency.
-The mean or median total improvement must exceed 3% with repeatability across
-the declared shapes.
-An isolated microbenchmark improvement or candidate-byte reduction does not
-pass this optional gate.
+Repeat the official plain-GEMM discovery for sm_90 with Hopper
+non-persistent, persistent ping-pong, and persistent cooperative schedules,
+legal clusters, raster order, swizzle, stages, and heuristic-emitted split-K.
+Rerun Gate 1a and every dependent correctness gate using the winning Hopper
+schedule before enabling sampling.
+
+Bring features up in the same order as B200: greedy TP1, Philox and
+Gumbel-Max, TP2/4/8, top-k, then end-to-end validation.
+Use `torch.mm` as the sole strong matmul baseline and Triton FlashSampling as
+the pointwise fused-performance baseline.
+
+**Exit:** the Hopper implementation reaches the same correctness, feature
+coverage, and pointwise performance standard used by the B200 Gate 7 packet.
+
+**Human verification:** require a fresh sm_90 kernel-discovery packet,
+accumulator ownership evidence, all dependent correctness packets, and two
+complete pointwise performance confirmations.
 
 ## Validation strategy
 
@@ -1481,6 +1829,8 @@ Reuse the provider-agnostic sampling and distributed tests after a provider
 exists.
 The toolchain, standalone M-reduction, and stateless Philox gates use small
 dedicated tests.
+All active validation in Gates 2c through 7 runs on B200.
+Hopper validation resumes only in Gate 8.
 
 ### Correctness
 
@@ -1494,13 +1844,20 @@ dedicated tests.
 
 ### Performance
 
+- Gate 2c uses NVIDIA Matmul Heuristics and `cutlass_profiler` to discover
+  plain kernels, followed by the matched project runner for confirmation
+  against `torch.mm`.
 - The existing `triton_benchmark` harness: same configs, swap the provider.
-- **Key comparison**: CUTLASS FMMS vs Triton FMMS vs cuBLAS+multinomial.
-  The decisive test of whether the cuBLAS-gap concern is retired is
-  whether CUTLASS FMMS beats Triton FMMS by a meaningful margin at H>=64
-  (where the matmul becomes compute-bound and Triton falls behind cuBLAS).
+- **Key comparison**: CUTLASS FMMS vs Triton FlashSampling pointwise in every
+  B200 cell.
+  Gate 7 requires strict CUTLASS wins at H=1 through H=256, not only the
+  compute-bound regime.
+- `torch.mm` remains the strong plain-matmul and sampling baseline, but it
+  does not replace the required pointwise comparison with Triton
+  FlashSampling.
 - HBM traffic: re-run `make modal-memory-traffic-all`. CUTLASS FMMS should
-  match Triton FMMS within noise (same algorithm, same I/O pattern).
+  preserve the fused algorithm's low-traffic behavior and explain any
+  difference from Triton FlashSampling.
 
 ### Profiling
 
@@ -1509,58 +1866,71 @@ dedicated tests.
 - For the EVT visitor: NCU source-view to confirm the RNG and argmax
   instructions are where expected (in the consumer warp, not spilled).
 
-## Files to create
+## Current implementation files
 
-1. `src/fused_mm_sampling/csrc/fmms_cutlass_kernel.cu` - host wrapper,
-   C++ kernel dispatch, torch extension binding.
-2. `src/fused_mm_sampling/csrc/fmms_evt_visitor.hpp` - the
-   `FmmsArgmaxVisitor` EVT node (the novel piece).
-3. `src/fused_mm_sampling/csrc/fmms_evt_visitor_topk.hpp` - the top-k
-   variant (starts with a fixed-K warp-group merge).
-4. `src/fused_mm_sampling/cutlass_impl.py` - Python wrapper, mirroring
-   `cuda_impl.py` (JIT compile via `torch.utils.cpp_extension.load` or a
-   setup-time build).
-5. `CMakeLists.txt` at repo root (or under `src/fused_mm_sampling/`) for
-   the CUTLASS extension build.
-6. Dedicated tests for the standalone M reduction and stateless Philox
-   coordinate mapping.
+The original file plan has been realized and reorganized during Gates 0-2.
+Use the current structure rather than creating a second extension:
 
-The early standalone gates (M-reduction, Philox prototype) may build inside
-the existing `csrc/fmms_kernel.cu` extension used by the `fused-cuda`
-provider to reuse its JIT build and pybind plumbing, where that is simpler
-than standing up the CUTLASS build first.
+1. `src/fused_mm_sampling/csrc/cutlass/greedy_provider.cu` contains the
+   production-facing greedy provider, plain-GEMM diagnostic dispatch, and
+   Stage 2 launch.
+2. `src/fused_mm_sampling/csrc/cutlass/evt_candidates.cu` contains the fused
+   candidate EVT and architecture-specific CUTLASS composition.
+3. `src/fused_mm_sampling/csrc/cutlass/max_with_index.cuh` contains the
+   shared deterministic comparator and reduction primitives.
+4. `src/fused_mm_sampling/cutlass_impl.py` owns JIT compilation and Python
+   bindings.
+5. `src/fused_mm_sampling/modal_lib/cutlass/` contains the canonical Modal
+   gate runners and shared image helpers.
+6. `Makefile` maps every allowlisted CUTLASS gate to its runner and numbered
+   result directory.
 
-## Files to modify
+## Gate 2c files to add or modify
 
-1. `src/fused_mm_sampling/core.py` - add `"fused-cutlass"` and
-   `"fused-cutlass-topk"` cases to `get_sampler()`.
-2. `src/fused_mm_sampling/alg_names.py` - register the new providers in
-   `ShortNames`, `LongNames`, and `short2long`.
-3. `tests/test_core.py` - add the new providers to the parametrized
-   chi-squared test.
-4. `src/fused_mm_sampling/bench/triton_benchmark.py` - add the new
-   providers to `provider_names` and `all_providers`.
-5. `src/fused_mm_sampling/bench/speed_test.py` - same.
-6. `Makefile` - add build target for the CUTLASS extension.
+Keep Gate 2c under the existing `ordinary-gemm-tuning` gate rather than
+creating a parallel tuning framework.
+
+1. Add a checked-in exact-problem JSON generator or static JSON under the
+   existing CUTLASS runner directory.
+2. Add a reproducible Modal build step for `nvidia-matmul-heuristics` and
+   `cutlass_profiler` using the pinned CUTLASS revision.
+3. Extend the canonical runner to preserve heuristic test lists, generated
+   manifests, profiler CSVs, rejection diagnostics, and matched `torch.mm`
+   timings.
+4. Add only promoted winner families to `greedy_provider.cu` after the
+   profiler search passes.
+5. Keep generated sources, binaries, and evidence ignored under the canonical
+   Gate 2c result directory.
+6. Do not hand-copy dozens of generated candidates into the torch extension.
+   Use the profiler to select first, then retain only the minimal winning
+   dispatch families needed by production.
 
 ## Honest assessment of risks
 
-The largest risk is whether an M-axis max-with-index visitor can preserve
-CUTLASS GEMM performance on both Hopper and Blackwell.
-Gate 1 proves the reduction mechanics, and Gate 2 makes performance a
-go/no-go decision before RNG, top-k, TP, or DSMEM increase complexity.
+The first risk is selecting a plain CUTLASS kernel family competitive with the
+`torch.mm` path on the unusual very-large-M, small-N, large-K shapes.
+Gate 2c addresses this with NVIDIA's heuristic and profiler instead of a
+hand-selected kernel list.
 
-The second risk is Blackwell callback compatibility.
+The second performance risk is whether the M-axis max-with-index visitor can
+preserve the winning plain CUTLASS schedule's performance on B200.
+Gate 1 proves the reduction mechanics, and Gate 2d measures the transplanted
+Blackwell schedule before RNG, top-k, TP, or candidate-compression DSMEM add
+complexity.
+Hopper schedule preservation is a separate Gate 8 risk after B200 completion.
+
+The next risk is Blackwell callback compatibility.
 CUTLASS does not ship a corresponding `Sm100TopKSoftmaxColReduction`, so
 B200 compile and correctness coverage begins at Gate 0 rather than being
 deferred to tuning.
 
-The third risk is RNG cost and register pressure.
+Another risk is RNG cost and register pressure.
 The plan uses a standalone stateless Philox prototype, global coordinate
 mapping, and a direct greedy-versus-Gumbel profile.
 It does not rely on persistent cuRAND state.
 
-Top-k is deliberately not a critical-path risk.
+Top-k is on the B200 completion critical path because Gate 7 requires the full
+declared Triton FlashSampling feature surface.
 The first path is a fixed-K warp-group merge.
 The private `cub::detail::block_topk` API is only an optional experiment.
 
@@ -1568,9 +1938,10 @@ TP has a correctness-preserving fallback: local candidate output followed
 by a separate P2P fan-out kernel.
 Direct peer stores are an optimization.
 
-DSMEM has no delivery dependency.
+Candidate-compression DSMEM is not required by feature semantics.
 It is attempted only when measured candidate costs make a predeclared
-end-to-end improvement plausible.
+end-to-end improvement plausible or when a named Gate 7 cell needs it to
+become a pointwise win.
 
 ## Out of scope for this plan
 
@@ -1581,9 +1952,12 @@ end-to-end improvement plausible.
 - **Cluster DSMEM reduction** for inter-rank TP. Cluster DSMEM is
   intra-rank only; inter-rank still needs NVLink. The current symm-mem P2P
   path is the right mechanism.
-- **2-CTA MMA, Stream-K, preferred clusters**. All target compute-bound
-  problems; FMMS is memory-bound. See "Explicitly rejected optimizations"
-  above.
+- **Unbounded manual GEMM tuning after Gate 2c**. Native 2-SM MMA,
+  heuristic-emitted split-K, persistent schedules, preferred/fallback
+  clusters, raster order, and swizzle are in scope for the bounded official
+  search. Expanding beyond the audited top-32 population requires a specific
+  profiler result or unsupported-family gap, not a generic request to try more
+  combinations.
 - **A100 (sm_80) CUTLASS support**. The Triton kernel remains the A100
   fallback. CUTLASS 3.x SIMT GEMM path is possible but low priority.
 - **FP8 / FP4 weights**. Out of scope for the initial implementation.
@@ -1591,7 +1965,49 @@ end-to-end improvement plausible.
 
 ## References
 
-### CUTLASS files (all on `main`)
+### Official GEMM discovery and scheduling references
+
+- [CUTLASS GEMM Heuristics](https://docs.nvidia.com/cutlass/4.5.1/media/docs/cpp/heuristics.html)
+  documents the `nvidia-matmul-heuristics` integration, exact-problem JSON,
+  top-N configuration generation, emitted profiler test lists, and Hopper and
+  Blackwell coverage.
+- [CUTLASS Profiler](https://docs.nvidia.com/cutlass/latest/media/docs/cpp/profiler.html)
+  documents exhaustive kernel generation, instantiation levels, procedural
+  names, stages, cluster shapes, raster order, swizzle, fixed-duration
+  profiling, flexible Blackwell clusters, and profiler test lists.
+- [NVIDIA: Improving GEMM Kernel Auto-Tuning Efficiency with Heuristics and CUTLASS](https://developer.nvidia.com/blog/improving-gemm-kernel-auto-tuning-efficiency-on-nvidia-gpus-with-heuristics-and-cutlass-4-2/)
+  explains why manual tuning over a few templates is insufficient and shows
+  the intended heuristic-generation-profiling workflow on H100 and B200.
+- [CUTLASS 3.x GEMM API](https://docs.nvidia.com/cutlass/latest/media/docs/cpp/gemm_api_3x.html)
+  defines the collective, kernel, and device composition layers and explains
+  Hopper non-persistent, ping-pong, and cooperative schedules.
+- [Blackwell SM100 GEMMs](https://docs.nvidia.com/cutlass/latest/media/docs/cpp/blackwell_functionality.html)
+  is the authoritative table for 1-SM and 2-SM `tcgen05.mma` dispatch
+  policies, legal MMA tiles, per-SM epilogue tiles, layouts, and clusters.
+- [CUTLASS dispatch policies](https://github.com/NVIDIA/cutlass/blob/main/include/cutlass/gemm/dispatch_policy.hpp)
+  is the source of the Hopper schedule tags and Blackwell
+  `KernelTmaWarpSpecialized1SmSm100` and
+  `KernelTmaWarpSpecialized2SmSm100` policies.
+- [CUTLASS Operator API overview](https://docs.nvidia.com/cutlass/latest/media/docs/operators/overview.html)
+  records NVIDIA's newer operator-discovery direction, including preferred
+  and fallback clusters and static versus dynamic scheduling.
+- [CUTLASS overview](https://docs.nvidia.com/cutlass/latest/index.html)
+  states the library's goal of peak-performance GEMM on Hopper and Blackwell
+  and distinguishes optimized templates from merely composing a legal
+  kernel.
+
+`torch.mm` remains the only comparison baseline in this project.
+The discovery references above are used to search CUTLASS's own kernel space,
+not to introduce another matmul baseline.
+
+### CUTLASS source files
+
+Use the documentation links above for current capabilities, but compile and
+inspect source at the Gate 0 pinned CUTLASS 4.6.1 commit
+[`e05f953a5b3d38adc240df2ff928e0421c2abba3`](https://github.com/NVIDIA/cutlass/tree/e05f953a5b3d38adc240df2ff928e0421c2abba3).
+If current documentation describes a feature absent from that commit, either
+exclude it with evidence or establish a new toolchain baseline before using a
+newer revision.
 
 - `examples/61_hopper_gemm_with_topk_and_softmax/` - EVT top-k reference.
 - `include/cutlass/epilogue/fusion/sm90_visitor_topk_softmax.hpp` - source
@@ -1599,6 +2015,8 @@ end-to-end improvement plausible.
 - `include/cutlass/epilogue/fusion/sm90_visitor_tma_warpspecialized.hpp`:
   base classes.
 - `examples/71_blackwell_gemm_with_collective_builder/` - Blackwell EVT.
+- `examples/73_blackwell_gemm_flexible_cluster/` - sm_100a preferred and
+  fallback cluster configuration.
 - `examples/77_blackwell_fmha/`, `examples/88_hopper_fmha/` - hand-written
   epilogue patterns (the alternative to EVT).
 - `examples/91_fp4_gemv/` - memory-bound GEMV reference (cp.async + warp
@@ -1632,6 +2050,13 @@ end-to-end improvement plausible.
 - `findings/cutlass/03-dsmem-cluster-reduction.md` - the deep dive on DSMEM
   candidate compression.
   It defines the optional post-TP profiling gate.
+- `findings/cutlass/16-ordinary-gemm-specialization.md` - the first matched
+  `torch.mm` comparison and small-N specialization.
+- `findings/cutlass/17-ordinary-gemm-tuning.md` - the six-control retained
+  candidate sweep and its now-superseded manual tuning handoff.
+- `findings/cutlass/18-ordinary-gemm-stage-no-go.md` - the explicit-stage
+  no-go for the manual cluster-1 family and the correction that reopens Gate
+  2c.
 - `findings/cutlass/02-topk-softmax-epilogue.md` - detailed analysis of
   example 61, including the constraints that motivate this plan's
   two-stage architecture.
@@ -1650,8 +2075,10 @@ end-to-end improvement plausible.
 
 ### Hardware / programming guides
 
-- CUTLASS 3.x backwards compatibility doc (the canonical reference for the
-  EVT vs legacy EpilogueOp split).
-- NVIDIA Blackwell Architecture Whitepaper (tcgen05.mma, TMEM, clusters).
+- [CUTLASS 3.x backwards compatibility](https://docs.nvidia.com/cutlass/latest/media/docs/cpp/gemm_api_3x.html)
+  is the canonical reference for the collective and kernel schedule layers.
+- [NVIDIA Blackwell Architecture Technical Brief](https://resources.nvidia.com/en-us-blackwell-architecture)
+  covers `tcgen05.mma`, TMEM, and cluster capabilities at the architecture
+  level.
 - Quack blog "Getting Memory-bound Kernels to Speed-of-Light" (2025-07-10)
   for the TV-layout + cluster reduction methodology.
