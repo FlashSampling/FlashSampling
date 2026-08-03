@@ -1621,26 +1621,49 @@ distributed mechanism or scaling decision.
 
 #### Gate 5a: TP2 correctness with local candidates
 
-Write candidates locally and use a separate P2P fan-out kernel.
-This remains the correctness and performance fallback.
+Implement and compare two local-candidate representations.
+The per-tile fallback writes local candidates and uses a separate P2P fan-out kernel, matching the existing Triton communication structure without assuming its overlap benefit transfers.
+The atomic-final-reduction alternative first reduces each rank's complete vocabulary shard to one packed candidate per hidden state.
+It then performs an integer-MAX collective over only H packed 64-bit candidates before decoding the winning index.
+
+Do not apply integer MAX directly to the existing raw `(FP32 bits, i32 index)` packing.
+Encode the FP32 value with an order-preserving bit transform, invert the global token index so lower indices win ties, and account explicitly for signed versus unsigned 64-bit collective comparison semantics.
+Reject NaNs or define and test their ordering before admitting this representation.
+Validate the encoding exhaustively over positive and negative values, infinities, signed zero, adjacent FP32 values, and equal-value index ties before using it in a collective.
+
+For the packed-MAX path, perform atomic reduction only into rank-local output.
+Do not issue remote atomic operations from every vocabulary CTA.
+The local winner is not complete until all GEMM CTAs finish, so the collective must follow GEMM completion and cannot claim tile-level compute/communication overlap.
+The collective payload is `8H` bytes per rank and replaces per-tile candidate fan-out, the explicit symmetric-memory barrier, and the final world-size candidate reduction when the backend provides the required exact MAX semantics.
+If a suitable collective is unavailable or slower, fan out the H final local candidates through symmetric memory and reduce the world-size candidates locally.
+
+Measure four components separately for both representations: local GEMM and reduction, initialization, distributed exchange, and final decoding or reduction.
+Compare the packed integer-MAX collective against symmetric-memory fan-out on the same hosts, because collective launch latency may dominate an H<=256 payload.
+This comparison remains the correctness and performance fallback decision rather than assuming either transport wins.
 Validate TP2 with `make modal-pytest-distributed`.
 
-**Exit:** TP2 distributed correctness passes through the fallback path.
+**Exit:** TP2 distributed correctness passes through both applicable paths, and one local-candidate exchange is selected from paired total-latency measurements.
 
 **Human verification:** require per-rank candidates and outputs, plus explicit
 confirmation that every rank selected the same global winner.
 Include rank-local boundary winners, cross-rank ties, and distributed RNG
 stream uniqueness.
-This milestone does not test direct peer stores or TP4/TP8.
+For packed MAX, inspect the encoded keys and decoded global indices, including negative values and equal-value lower-index ties.
+Record collective dtype and signed comparison semantics.
+This milestone does not test direct peer stores from the GEMM epilogue or TP4/TP8.
 
 #### Gate 5b: direct peer-store decision
 
 Test direct stores to peer symmetric-memory buffers from the epilogue.
-Compare them with the approved Gate 5a fallback using identical inputs and
-hosts.
+Compare them with the selected Gate 5a local-output path using identical
+inputs and hosts.
 Measure local compute, fan-out or direct stores, barrier, final reduction, and
 total latency separately.
 Do not assume the Triton overlap speedup transfers to CUTLASS.
+The direct-store path exchanges per-tile candidates and preserves potential
+overlap, while packed MAX exchanges only final local winners after GEMM.
+Treat this as an end-to-end latency tradeoff between overlap and payload
+reduction, not as a communication-only comparison.
 
 **Exit:** retain direct stores only if they preserve correctness and pass the
 predeclared total-latency threshold.

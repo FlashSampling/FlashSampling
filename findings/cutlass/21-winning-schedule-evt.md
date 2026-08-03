@@ -65,6 +65,22 @@ racecheck reports zero hazards, errors, or warnings for every schedule.
 The original Gate 1g regression also still passes all 1,744 exact comparisons
 and both sanitizers on H100 and B200.
 
+## First production transplant
+
+The production provider now dispatches B200 H<=64 to the Gate 2c
+`128x64x128` 2-SM cluster-(2,1,1) donor.
+The provider uses the correctness-approved 64-bit atomic final reduction, so
+this path writes one final candidate per hidden state and no longer launches
+the separate Stage 2 merge.
+The H100 implementation and the B200 H=128/256 paths retain the previous
+Gate 2a kernel while the remaining schedule donors are transplanted.
+
+`make modal-cutlass GATE=greedy-provider` passed all 52 provider cases and all
+18 shared pytest cases on both H100 and B200 after this change.
+The B200 model-shape cases exercise the new path at H=1,2,4,8,16,32,64.
+The next implementation step is to add the H=128 donor dispatches followed by
+the `256x256x64` H=256 donor, then rerun this matrix before Gate 2b timing.
+
 ## Modal runner note
 
 The system Modal client repeatedly failed TLS and heartbeat operations during

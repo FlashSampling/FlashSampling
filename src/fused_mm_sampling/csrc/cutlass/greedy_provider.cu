@@ -8,6 +8,18 @@
 #define FMMS_CUTLASS_DISABLE_D
 #include "evt_candidates.cu"
 
+#if defined(FMMS_ARCH_SM100)
+namespace fmms_cutlass_winning {
+void launch_128x64x128_c2(
+    torch::Tensor weights,
+    torch::Tensor padded_hidden_states,
+    torch::Tensor candidates,
+    torch::Tensor output,
+    int gemm_n,
+    int rounded_n);
+}
+#endif
+
 namespace fmms_cutlass_greedy {
 
 using namespace cute;
@@ -378,6 +390,22 @@ torch::Tensor greedy(torch::Tensor weights, torch::Tensor hidden_states) {
   int n = int(hidden_states.size(0));
   int k = int(weights.size(1));
   int gemm_n = ((n + 3) / 4) * 4;
+#if defined(FMMS_ARCH_SM100)
+  if (n <= 64) {
+    constexpr int winning_tile_n = 64;
+    int rounded_n = winning_tile_n;
+    auto padded_hidden_states =
+        torch::zeros({gemm_n, k}, hidden_states.options());
+    padded_hidden_states.narrow(0, 0, n).copy_(hidden_states);
+    auto candidates = torch::empty(
+        {rounded_n * int64_t(sizeof(PackedCandidate))},
+        weights.options().dtype(torch::kUInt8));
+    auto output = torch::empty({n, 1}, weights.options().dtype(torch::kInt64));
+    fmms_cutlass_winning::launch_128x64x128_c2(
+        weights, padded_hidden_states, candidates, output, gemm_n, rounded_n);
+    return output;
+  }
+#endif
   int m_tiles = (m + kTileM - 1) / kTileM;
   int rounded_n = ((gemm_n + kTileN - 1) / kTileN) * kTileN;
   auto byte_options = weights.options().dtype(torch::kUInt8);

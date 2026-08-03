@@ -126,7 +126,10 @@ def _get_module():
             raise RuntimeError("The CUTLASS greedy provider supports SM90 and SM100 only")
         _module = load(
             name=f"fmms_cutlass_greedy_sm{architecture}",
-            sources=[str(_CSRC_DIR / "greedy_provider.cu")],
+            sources=[
+                str(_CSRC_DIR / "greedy_provider.cu"),
+                str(_CSRC_DIR / "winning_schedule_provider.cu"),
+            ],
             extra_include_paths=include_dirs,
             extra_cuda_cflags=[
                 "-O3",
