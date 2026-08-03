@@ -35,6 +35,9 @@ namespace fmms_evt_candidates {
 #ifndef FMMS_TILE_K
 #define FMMS_TILE_K 64
 #endif
+#ifndef FMMS_CLUSTER_M
+#define FMMS_CLUSTER_M 2
+#endif
 
 constexpr int kTileM = FMMS_TILE_M;
 constexpr int kTileN = FMMS_TILE_N;
@@ -261,9 +264,13 @@ struct PackCandidate {
 #if defined(FMMS_SM100_2SM)
         int consumer_thread = int(threadIdx.x) - 128;
         // SM100 2-SM schedules expose an M tile coordinate per cooperating
-        // CTA. Each CTA owns 64 rows, so tile_m already incorporates the
-        // cluster rank. Adding the rank here would double-count CTA 1.
-        int local_m = consumer_thread % 64;
+        // CTA. A CTA owns half of the cluster's M tile, so tile_m already
+        // incorporates the cluster rank. Adding the rank here would
+        // double-count the second CTA. Gate 2d's ownership diagnostic shows
+        // that the 128-row family folds the two 64-thread consumer groups
+        // onto the same M rows, while each thread owns one M row for the
+        // 256-row families.
+        int local_m = kTileM == 128 ? consumer_thread % 64 : consumer_thread;
 #else
         int local_m = int(threadIdx.x) - 128;
 #endif
@@ -354,7 +361,7 @@ struct DiscardPackedOutput {
 
 using TileShape = Shape<Int<FMMS_TILE_M>, Int<FMMS_TILE_N>, Int<FMMS_TILE_K>>;
 #if defined(FMMS_SM100_2SM)
-using ClusterShape = Shape<_2, _1, _1>;
+using ClusterShape = Shape<Int<FMMS_CLUSTER_M>, _1, _1>;
 #else
 using ClusterShape = Shape<_1, _1, _1>;
 #endif

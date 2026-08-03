@@ -405,8 +405,28 @@ def add_cutlass_winning_schedule_layout(image: modal.Image) -> modal.Image:
 
 
 def add_cutlass_winning_schedule_evt(image: modal.Image) -> modal.Image:
-    """Add the first Gate 2d fused-EVT schedule experiment."""
+    """Add Gate 2d fused-EVT experiments for every winning B200 schedule."""
     csrc_root = _repo_root / "src/fused_mm_sampling/csrc/cutlass"
+    include_flags = (
+        f"-I{CUTLASS_ROOT}/include -I{CUTLASS_ROOT}/tools/util/include"
+    )
+    variants = (
+        ("128x64x128-c2", 128, 64, 128, 2),
+        ("256x128x64-c2", 256, 128, 64, 2),
+        ("256x128x64-c4", 256, 128, 64, 4),
+        ("256x128x128-c2", 256, 128, 128, 2),
+        ("256x256x64-c2", 256, 256, 64, 2),
+    )
+    commands = [
+        "nvcc -std=c++17 -O2 -lineinfo --expt-relaxed-constexpr "
+        "-arch=sm_100a -DFMMS_ARCH_SM100 -DFMMS_SM100_2SM "
+        "-DFMMS_FINAL_REDUCTION "
+        f"-DFMMS_TILE_M={tile_m} -DFMMS_TILE_N={tile_n} "
+        f"-DFMMS_TILE_K={tile_k} -DFMMS_CLUSTER_M={cluster_m} "
+        f"{include_flags} /opt/fmms/evt_candidates.cu "
+        f"-o /opt/fmms/cutlass_winning_evt_{name}"
+        for name, tile_m, tile_n, tile_k, cluster_m in variants
+    ]
     return (
         image.add_local_file(
             str(csrc_root / "evt_candidates.cu"),
@@ -419,13 +439,8 @@ def add_cutlass_winning_schedule_evt(image: modal.Image) -> modal.Image:
             copy=True,
         )
         .run_commands(
-        f"cd {CUTLASS_ROOT} && git apply /opt/fmms/sm90-row-reduction-uint64.patch",
-        f"nvcc -std=c++17 -O2 -lineinfo --expt-relaxed-constexpr"
-        " -arch=sm_100a -DFMMS_ARCH_SM100 -DFMMS_SM100_2SM"
-        " -DFMMS_FINAL_REDUCTION"
-        " -DFMMS_TILE_M=128 -DFMMS_TILE_N=64 -DFMMS_TILE_K=128"
-        f" -I{CUTLASS_ROOT}/include -I{CUTLASS_ROOT}/tools/util/include"
-        " /opt/fmms/evt_candidates.cu"
-        " -o /opt/fmms/cutlass_winning_evt_128x64x128_c2"
+            f"cd {CUTLASS_ROOT} && "
+            "git apply /opt/fmms/sm90-row-reduction-uint64.patch",
+            *commands,
         )
     )

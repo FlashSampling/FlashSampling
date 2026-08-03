@@ -2,7 +2,8 @@
 
 ## Status
 
-The first 2-SM fused-EVT experiment passes deterministic correctness on B200.
+All five Gate 2c winning 2-SM fused-EVT schedule instantiations pass
+deterministic correctness on B200.
 
 Run the experiment with:
 
@@ -10,7 +11,8 @@ Run the experiment with:
 make modal-cutlass GATE=winning-schedule-evt
 ```
 
-The gate currently targets the B200 128x64x128 schedule with cluster `(2,1,1)`.
+The gate covers 128x64x128 with cluster M=2, 256x128x64 with cluster M=2
+and M=4, 256x128x128 with cluster M=2, and 256x256x64 with cluster M=2.
 
 ## Direct per-tile reduction failure
 
@@ -49,11 +51,17 @@ CTA owns 64 rows.
 The extra cluster-rank offset double-counted CTA 1.
 
 The corrected global index is `cta_m * 64 + consumer_thread % 64`.
-With this mapping, all 400 exact candidate comparisons pass across complete and
-partial M/N shapes, all-negative inputs, within-tile ties, cross-CTA ties, and
-cross-cluster ties.
-Compute Sanitizer memcheck reports zero errors and racecheck reports zero
-hazards, errors, or warnings.
+The 256-row schedule families use
+`global_m = cta_m * 128 + consumer_thread`, as established by Gate 2d's
+ownership diagnostic.
+The cluster-M value is now a compile-time parameter instead of being fixed at
+two.
+
+With these mappings, all 2,000 exact candidate comparisons pass across the
+five schedule instantiations, complete and partial M/N shapes, all-negative
+inputs, within-tile ties, cross-CTA ties, and cross-cluster ties.
+Compute Sanitizer memcheck reports zero errors for every schedule, and
+racecheck reports zero hazards, errors, or warnings for every schedule.
 The original Gate 1g regression also still passes all 1,744 exact comparisons
 and both sanitizers on H100 and B200.
 
