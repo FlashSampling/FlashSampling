@@ -284,3 +284,7 @@ Makefile variables use `:=` assignment, so environment variables do NOT override
 - The `all` vLLM sweep covers batch sizes 1, 2, 4, 8, 16, 32, and 64. Figure 5 and its rebuttal aggregate do not use batch sizes 128 or 256.
 - A combined Qwen3-8B invocation stopped after 27 minutes during FI2: baseline completed, FI2 reached batch size 8, and FlashSampling never started. This was not the two-hour function timeout. The cause was not established, so use one app per provider and resume partial experiments when applicable.
 - Dates inside vLLM `summary.csv` are UTC, while `modal app list --json` renders app timestamps in the local timezone. Convert them before comparing benchmark completion with app lifetime. Completed Qwen3-8B FI2 and FlashSampling apps stopped within 5–6 seconds of their final summary row.
+
+## Current CUTLASS handoff
+
+- Gate 2c passed on B200. Gate 2d accumulator ownership passed for all five winning 2-SM GEMM schedule instantiations with `make modal-cutlass GATE=winning-schedule-layout`. The 128x64, 256x128, and 256x256 output tiles require three distinct coordinate formulas; see `findings/cutlass/20-winning-schedule-accumulator-layout.md`. The fused epilogue transplant is next.

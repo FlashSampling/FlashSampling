@@ -31,7 +31,9 @@ def _record(executable: str, architecture: str) -> tuple[str, dict]:
 
     csv_text = subprocess.check_output([executable], text=True)
     mapping = pd.read_csv(StringIO(csv_text))
-    expected_columns = ["m", "n", "thread", "fragment", "epi_v", "epi_m", "epi_n"]
+    expected_columns = [
+        "m", "n", "thread", "fragment", "epi_v", "epi_m", "epi_n", "cta"
+    ]
     if mapping.columns.tolist() != expected_columns:
         raise RuntimeError(f"Unexpected columns: {mapping.columns.tolist()}")
     if len(mapping) != M * N:
@@ -51,6 +53,7 @@ def _record(executable: str, architecture: str) -> tuple[str, dict]:
         "epilogue_vectors": sorted(mapping["epi_v"].unique().tolist()),
         "fragment_slots": sorted(mapping["fragment"].unique().tolist()),
         "threads": sorted(mapping["thread"].unique().tolist()),
+        "ctas": sorted(mapping["cta"].unique().tolist()),
     }
     print(json.dumps(summary, indent=2))
     return csv_text, summary

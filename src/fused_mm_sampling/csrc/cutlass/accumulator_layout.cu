@@ -20,9 +20,19 @@ using namespace cute;
 
 namespace fmms_layout {
 
-constexpr int kM = 128;
-constexpr int kN = 128;
-constexpr int kK = 64;
+#ifndef FMMS_TILE_M
+#define FMMS_TILE_M 128
+#endif
+#ifndef FMMS_TILE_N
+#define FMMS_TILE_N 128
+#endif
+#ifndef FMMS_TILE_K
+#define FMMS_TILE_K 64
+#endif
+
+constexpr int kM = FMMS_TILE_M;
+constexpr int kN = FMMS_TILE_N;
+constexpr int kK = FMMS_TILE_K;
 
 void check_cuda(cudaError_t status, char const* operation) {
   if (status != cudaSuccess) {
@@ -107,12 +117,14 @@ struct FragmentOwnershipEncoder {
       cutlass::Array<float, FragmentSize> output;
       CUTLASS_PRAGMA_UNROLL
       for (int fragment = 0; fragment < FragmentSize; ++fragment) {
-        // The packed integer is exactly representable in FP32 for the supported ranges.
+        // The complete record remains below 2^24 and is therefore exactly
+        // representable in the diagnostic FP32 output.
         uint32_t code = uint32_t(threadIdx.x)
             | (uint32_t(fragment) << 8)
             | (uint32_t(epi_v) << 13)
-            | (uint32_t(epi_m) << 17)
-            | (uint32_t(epi_n) << 20);
+            | (uint32_t(epi_m) << 15)
+            | (uint32_t(epi_n) << 18)
+            | (uint32_t(blockIdx.x & 0x3) << 22);
         output[fragment] = float(code);
       }
       return output;
@@ -135,12 +147,22 @@ using MainloopSchedule = cutlass::gemm::KernelTmaWarpSpecialized;
 using EpilogueSchedule = cutlass::epilogue::TmaWarpSpecialized;
 #elif defined(FMMS_ARCH_SM100)
 using ArchTag = cutlass::arch::Sm100;
+#if defined(FMMS_SM100_2SM)
+#ifndef FMMS_CLUSTER_M
+#define FMMS_CLUSTER_M 2
+#endif
+using TileShape = Shape<Int<FMMS_TILE_M>, Int<FMMS_TILE_N>, Int<FMMS_TILE_K>>;
+using ClusterShape = Shape<Int<FMMS_CLUSTER_M>, _1, _1>;
+using MainloopSchedule = cutlass::gemm::KernelTmaWarpSpecialized2SmSm100;
+using EpilogueSchedule = cutlass::epilogue::TmaWarpSpecialized2Sm;
+#else
 using TileShape = Shape<_128, _128, _64>;
 using ClusterShape = Shape<_1, _1, _1>;
-using EpilogueTile = cutlass::epilogue::collective::EpilogueTileAuto;
 using MainloopSchedule = cutlass::gemm::KernelTmaWarpSpecialized1SmSm100;
 using EpilogueSchedule =
     cutlass::epilogue::TmaWarpSpecialized1Sm;
+#endif
+using EpilogueTile = cutlass::epilogue::collective::EpilogueTileAuto;
 #else
 #error "Compile with FMMS_ARCH_SM90 or FMMS_ARCH_SM100"
 #endif
@@ -265,17 +287,18 @@ void run_diagnostic() {
           cudaMemcpyDeviceToHost),
       "copy output");
 
-  std::cout << "m,n,thread,fragment,epi_v,epi_m,epi_n\n";
+  std::cout << "m,n,thread,fragment,epi_v,epi_m,epi_n,cta\n";
   for (int m = 0; m < kM; ++m) {
     for (int n = 0; n < kN; ++n) {
       uint32_t code = uint32_t(output[m * kN + n]);
       uint32_t thread = code & 0xff;
       uint32_t fragment = (code >> 8) & 0x1f;
-      uint32_t epi_v = (code >> 13) & 0xf;
-      uint32_t epi_m = (code >> 17) & 0x7;
-      uint32_t epi_n = (code >> 20) & 0x7;
+      uint32_t epi_v = (code >> 13) & 0x3;
+      uint32_t epi_m = (code >> 15) & 0x7;
+      uint32_t epi_n = (code >> 18) & 0xf;
+      uint32_t cta = (code >> 22) & 0x3;
       std::cout << m << ',' << n << ',' << thread << ',' << fragment << ','
-                << epi_v << ',' << epi_m << ',' << epi_n << '\n';
+                << epi_v << ',' << epi_m << ',' << epi_n << ',' << cta << '\n';
     }
   }
 

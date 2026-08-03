@@ -1504,7 +1504,8 @@ packet based on cross-run minima or undocumented padding/layout differences.
 
 #### Gate 2d: transplant the winning B200 schedules into FMMS
 
-**Status:** blocked on Gate 2c.
+**Status:** Gate 2c passed. The Gate 2d B200 ownership diagnostic passed all
+five winning schedule instantiations. The fused epilogue transplant is next.
 
 Reproduce only the measured B200 winning schedule families in the production
 C++ builder.
