@@ -65,21 +65,25 @@ racecheck reports zero hazards, errors, or warnings for every schedule.
 The original Gate 1g regression also still passes all 1,744 exact comparisons
 and both sanitizers on H100 and B200.
 
-## First production transplant
+## Production transplant
 
-The production provider now dispatches B200 H<=64 to the Gate 2c
-`128x64x128` 2-SM cluster-(2,1,1) donor.
+The production provider now dispatches the complete B200 H=1 through H=256
+sweep to the Gate 2c schedule donors.
+H<=64 uses `128x64x128` 2-SM cluster (2,1,1).
+At H=128, D=4,096 uses `256x128x64` 2-SM cluster (4,1,1), while D=8,192
+uses `256x128x128` 2-SM cluster (2,1,1).
+H=256 uses `256x256x64` 2-SM cluster (2,1,1) for both primary shapes.
 The provider uses the correctness-approved 64-bit atomic final reduction, so
-this path writes one final candidate per hidden state and no longer launches
-the separate Stage 2 merge.
-The H100 implementation and the B200 H=128/256 paths retain the previous
-Gate 2a kernel while the remaining schedule donors are transplanted.
+these paths write one final candidate per hidden state and do not launch the
+separate Stage 2 merge.
+The H100 implementation retains the previous Gate 2a kernel.
 
 `make modal-cutlass GATE=greedy-provider` passed all 52 provider cases and all
 18 shared pytest cases on both H100 and B200 after this change.
-The B200 model-shape cases exercise the new path at H=1,2,4,8,16,32,64.
-The next implementation step is to add the H=128 donor dispatches followed by
-the `256x256x64` H=256 donor, then rerun this matrix before Gate 2b timing.
+The B200 model-shape cases exercise every transplanted donor and the boundary
+and tie cases continue to pass.
+The next step is to rerun Gate 2b timing against `torch.mm` plus argmax and the
+matching plain CUTLASS winners.
 
 ## Modal runner note
 
