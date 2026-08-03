@@ -124,7 +124,7 @@ struct FragmentOwnershipEncoder {
             | (uint32_t(epi_v) << 13)
             | (uint32_t(epi_m) << 15)
             | (uint32_t(epi_n) << 18)
-            | (uint32_t(blockIdx.x & 0x3) << 22);
+            | (uint32_t(block_rank_in_cluster() & 0x3) << 22);
         output[fragment] = float(code);
       }
       return output;

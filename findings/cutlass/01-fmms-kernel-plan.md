@@ -1504,8 +1504,10 @@ packet based on cross-run minima or undocumented padding/layout differences.
 
 #### Gate 2d: transplant the winning B200 schedules into FMMS
 
-**Status:** Gate 2c passed. The Gate 2d B200 ownership diagnostic passed all
-five winning schedule instantiations. The fused epilogue transplant is next.
+**Status:** Gate 2c passed and the Gate 2d B200 ownership diagnostic passed all
+five winning schedule instantiations. The first 2-SM fused-EVT transplant now
+passes exact boundary and tie comparisons plus memcheck and racecheck on B200.
+See `21-winning-schedule-evt.md` before changing the production provider.
 
 Reproduce only the measured B200 winning schedule families in the production
 C++ builder.
@@ -2065,6 +2067,9 @@ newer revision.
 - `findings/cutlass/18-ordinary-gemm-stage-no-go.md` - the explicit-stage
   no-go for the manual cluster-1 family and the correction that reopens Gate
   2c.
+- `findings/cutlass/21-winning-schedule-evt.md` - the first correct 2-SM
+  fused-EVT reduction and the per-CTA M-coordinate rule that prevents
+  double-counting the cluster rank.
 - `findings/cutlass/02-topk-softmax-epilogue.md` - detailed analysis of
   example 61, including the constraints that motivate this plan's
   two-stage architecture.

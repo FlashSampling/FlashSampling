@@ -26,9 +26,19 @@ using namespace cute;
 
 namespace fmms_evt_candidates {
 
-constexpr int kTileM = 128;
-constexpr int kTileN = 128;
-constexpr int kK = 64;
+#ifndef FMMS_TILE_M
+#define FMMS_TILE_M 128
+#endif
+#ifndef FMMS_TILE_N
+#define FMMS_TILE_N 128
+#endif
+#ifndef FMMS_TILE_K
+#define FMMS_TILE_K 64
+#endif
+
+constexpr int kTileM = FMMS_TILE_M;
+constexpr int kTileN = FMMS_TILE_N;
+constexpr int kK = FMMS_TILE_K;
 
 #if defined(FMMS_ARCH_SM90)
 constexpr char const* kArchitecture = "sm90";
@@ -39,8 +49,13 @@ using EpilogueTile = Shape<_64, _32>;
 #elif defined(FMMS_ARCH_SM100)
 constexpr char const* kArchitecture = "sm100";
 using ArchTag = cutlass::arch::Sm100;
+#if defined(FMMS_SM100_2SM)
+using MainloopSchedule = cutlass::gemm::KernelTmaWarpSpecialized2SmSm100;
+using EpilogueSchedule = cutlass::epilogue::TmaWarpSpecialized2Sm;
+#else
 using MainloopSchedule = cutlass::gemm::KernelTmaWarpSpecialized1SmSm100;
 using EpilogueSchedule = cutlass::epilogue::TmaWarpSpecialized1Sm;
+#endif
 using EpilogueTile = cutlass::epilogue::collective::EpilogueTileAuto;
 #else
 #error "Compile with FMMS_ARCH_SM90 or FMMS_ARCH_SM100"
@@ -103,6 +118,76 @@ struct CandidateReduce<PackedCandidate> {
     return choose_candidate(lhs, rhs);
   }
 };
+
+template <class T>
+struct AtomicCandidateReduce {
+  CUTLASS_DEVICE void operator()(T* pointer, T candidate) const {
+    auto* bits = reinterpret_cast<unsigned long long*>(pointer);
+    unsigned long long observed = atomicCAS(bits, 0, 0);
+    while (true) {
+      unsigned long long assumed = observed;
+      T winner = choose_candidate(T(assumed), candidate);
+      if (winner == T(assumed)) {
+        return;
+      }
+      observed = atomicCAS(bits, assumed, static_cast<unsigned long long>(winner));
+      if (observed == assumed) {
+        return;
+      }
+    }
+  }
+};
+
+}  // namespace fmms_evt_candidates
+
+namespace cutlass {
+
+template <class T>
+struct is_atomic<fmms_evt_candidates::AtomicCandidateReduce<T>>
+    : platform::true_type {};
+
+}  // namespace cutlass
+
+namespace fmms_evt_candidates {
+
+#if defined(FMMS_FINAL_REDUCTION)
+void check_cuda(cudaError_t status, char const* operation);
+
+__global__ void atomic_candidate_tie_kernel(PackedCandidate* output) {
+  int index = threadIdx.x == 0 ? 254 : 126;
+  AtomicCandidateReduce<PackedCandidate>{}(
+      output, pack_candidate(-872.0f, index));
+}
+
+void verify_atomic_candidate_tie() {
+  PackedCandidate identity = pack_candidate(-INFINITY, INT_MAX);
+  PackedCandidate* device_output;
+  check_cuda(cudaMalloc(&device_output, sizeof(PackedCandidate)), "malloc atomic tie");
+  check_cuda(
+      cudaMemcpy(
+          device_output,
+          &identity,
+          sizeof(PackedCandidate),
+          cudaMemcpyHostToDevice),
+      "initialize atomic tie");
+  atomic_candidate_tie_kernel<<<1, 2>>>(device_output);
+  check_cuda(cudaGetLastError(), "launch atomic tie");
+  PackedCandidate actual;
+  check_cuda(
+      cudaMemcpy(
+          &actual,
+          device_output,
+          sizeof(PackedCandidate),
+          cudaMemcpyDeviceToHost),
+      "copy atomic tie");
+  check_cuda(cudaFree(device_output), "free atomic tie");
+  if (actual != pack_candidate(-872.0f, 126)) {
+    std::cerr << "standalone atomic tie failed: expected index 126, actual "
+              << candidate_index(actual) << '\n';
+    std::exit(EXIT_FAILURE);
+  }
+}
+#endif
 
 struct PackCandidate {
   struct SharedStorage {};
@@ -173,9 +258,21 @@ struct PackCandidate {
         int local_m =
             warp * 16 + lane / 4 + epi_m * 64 + ((i % 4) / 2) * 8;
 #else
+#if defined(FMMS_SM100_2SM)
+        int consumer_thread = int(threadIdx.x) - 128;
+        // SM100 2-SM schedules expose an M tile coordinate per cooperating
+        // CTA. Each CTA owns 64 rows, so tile_m already incorporates the
+        // cluster rank. Adding the rank here would double-count CTA 1.
+        int local_m = consumer_thread % 64;
+#else
         int local_m = int(threadIdx.x) - 128;
 #endif
+#endif
+#if defined(FMMS_SM100_2SM)
+        int global_m = tile_m * (kTileM / 2) + local_m;
+#else
         int global_m = tile_m * kTileM + local_m;
+#endif
         output[i] = pack_candidate(float(accumulators[i]), global_m);
       }
       return output;
@@ -255,8 +352,12 @@ struct DiscardPackedOutput {
   }
 };
 
-using TileShape = Shape<_128, _128, _64>;
+using TileShape = Shape<Int<FMMS_TILE_M>, Int<FMMS_TILE_N>, Int<FMMS_TILE_K>>;
+#if defined(FMMS_SM100_2SM)
+using ClusterShape = Shape<_2, _1, _1>;
+#else
 using ClusterShape = Shape<_1, _1, _1>;
+#endif
 using ElementA = cutlass::bfloat16_t;
 using ElementB = cutlass::bfloat16_t;
 // The packed auxiliary candidate buffer is the gate output. Gate 1 keeps an
@@ -277,7 +378,11 @@ using LayoutD = cutlass::layout::RowMajor;
 using RowReduction = cutlass::epilogue::fusion::Sm90RowReduction<
     CandidateReduce,
     CandidateReduce,
+#if defined(FMMS_FINAL_REDUCTION)
+    AtomicCandidateReduce,
+#else
     CandidateReduce,
+#endif
     0,
     TileShape,
     PackedCandidate,
@@ -286,7 +391,11 @@ using RowReduction = cutlass::epilogue::fusion::Sm90RowReduction<
     Stride<_0, _1, _0>,
     2,
     false,
+#if defined(FMMS_FINAL_REDUCTION)
+    true,
+#else
     false,
+#endif
     true>;
 using CandidateReductionEVT = cutlass::epilogue::fusion::Sm90EVT<
     RowReduction,
@@ -488,6 +597,17 @@ void run_case(Case const& test_case) {
   StrideD stride_d{
       int64_t(rounded_n), _1{}, int64_t(test_case.m) * rounded_n};
   PackedCandidate identity = pack_candidate(-INFINITY, INT_MAX);
+#if defined(FMMS_FINAL_REDUCTION)
+  std::vector<PackedCandidate> candidate_identities(
+      m_tiles * rounded_n, identity);
+  check_cuda(
+      cudaMemcpy(
+          device_candidates,
+          candidate_identities.data(),
+          candidate_identities.size() * sizeof(PackedCandidate),
+          cudaMemcpyHostToDevice),
+      "initialize candidate identities");
+#endif
 
   typename CandidateEVT::Arguments evt_arguments{
       {},
@@ -545,6 +665,31 @@ void run_case(Case const& test_case) {
       "copy final candidates");
 #endif
 
+#if defined(FMMS_FINAL_REDUCTION)
+  for (int n = 0; n < test_case.n; ++n) {
+    PackedCandidate expected = identity;
+    for (int m = 0; m < test_case.m; ++m) {
+      expected = choose_candidate(
+          expected,
+          pack_candidate(
+              float(matrix_a[m * kK]) * float(matrix_b[n * kK]),
+              m));
+    }
+    PackedCandidate actual = candidates[n];
+    int passed = actual == expected;
+    std::cout << kArchitecture << ',' << test_case.family << ','
+              << test_case.name << ',' << test_case.m << ','
+              << test_case.n << ',' << kK << ",-1," << n
+              << ",0," << test_case.m << ','
+              << uint32_t(expected >> 32) << ','
+              << uint32_t(actual >> 32) << ','
+              << candidate_index(expected) << ','
+              << candidate_index(actual) << ',' << passed << '\n';
+    if (!passed) {
+      std::exit(EXIT_FAILURE);
+    }
+  }
+#else
   for (int tile = 0; tile < m_tiles; ++tile) {
     int begin = tile * kTileM;
     int end = std::min(begin + kTileM, test_case.m);
@@ -583,6 +728,7 @@ void run_case(Case const& test_case) {
       }
     }
   }
+#endif
 
 #if defined(FMMS_GATE_STAGE2)
   for (int n = 0; n < test_case.n; ++n) {
@@ -625,6 +771,9 @@ void run_case(Case const& test_case) {
 #if !defined(FMMS_CUTLASS_LIBRARY)
 int main() {
   using fmms_evt_candidates::Case;
+#if defined(FMMS_FINAL_REDUCTION)
+  fmms_evt_candidates::verify_atomic_candidate_tie();
+#endif
 #if defined(FMMS_GATE_STAGE2)
   std::vector<Case> cases{
       {"winner_tiles", "winner_first_tile", 257, 4, 5},

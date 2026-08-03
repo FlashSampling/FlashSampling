@@ -402,3 +402,30 @@ def add_cutlass_winning_schedule_layout(image: modal.Image) -> modal.Image:
         remote_path=source,
         copy=True,
     ).run_commands(*commands)
+
+
+def add_cutlass_winning_schedule_evt(image: modal.Image) -> modal.Image:
+    """Add the first Gate 2d fused-EVT schedule experiment."""
+    csrc_root = _repo_root / "src/fused_mm_sampling/csrc/cutlass"
+    return (
+        image.add_local_file(
+            str(csrc_root / "evt_candidates.cu"),
+            remote_path="/opt/fmms/evt_candidates.cu",
+            copy=True,
+        )
+        .add_local_file(
+            str(csrc_root / "sm90-row-reduction-uint64.patch"),
+            remote_path="/opt/fmms/sm90-row-reduction-uint64.patch",
+            copy=True,
+        )
+        .run_commands(
+        f"cd {CUTLASS_ROOT} && git apply /opt/fmms/sm90-row-reduction-uint64.patch",
+        f"nvcc -std=c++17 -O2 -lineinfo --expt-relaxed-constexpr"
+        " -arch=sm_100a -DFMMS_ARCH_SM100 -DFMMS_SM100_2SM"
+        " -DFMMS_FINAL_REDUCTION"
+        " -DFMMS_TILE_M=128 -DFMMS_TILE_N=64 -DFMMS_TILE_K=128"
+        f" -I{CUTLASS_ROOT}/include -I{CUTLASS_ROOT}/tools/util/include"
+        " /opt/fmms/evt_candidates.cu"
+        " -o /opt/fmms/cutlass_winning_evt_128x64x128_c2"
+        )
+    )

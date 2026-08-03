@@ -1,0 +1,20 @@
+diff --git a/include/cutlass/epilogue/fusion/sm90_visitor_store_tma_warpspecialized.hpp b/include/cutlass/epilogue/fusion/sm90_visitor_store_tma_warpspecialized.hpp
+index 7a197ce..4a422db 100644
+--- a/include/cutlass/epilogue/fusion/sm90_visitor_store_tma_warpspecialized.hpp
++++ b/include/cutlass/epilogue/fusion/sm90_visitor_store_tma_warpspecialized.hpp
+@@ -1165,7 +1165,14 @@ struct Sm90RowReduction {
+       auto [M, N, K, L] = problem_shape_mnkl;
+       Layout mRow_layout = make_layout(make_shape(size<>(M),size<>(N),size<>(L)), args.dRow);
+       if (args.ptr_row != nullptr) {
+-        return fill_workspace(args.ptr_row, ElementOutput(args.reduction_identity), cosize(mRow_layout), stream, cuda_adapter);
++        if constexpr (sizeof(ElementOutput) <= 4) {
++          return fill_workspace(args.ptr_row, ElementOutput(args.reduction_identity), cosize(mRow_layout), stream, cuda_adapter);
++        }
++        else {
++          // CUTLASS fill_workspace has no 64-bit driver memset. The caller
++          // must initialize custom 64-bit atomic reduction outputs.
++          return Status::kSuccess;
++        }
+       }
+       return Status::kSuccess;
+     }
