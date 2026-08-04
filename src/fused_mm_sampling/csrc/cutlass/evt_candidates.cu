@@ -13,6 +13,7 @@
 #include <cuda_runtime.h>
 
 #include "cute/tensor.hpp"
+#include "cutlass/arch/barrier.h"
 #include "cutlass/cutlass.h"
 #include "cutlass/epilogue/collective/collective_builder.hpp"
 #include "cutlass/epilogue/fusion/operations.hpp"
@@ -30,7 +31,12 @@ using namespace cute;
 namespace fmms_evt_candidates {
 
 #if defined(FMMS_GUMBEL)
-__device__ __noinline__ float gumbel_noise(
+#if defined(FMMS_INLINE_GUMBEL)
+__device__ __forceinline__
+#else
+__device__ __noinline__
+#endif
+float gumbel_noise(
     uint64_t seed,
     uint32_t sample_idx,
     uint32_t hidden_idx,
@@ -38,7 +44,11 @@ __device__ __noinline__ float gumbel_noise(
   auto random = fmms::philox4x32_10(
       seed, sample_idx, hidden_idx, vocab_idx);
   float uniform = fmms::uniform_open_open(random.x);
+#if defined(FMMS_FAST_LOG)
+  return -__logf(-__logf(uniform));
+#else
   return -logf(-logf(uniform));
+#endif
 }
 #endif
 
@@ -279,6 +289,7 @@ struct PackCandidate {
   struct ConsumerStoreCallbacks
       : cutlass::epilogue::fusion::EmptyConsumerStoreCallbacks {
     int tile_m;
+    int problem_m;
 #if defined(FMMS_GUMBEL)
     int tile_n;
     Params params;
@@ -307,6 +318,21 @@ struct PackCandidate {
       CUTLASS_PRAGMA_UNROLL
 #endif
       for (int i = 0; i < FragmentSize; ++i) {
+        output[i] = visit_one<ElementAccumulator, FragmentSize>(
+            accumulators[i], i, epi_v, epi_m, epi_n);
+      }
+      return output;
+    }
+
+    template <
+        typename ElementAccumulator,
+        int FragmentSize>
+    CUTLASS_DEVICE PackedCandidate visit_one(
+        ElementAccumulator accumulator,
+        int i,
+        int epi_v,
+        int epi_m,
+        int epi_n) {
 #if defined(FMMS_ARCH_SM90)
         int consumer_thread = int(threadIdx.x) - 128;
         int warp = consumer_thread / 32;
@@ -333,32 +359,48 @@ struct PackCandidate {
 #else
         int global_m = tile_m * kTileM + local_m;
 #endif
-#if defined(FMMS_GUMBEL)
-#if defined(FMMS_SM100_2SM)
-        int local_n;
-        if constexpr (kTileM == 128) {
-          local_n = 32 * (consumer_thread / 64) + 16 * epi_n + i;
-        } else if constexpr (kTileN == 128) {
-          local_n = 16 * epi_n + i;
-        } else {
-          local_n = 32 * epi_n + i;
+        if (global_m >= problem_m) {
+          return pack_candidate(-INFINITY, INT_MAX);
         }
-#else
-        int local_n = 16 * epi_n + i;
-#endif
-        int global_n = tile_n * kTileN + local_n;
+#if defined(FMMS_GUMBEL)
+        int global_n = global_n_for<FragmentSize>(i, epi_n);
         int hidden_idx = global_n % params.original_n;
         int sample_idx = params.sample_base + global_n / params.original_n;
         float gumbel = gumbel_noise(
             params.seed, uint32_t(sample_idx), uint32_t(hidden_idx),
             uint64_t(global_m));
-        float value = float(accumulators[i]) / *params.temperature + gumbel;
-        output[i] = pack_candidate(value, global_m);
+#if defined(FMMS_FAST_DIV)
+        float scaled = __fdividef(float(accumulator), *params.temperature);
 #else
-        output[i] = pack_candidate(float(accumulators[i]), global_m);
+        float scaled = float(accumulator) / *params.temperature;
 #endif
+        float value = scaled + gumbel;
+        return pack_candidate(value, global_m);
+#else
+        return pack_candidate(float(accumulator), global_m);
+#endif
+    }
+
+    template <int FragmentSize>
+    CUTLASS_DEVICE int global_n_for(int i, int epi_n) const {
+#if defined(FMMS_SM100_2SM)
+      int consumer_thread = int(threadIdx.x) - 128;
+      int local_n;
+      if constexpr (kTileM == 128) {
+        local_n =
+            2 * FragmentSize * (consumer_thread / 64) +
+            FragmentSize * epi_n + i;
+      } else {
+        local_n = FragmentSize * epi_n + i;
       }
-      return output;
+#else
+      int local_n = 16 * epi_n + i;
+#endif
+#if defined(FMMS_GUMBEL)
+      return tile_n * kTileN + local_n;
+#else
+      return local_n;
+#endif
     }
   };
 
@@ -366,7 +408,8 @@ struct PackCandidate {
   CUTLASS_DEVICE auto get_consumer_store_callbacks(
       cutlass::epilogue::fusion::detail::ConsumerStoreArgs<Args...> const& args) {
     return ConsumerStoreCallbacks{
-        {}, int(get<0>(args.tile_coord_mnkl))
+        {}, int(get<0>(args.tile_coord_mnkl)),
+        int(get<0>(args.problem_shape_mnkl))
 #if defined(FMMS_GUMBEL)
         , int(get<1>(args.tile_coord_mnkl)), params
 #endif
@@ -493,7 +536,160 @@ using RowReduction = cutlass::epilogue::fusion::Sm90RowReduction<
 using CandidateReductionEVT = cutlass::epilogue::fusion::Sm90EVT<
     RowReduction,
     cutlass::epilogue::fusion::Sm90AccFetch>;
-struct CandidateEVT
+
+struct WarpGroupOutput {
+  using Arguments = typename CandidateReductionEVT::Arguments;
+  struct SharedStorage {
+    alignas(16) PackedCandidate warp_candidates[4 * 16];
+  };
+  struct Params {
+    PackedCandidate* output;
+  };
+
+  template <class ProblemShape>
+  static constexpr Params to_underlying_arguments(
+      ProblemShape const&, Arguments const& arguments, void*) {
+    return {reinterpret_cast<PackedCandidate*>(arguments.op_1.ptr_row)};
+  }
+
+  template <class ProblemShape>
+  static bool can_implement(ProblemShape const&, Arguments const&) {
+    return true;
+  }
+
+  template <class ProblemShape>
+  static size_t get_workspace_size(ProblemShape const&, Arguments const&) {
+    return 0;
+  }
+
+  template <class ProblemShape>
+  static cutlass::Status initialize_workspace(
+      ProblemShape const&,
+      Arguments const&,
+      void*,
+      cudaStream_t,
+      cutlass::CudaHostAdapter* = nullptr) {
+    return cutlass::Status::kSuccess;
+  }
+
+  CUTLASS_DEVICE bool is_producer_load_needed() const { return false; }
+  CUTLASS_DEVICE bool is_C_load_needed() const { return false; }
+  CUTLASS_HOST_DEVICE WarpGroupOutput() : params{}, warp_candidates(nullptr) {}
+  CUTLASS_HOST_DEVICE WarpGroupOutput(
+      Params const& params_,
+      SharedStorage const& storage)
+      : params(params_),
+        warp_candidates(
+            const_cast<PackedCandidate*>(storage.warp_candidates)) {}
+
+  Params params;
+  PackedCandidate* warp_candidates;
+
+  template <class... Args>
+  CUTLASS_DEVICE auto get_producer_load_callbacks(
+      cutlass::epilogue::fusion::detail::ProducerLoadArgs<Args...> const&) {
+    return cutlass::epilogue::fusion::EmptyProducerLoadCallbacks{};
+  }
+
+  struct ConsumerStoreCallbacks
+      : cutlass::epilogue::fusion::EmptyConsumerStoreCallbacks {
+    PackedCandidate* output;
+    PackedCandidate* warp_candidates;
+    int tile_m;
+    int rounded_n;
+  };
+
+  template <bool ReferenceSrc, class... Args>
+  CUTLASS_DEVICE auto get_consumer_store_callbacks(
+      cutlass::epilogue::fusion::detail::ConsumerStoreArgs<Args...> const& args) {
+    int problem_n = int(get<1>(args.problem_shape_mnkl));
+    int rounded_n = (problem_n + kTileN - 1) / kTileN * kTileN;
+    return ConsumerStoreCallbacks{
+        {}, params.output, warp_candidates,
+        int(get<0>(args.tile_coord_mnkl)), rounded_n};
+  }
+};
+
+struct StagedWarpGroupOutput {
+  using Arguments = typename CandidateReductionEVT::Arguments;
+  struct SharedStorage {
+    alignas(16) PackedCandidate warp_candidates[4 * 16];
+    alignas(16) float accumulator_fragments[128 * 16];
+  };
+  struct Params {
+    PackedCandidate* output;
+  };
+
+  template <class ProblemShape>
+  static constexpr Params to_underlying_arguments(
+      ProblemShape const&, Arguments const& arguments, void*) {
+    return {reinterpret_cast<PackedCandidate*>(arguments.op_1.ptr_row)};
+  }
+
+  template <class ProblemShape>
+  static bool can_implement(ProblemShape const&, Arguments const&) {
+    return true;
+  }
+
+  template <class ProblemShape>
+  static size_t get_workspace_size(ProblemShape const&, Arguments const&) {
+    return 0;
+  }
+
+  template <class ProblemShape>
+  static cutlass::Status initialize_workspace(
+      ProblemShape const&,
+      Arguments const&,
+      void*,
+      cudaStream_t,
+      cutlass::CudaHostAdapter* = nullptr) {
+    return cutlass::Status::kSuccess;
+  }
+
+  CUTLASS_DEVICE bool is_producer_load_needed() const { return false; }
+  CUTLASS_DEVICE bool is_C_load_needed() const { return false; }
+  CUTLASS_HOST_DEVICE StagedWarpGroupOutput()
+      : params{}, warp_candidates(nullptr), accumulator_fragments(nullptr) {}
+  CUTLASS_HOST_DEVICE StagedWarpGroupOutput(
+      Params const& params_,
+      SharedStorage const& storage)
+      : params(params_),
+        warp_candidates(
+            const_cast<PackedCandidate*>(storage.warp_candidates)),
+        accumulator_fragments(
+            const_cast<float*>(storage.accumulator_fragments)) {}
+
+  Params params;
+  PackedCandidate* warp_candidates;
+  float* accumulator_fragments;
+
+  template <class... Args>
+  CUTLASS_DEVICE auto get_producer_load_callbacks(
+      cutlass::epilogue::fusion::detail::ProducerLoadArgs<Args...> const&) {
+    return cutlass::epilogue::fusion::EmptyProducerLoadCallbacks{};
+  }
+
+  struct ConsumerStoreCallbacks
+      : cutlass::epilogue::fusion::EmptyConsumerStoreCallbacks {
+    PackedCandidate* output;
+    PackedCandidate* warp_candidates;
+    float* accumulator_fragments;
+    int tile_m;
+    int rounded_n;
+  };
+
+  template <bool ReferenceSrc, class... Args>
+  CUTLASS_DEVICE auto get_consumer_store_callbacks(
+      cutlass::epilogue::fusion::detail::ConsumerStoreArgs<Args...> const& args) {
+    int problem_n = int(get<1>(args.problem_shape_mnkl));
+    int rounded_n = (problem_n + kTileN - 1) / kTileN * kTileN;
+    return ConsumerStoreCallbacks{
+        {}, params.output, warp_candidates, accumulator_fragments,
+        int(get<0>(args.tile_coord_mnkl)), rounded_n};
+  }
+};
+
+struct PackedCandidateEVT
     : cutlass::epilogue::fusion::Sm90SplitTreeVisitor<
           PackCandidate,
           DiscardPackedOutput,
@@ -505,6 +701,135 @@ struct CandidateEVT
   using Base::Base;
   using ElementAux = float;
 };
+
+template <class Output, bool StageAccumulators>
+struct WarpGroupCandidateEVTImpl
+    : cutlass::epilogue::fusion::detail::Sm90VisitorImpl<
+          PackCandidate,
+          Output,
+          DiscardPackedOutput> {
+  using Impl = cutlass::epilogue::fusion::detail::Sm90VisitorImpl<
+      PackCandidate,
+      Output,
+      DiscardPackedOutput>;
+  using Params = typename Impl::Params;
+  using SharedStorage = typename Impl::SharedStorage;
+  using Impl::Impl;
+  using ElementAux = float;
+
+  template <class CallbacksImpl>
+  struct ConsumerStoreCallbacks : CallbacksImpl {
+    CUTLASS_DEVICE ConsumerStoreCallbacks(CallbacksImpl&& impl)
+        : CallbacksImpl(cute::forward<CallbacksImpl>(impl)) {}
+
+    using CallbacksImpl::callbacks_tuple;
+
+    template <typename ElementAccumulator, int FragmentSize>
+    CUTLASS_DEVICE auto visit(
+        cutlass::Array<ElementAccumulator, FragmentSize> const& accumulators,
+        int epi_v,
+        int epi_m,
+        int epi_n) {
+      static_assert(FragmentSize == 16);
+      auto& pack_callbacks = get<0>(callbacks_tuple);
+      auto& output_callbacks = get<1>(callbacks_tuple);
+      int consumer_thread = int(threadIdx.x) - 128;
+      int warp = consumer_thread / 32;
+      int lane = consumer_thread % 32;
+      if constexpr (StageAccumulators) {
+        CUTLASS_PRAGMA_UNROLL
+        for (int i = 0; i < FragmentSize; ++i) {
+          output_callbacks.accumulator_fragments[
+              consumer_thread * FragmentSize + i] = float(accumulators[i]);
+        }
+      }
+#if defined(FMMS_GUMBEL_PARTIAL_UNROLL)
+#if FMMS_GUMBEL_PARTIAL_UNROLL == 2
+#pragma unroll 2
+#elif FMMS_GUMBEL_PARTIAL_UNROLL == 4
+#pragma unroll 4
+#elif FMMS_GUMBEL_PARTIAL_UNROLL == 8
+#pragma unroll 8
+#else
+#error "Unsupported FMMS_GUMBEL_PARTIAL_UNROLL value"
+#endif
+#else
+      CUTLASS_PRAGMA_UNROLL
+#endif
+      for (int i = 0; i < FragmentSize; ++i) {
+        ElementAccumulator accumulator;
+        if constexpr (StageAccumulators) {
+          accumulator = ElementAccumulator(
+              output_callbacks.accumulator_fragments[
+                  consumer_thread * FragmentSize + i]);
+        }
+        else {
+          accumulator = accumulators[i];
+        }
+        PackedCandidate candidate =
+            pack_callbacks.template visit_one<ElementAccumulator, FragmentSize>(
+                accumulator, i, epi_v, epi_m, epi_n);
+        CUTLASS_PRAGMA_UNROLL
+        for (int offset = 16; offset > 0; offset /= 2) {
+          uint32_t rhs_value_bits = __shfl_down_sync(
+              0xFFFFFFFF, uint32_t(candidate >> 32), offset);
+          uint32_t rhs_index = __shfl_down_sync(
+              0xFFFFFFFF, uint32_t(candidate), offset);
+          PackedCandidate rhs =
+              (uint64_t(rhs_value_bits) << 32) | rhs_index;
+          candidate = choose_candidate(candidate, rhs);
+        }
+        if (lane == 0) {
+          output_callbacks.warp_candidates[warp * FragmentSize + i] =
+              candidate;
+        }
+      }
+      cutlass::arch::NamedBarrier::sync(128, 0);
+      if (warp == 0 && lane < FragmentSize) {
+        PackedCandidate candidate =
+            output_callbacks.warp_candidates[lane];
+        CUTLASS_PRAGMA_UNROLL
+        for (int source_warp = 1; source_warp < 4; ++source_warp) {
+          candidate = choose_candidate(
+              candidate,
+              output_callbacks.warp_candidates[
+                  source_warp * FragmentSize + lane]);
+        }
+        int global_n =
+            pack_callbacks.template global_n_for<FragmentSize>(lane, epi_n);
+        output_callbacks.output[
+            output_callbacks.tile_m * output_callbacks.rounded_n + global_n] =
+                candidate;
+      }
+      cutlass::arch::NamedBarrier::sync(128, 0);
+      return get<2>(callbacks_tuple).visit(
+          accumulators, epi_v, epi_m, epi_n);
+    }
+  };
+
+  template <bool ReferenceSrc, class... Args>
+  CUTLASS_DEVICE auto get_consumer_store_callbacks(
+      cutlass::epilogue::fusion::detail::ConsumerStoreArgs<Args...> const& args) {
+    auto callbacks_impl =
+        Impl::template get_consumer_store_callbacks<ReferenceSrc>(args);
+    return ConsumerStoreCallbacks<decltype(callbacks_impl)>(
+        cute::move(callbacks_impl));
+  }
+};
+
+using WarpGroupCandidateEVT =
+    WarpGroupCandidateEVTImpl<WarpGroupOutput, false>;
+using StagedWarpGroupCandidateEVT =
+    WarpGroupCandidateEVTImpl<StagedWarpGroupOutput, true>;
+
+#if defined(FMMS_USE_WARPGROUP_REDUCTION) && \
+    defined(FMMS_WARPGROUP_SMEM_STAGE)
+using CandidateEVT = StagedWarpGroupCandidateEVT;
+#elif defined(FMMS_USE_WARPGROUP_REDUCTION)
+using CandidateEVT = WarpGroupCandidateEVT;
+#else
+using CandidateEVT = PackedCandidateEVT;
+#endif
 
 constexpr int kAlignmentA = 128 / cutlass::sizeof_bits_v<ElementA>;
 constexpr int kAlignmentB = 128 / cutlass::sizeof_bits_v<ElementB>;

@@ -98,12 +98,8 @@ Final NCU still reports 255 registers at H=128/256.
 Gumbel local loads/stores are 555,900/883,848 at H=128 and 1,111,800/1,767,696 at H=256, so the change reshapes spill scheduling rather than eliminating spills.
 The exact packets are under `benchmarking/modal-results/cutlass/18-gumbel-provider/`.
 
-## Next steps
+## Post-gate recovery
 
-Gate 4 remains no-go, and Gate 5 is blocked.
-The canonical bounded recovery plan is in `findings/cutlass/01-fmms-kernel-plan.md`.
-First audit generated SASS and compiler spill slots for the selected partial-unroll control.
-Then compare one smaller-granularity custom SM100 epilogue and one maintained vendor-backed Philox candidate.
-Each candidate must use the current control and identical greedy donor in paired H=64/128/256 timings.
-Only materially faster candidates earn matched NCU and the complete deterministic, 10M-sample distribution, and performance validation sequence.
-If neither candidate removes RNG-caused spilling and passes the pointwise 1.20x limit, stop the complete CUTLASS sampling roadmap before Gate 5 unless the project explicitly adopts a greedy-only scope.
+The consolidated Gate 4 performance-recovery finding contains the generated-code audit, rejected cuRAND and smaller-epilogue probes, matched Triton comparison, register-liveness experiments, and current retained candidates.
+The CUTLASS development-infrastructure roadmap contains the measured experiment-time friction and the resulting shared runner and registry design.
+Gate 4 remains experimental, and Gate 5 remains blocked until a selected candidate passes the complete production validation sequence.

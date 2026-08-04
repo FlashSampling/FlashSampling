@@ -11,6 +11,10 @@ from fused_mm_sampling.cutlass_build import (
     discover_local_dependencies,
     extension_fingerprint,
 )
+from fused_mm_sampling.cutlass_experiments import (
+    CUTLASS_SAMPLING_EXPERIMENTS,
+    get_cutlass_sampling_experiment,
+)
 from fused_mm_sampling.dev_metrics import EVENT_PREFIX, emit_dev_event, timed_dev_stage
 
 from benchmarking.cutlass_dev_metrics import load_metrics, summarize_metrics
@@ -98,6 +102,34 @@ def test_production_dependency_audit():
         "winning_schedule_provider.cu",
     )
     assert len(broad_source_fingerprint(root).dependencies) == 14
+
+
+def test_sampling_experiment_registry_is_bounded_and_compositional():
+    assert tuple(CUTLASS_SAMPLING_EXPERIMENTS) == (
+        "warpgroup-fastlog-smem",
+        "warpgroup-fastmath-smem",
+        "warpgroup-fastmath",
+    )
+    spill_free = get_cutlass_sampling_experiment("warpgroup-fastlog-smem")
+    combined = get_cutlass_sampling_experiment("warpgroup-fastmath-smem")
+    fastmath = get_cutlass_sampling_experiment("warpgroup-fastmath")
+    shared_flags = {
+        "-DFMMS_WARPGROUP_REDUCTION",
+        "-DFMMS_INLINE_GUMBEL",
+        "-DFMMS_FAST_LOG",
+    }
+    assert shared_flags.issubset(spill_free.cuda_flags)
+    assert shared_flags.issubset(combined.cuda_flags)
+    assert shared_flags.issubset(fastmath.cuda_flags)
+    assert "-DFMMS_WARPGROUP_SMEM_STAGE" in spill_free.cuda_flags
+    assert "-DFMMS_WARPGROUP_SMEM_STAGE" in combined.cuda_flags
+    assert "-DFMMS_FAST_DIV" in combined.cuda_flags
+    assert "-DFMMS_FAST_DIV" in fastmath.cuda_flags
+
+
+def test_sampling_experiment_registry_rejects_unknown_variant():
+    with pytest.raises(ValueError, match="Unknown CUTLASS sampling experiment"):
+        get_cutlass_sampling_experiment("rejected-one-off")
 
 
 def test_dev_events_are_opt_in_and_record_failures(monkeypatch, capsys):

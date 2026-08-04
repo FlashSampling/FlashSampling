@@ -1608,12 +1608,23 @@ kernel.
 Measure the incremental cost relative to greedy with the same GEMM
 configuration.
 
-**Status:** correctness and distribution pass, but performance is no-go.
+**Status:** correctness and distribution pass, but performance remains no-go.
 The selected control keeps H<=64 fully unrolled, uses callback unroll 2 for
 the cluster-2 256x128 donors, and uses unroll 4 for the D=4,096 cluster-4
 256x128 donor.
 Its worst paired ratio is 3.39x, and NCU still reports 255 registers plus
 substantial local-memory traffic at H=128/256.
+The generated-code audit confirmed substantially larger Gumbel stack frames
+and local-memory instruction counts than greedy.
+The maintained cuRAND candidate added executed instructions without changing
+the spill, and the generic-EVT 128x8 epilogue experiment increased dynamic
+local loads by 111% and local stores by 70%.
+The latter did not satisfy recovery step 2 because it still materialized the
+packed callback output fragment.
+Two matched comparisons show that CUTLASS Gumbel-Max loses to Triton at high H
+while CUTLASS greedy remains 33--37% faster than Triton at H=256.
+The remaining bounded work is the actual void-output custom epilogue described
+in recovery step 2.
 Gate 5 is blocked on this result.
 
 Gate 4 has three ordered acceptance phases in one integration packet:
@@ -1675,7 +1686,7 @@ gate-policy revision rather than silently skipping unrestricted Gumbel-Max.
 
 ### Gate 5: B200 tensor parallelism
 
-**Status:** blocked on Gate 4.
+**Status:** blocked on the unresolved Gate 4 custom-epilogue recovery.
 
 Implement TP before top-k and DSMEM.
 Gate 5 has three formal milestones because each introduces a separate

@@ -9,12 +9,14 @@ import torch
 from torch.utils.cpp_extension import get_default_build_root, load
 
 from .cutlass_build import ExtensionBuildSpec, extension_name
+from .cutlass_experiments import get_cutlass_sampling_experiment
 from .dev_metrics import emit_dev_event
 from .tp_info import TP1, TPInfo
 
 _CSRC_DIR = Path(__file__).resolve().parent / "csrc" / "cutlass"
 _module = None
 _sampling_module = None
+_experimental_sampling_modules = {}
 
 
 def fused_mm_sample_cutlass_greedy(
@@ -44,6 +46,48 @@ def fused_mm_sample_cutlass(
     **_kwargs,
 ) -> torch.Tensor:
     """Sample with the Gate 4 B200 CUTLASS Gumbel-Max provider."""
+    return _fused_mm_sample_cutlass_with_module(
+        _get_sampling_module(),
+        weights,
+        hidden_states,
+        num_samples,
+        temperature,
+        seed,
+        tp,
+    )
+
+
+def fused_mm_sample_cutlass_experimental(
+    weights: torch.Tensor,
+    hidden_states: torch.Tensor,
+    num_samples: int,
+    temperature: torch.Tensor,
+    seed: int,
+    tp: TPInfo = TP1,
+    *,
+    variant: str,
+) -> torch.Tensor:
+    """Sample through one compile-time Gate 4 research variant."""
+    return _fused_mm_sample_cutlass_with_module(
+        _get_experimental_sampling_module(variant),
+        weights,
+        hidden_states,
+        num_samples,
+        temperature,
+        seed,
+        tp,
+    )
+
+
+def _fused_mm_sample_cutlass_with_module(
+    module,
+    weights: torch.Tensor,
+    hidden_states: torch.Tensor,
+    num_samples: int,
+    temperature: torch.Tensor,
+    seed: int,
+    tp: TPInfo,
+) -> torch.Tensor:
     if tp.size != 1:
         raise NotImplementedError("The CUTLASS sampling provider supports TP1 only")
     if torch.cuda.get_device_capability(weights.device) != (10, 0):
@@ -58,7 +102,7 @@ def fused_mm_sample_cutlass(
     for sample_base in range(0, num_samples, samples_per_chunk):
         chunk_samples = min(samples_per_chunk, num_samples - sample_base)
         repeated_hidden_states = hidden_states.repeat(chunk_samples, 1)
-        flat_samples = _get_sampling_module().sample(
+        flat_samples = module.sample(
             weights,
             repeated_hidden_states,
             temperature,
@@ -206,21 +250,37 @@ def _get_module():
 def _get_sampling_module():
     global _sampling_module
     if _sampling_module is None:
-        if torch.cuda.get_device_capability() != (10, 0):
-            raise RuntimeError("The Gate 4 CUTLASS sampling provider requires SM100")
-        _sampling_module = _load_cutlass_extension(
-            prefix="fmms_cutlass_sampling_sm100",
-            architecture="100",
-            cuda_flags=(
-                "-O3",
-                "-lineinfo",
-                "--expt-relaxed-constexpr",
-                "-arch=sm_100a",
-                "-DFMMS_ARCH_SM100",
-                "-DFMMS_GUMBEL",
-            ),
+        _sampling_module = _load_sampling_extension(
+            "fmms_cutlass_sampling_sm100", ()
         )
     return _sampling_module
+
+
+def _get_experimental_sampling_module(variant: str):
+    experiment = get_cutlass_sampling_experiment(variant)
+    if variant not in _experimental_sampling_modules:
+        _experimental_sampling_modules[variant] = _load_sampling_extension(
+            experiment.extension_prefix, experiment.cuda_flags
+        )
+    return _experimental_sampling_modules[variant]
+
+
+def _load_sampling_extension(prefix: str, extra_cuda_flags: tuple[str, ...]):
+    if torch.cuda.get_device_capability() != (10, 0):
+        raise RuntimeError("The Gate 4 CUTLASS sampling provider requires SM100")
+    return _load_cutlass_extension(
+        prefix=prefix,
+        architecture="100",
+        cuda_flags=(
+            "-O3",
+            "-lineinfo",
+            "--expt-relaxed-constexpr",
+            "-arch=sm_100a",
+            "-DFMMS_ARCH_SM100",
+            "-DFMMS_GUMBEL",
+            *extra_cuda_flags,
+        ),
+    )
 
 
 def _load_cutlass_extension(

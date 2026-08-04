@@ -29,7 +29,7 @@ modal-pytest-distributed:
 modal-versions:
 	modal run -m src.fused_mm_sampling.modal_lib.modal_versions
 
-CUTLASS_GATES := toolchain accumulator-layout thread-local-max warp-max cta-max cta-multi-column-max cta-boundary-max evt-candidates stage2 greedy-provider greedy-performance greedy-profile greedy-ncu ordinary-gemm ordinary-gemm-tuning winning-schedule-layout winning-schedule-evt stateless-philox gumbel-provider gumbel-ncu dev-infra
+CUTLASS_GATES := toolchain accumulator-layout thread-local-max warp-max cta-max cta-multi-column-max cta-boundary-max evt-candidates stage2 greedy-provider greedy-performance greedy-profile greedy-ncu ordinary-gemm ordinary-gemm-tuning winning-schedule-layout winning-schedule-evt stateless-philox gumbel-provider gumbel-ncu dev-infra gumbel-sass triton-liveness gumbel-experiment gumbel-experiment-ncu
 # PHASE and RUN select the Gate 2c sub-run of the ordinary-gemm-tuning gate.
 PHASE := discover
 RUN := 1
@@ -58,6 +58,10 @@ CUTLASS_MODULE_stateless-philox := stateless_philox
 CUTLASS_MODULE_gumbel-provider := gumbel_provider
 CUTLASS_MODULE_gumbel-ncu := gumbel_ncu
 CUTLASS_MODULE_dev-infra := dev_infra
+CUTLASS_MODULE_gumbel-sass := gumbel_sass
+CUTLASS_MODULE_triton-liveness := triton_liveness
+CUTLASS_MODULE_gumbel-experiment := gumbel_experiment
+CUTLASS_MODULE_gumbel-experiment-ncu := gumbel_experiment_ncu
 CUTLASS_RESULT_toolchain := 00-toolchain
 CUTLASS_RESULT_accumulator-layout := 01-accumulator-layout
 CUTLASS_RESULT_thread-local-max := 02-thread-local-max
@@ -79,8 +83,20 @@ CUTLASS_RESULT_stateless-philox := 17-stateless-philox
 CUTLASS_RESULT_gumbel-provider := 18-gumbel-provider
 CUTLASS_RESULT_gumbel-ncu := 18-gumbel-provider
 CUTLASS_RESULT_dev-infra := dev-infra-phase1
+CUTLASS_RESULT_gumbel-sass := 19-gumbel-sass
+CUTLASS_RESULT_triton-liveness := 24-triton-liveness
+CUTLASS_VARIANT := warpgroup-fastmath
+CUTLASS_EXPERIMENT_RESULT := experiments/$(CUTLASS_VARIANT)
+CUTLASS_RESULT_gumbel-experiment := $(CUTLASS_EXPERIMENT_RESULT)
+CUTLASS_RESULT_gumbel-experiment-ncu := $(CUTLASS_EXPERIMENT_RESULT)
+CUTLASS_VARIANT_CHECK_gumbel-experiment := 1
+CUTLASS_VARIANT_CHECK_gumbel-experiment-ncu := 1
 CUTLASS_LOG_toolchain := smoke.txt
 CUTLASS_LOG_ordinary-gemm-tuning := gate-2c-$(PHASE)-run$(RUN)-log.txt
+CUTLASS_HIDDEN_SIZE := 4096
+CUTLASS_ARGS_gumbel-experiment := --variant $(CUTLASS_VARIANT) --output-dir benchmarking/modal-results/cutlass/$(CUTLASS_EXPERIMENT_RESULT)
+CUTLASS_LOG_gumbel-experiment-ncu := ncu-d$(CUTLASS_HIDDEN_SIZE)-log.txt
+CUTLASS_ARGS_gumbel-experiment-ncu := --hidden-size $(CUTLASS_HIDDEN_SIZE) --variant $(CUTLASS_VARIANT) --output-dir benchmarking/modal-results/cutlass/$(CUTLASS_EXPERIMENT_RESULT)
 
 modal-cutlass:
 	@test -n "$(GATE)" || \
@@ -88,6 +104,8 @@ modal-cutlass:
 		 echo "Available gates: $(CUTLASS_GATES)"; exit 1)
 	@test -n "$(CUTLASS_MODULE_$(GATE))" || \
 		(echo "Unknown CUTLASS gate '$(GATE)'. Choose one of: $(CUTLASS_GATES)"; exit 1)
+	@test -z "$(CUTLASS_VARIANT_CHECK_$(GATE))" || \
+		PYTHONPATH=src $(PYTHON) -m fused_mm_sampling.cutlass_experiments --validate "$(CUTLASS_VARIANT)"
 	mkdir -p benchmarking/modal-results/cutlass/$(CUTLASS_RESULT_$(GATE))
 	@PHASE=$(PHASE) RUN=$(RUN) \
 	$(PYTHON) benchmarking/cutlass_dev_run.py \
@@ -95,7 +113,7 @@ modal-cutlass:
 		--phase "$(PHASE)" \
 		--label "$(CUTLASS_DEV_LABEL)" \
 		--log benchmarking/modal-results/cutlass/$(CUTLASS_RESULT_$(GATE))/$(or $(CUTLASS_LOG_$(GATE)),log.txt) \
-		-- modal run $(MODAL_RUN_ARGS) -m src.fused_mm_sampling.modal_lib.cutlass.$(CUTLASS_MODULE_$(GATE)) $(MODAL_ARGS)
+		-- modal run $(MODAL_RUN_ARGS) -m src.fused_mm_sampling.modal_lib.cutlass.$(CUTLASS_MODULE_$(GATE)) $(CUTLASS_ARGS_$(GATE)) $(MODAL_ARGS)
 
 cutlass-dev-metrics:
 	$(PYTHON) benchmarking/cutlass_dev_metrics.py
