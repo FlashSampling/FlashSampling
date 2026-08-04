@@ -21,6 +21,10 @@ void launch_256x128x128_c2(
     torch::Tensor weights, torch::Tensor padded_hidden_states,
     torch::Tensor candidates, torch::Tensor output, int gemm_n,
     int rounded_n);
+void launch_256x128x64_c2(
+    torch::Tensor weights, torch::Tensor padded_hidden_states,
+    torch::Tensor candidates, torch::Tensor output, int gemm_n,
+    int rounded_n);
 void launch_256x128x64_c4(
     torch::Tensor weights, torch::Tensor padded_hidden_states,
     torch::Tensor candidates, torch::Tensor output, int gemm_n,
@@ -404,26 +408,31 @@ torch::Tensor greedy(torch::Tensor weights, torch::Tensor hidden_states) {
   int gemm_n = ((n + 3) / 4) * 4;
 #if defined(FMMS_ARCH_SM100)
   if (n <= 256) {
-    int winning_tile_n = n <= 64 ? 64 : (n <= 128 ? 128 : 256);
-    int rounded_n = winning_tile_n;
+    int winning_tile_n = n <= 64 ? 64 : 128;
+    int winning_tile_m = n <= 64 ? 128 : 256;
+    int winning_m_tiles =
+        (m + winning_tile_m / 2 - 1) / (winning_tile_m / 2);
+    int rounded_n =
+        ((gemm_n + winning_tile_n - 1) / winning_tile_n) * winning_tile_n;
     auto padded_hidden_states =
         torch::zeros({gemm_n, k}, hidden_states.options());
     padded_hidden_states.narrow(0, 0, n).copy_(hidden_states);
     auto candidates = torch::empty(
-        {rounded_n * int64_t(sizeof(PackedCandidate))},
+        {winning_m_tiles,
+         rounded_n * int64_t(sizeof(PackedCandidate))},
         weights.options().dtype(torch::kUInt8));
     auto output = torch::empty({n, 1}, weights.options().dtype(torch::kInt64));
     if (n <= 64) {
       fmms_cutlass_winning::launch_128x64x128_c2(
           weights, padded_hidden_states, candidates, output, gemm_n, rounded_n);
-    } else if (n <= 128 && k <= 4096) {
+    } else if (k <= 4096) {
       fmms_cutlass_winning::launch_256x128x64_c4(
           weights, padded_hidden_states, candidates, output, gemm_n, rounded_n);
-    } else if (n <= 128) {
-      fmms_cutlass_winning::launch_256x128x128_c2(
+    } else if (n > 128) {
+      fmms_cutlass_winning::launch_256x128x64_c2(
           weights, padded_hidden_states, candidates, output, gemm_n, rounded_n);
     } else {
-      fmms_cutlass_winning::launch_256x256x64_c2(
+      fmms_cutlass_winning::launch_256x128x128_c2(
           weights, padded_hidden_states, candidates, output, gemm_n, rounded_n);
     }
     return output;

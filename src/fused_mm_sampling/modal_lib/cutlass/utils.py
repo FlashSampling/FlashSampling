@@ -337,27 +337,24 @@ def add_cutlass_stage2(image: modal.Image) -> modal.Image:
 
 
 def add_cutlass_greedy_provider(image: modal.Image) -> modal.Image:
-    """Add the package sources needed by the Gate 2a production provider."""
+    """Mount Gate 2a sources without invalidating the toolchain image."""
     return (
-        image.add_local_dir(
+        image.env(
+            {
+                "CUTLASS_ROOT": CUTLASS_ROOT,
+                "PYTHONPATH": "/opt/fmms/repo/src",
+            }
+        )
+        .add_local_dir(
             str(_repo_root / "src"),
             remote_path="/opt/fmms/repo/src",
-            copy=True,
-        )
-        .add_local_file(
-            str(_repo_root / "pyproject.toml"),
-            remote_path="/opt/fmms/repo/pyproject.toml",
-            copy=True,
+            copy=False,
         )
         .add_local_dir(
             str(_repo_root / "tests"),
             remote_path="/opt/fmms/repo/tests",
-            copy=True,
+            copy=False,
         )
-        .run_commands(
-            "pip install --break-system-packages --no-deps -e /opt/fmms/repo"
-        )
-        .env({"CUTLASS_ROOT": CUTLASS_ROOT})
     )
 
 
@@ -430,7 +427,7 @@ def add_cutlass_winning_schedule_evt(image: modal.Image) -> modal.Image:
     commands = [
         "nvcc -std=c++17 -O2 -lineinfo --expt-relaxed-constexpr "
         "-arch=sm_100a -DFMMS_ARCH_SM100 -DFMMS_SM100_2SM "
-        "-DFMMS_FINAL_REDUCTION "
+        "-DFMMS_PER_CTA_CANDIDATES -DFMMS_GATE_STAGE2 "
         f"-DFMMS_TILE_M={tile_m} -DFMMS_TILE_N={tile_n} "
         f"-DFMMS_TILE_K={tile_k} -DFMMS_CLUSTER_M={cluster_m} "
         f"{include_flags} /opt/fmms/evt_candidates.cu "

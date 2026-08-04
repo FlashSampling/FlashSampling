@@ -43,18 +43,21 @@ def record_sm90() -> dict:
 
 
 @app.function(gpu="B200", image=image, timeout=60 * 60)
-def record_sm100() -> dict:
-    return _run("sm100")
+def record_sm100(hidden_states: tuple[int, ...] = HIDDEN_STATES) -> dict:
+    return _run("sm100", hidden_states)
 
 
-def _run(architecture: str) -> dict:
+def _run(
+    architecture: str,
+    hidden_state_sweep: tuple[int, ...] = HIDDEN_STATES,
+) -> dict:
     import torch
 
     from fused_mm_sampling.alg_names import ShortNames
     from fused_mm_sampling.core import get_sampler
     from fused_mm_sampling.cutlass_impl import (
         cutlass_greedy_kernel_attributes,
-        cutlass_plain_gemm,
+        cutlass_winning_plain_gemm,
     )
 
     temperature = torch.empty((), device="cuda")
@@ -64,7 +67,7 @@ def _run(architecture: str) -> dict:
         weights = torch.randn(
             (vocab_size, hidden_size), dtype=torch.bfloat16, device="cuda"
         )
-        for n_hidden_states in HIDDEN_STATES:
+        for n_hidden_states in hidden_state_sweep:
             hidden_states = torch.randn(
                 (n_hidden_states, hidden_size),
                 dtype=torch.bfloat16,
@@ -76,7 +79,7 @@ def _run(architecture: str) -> dict:
                 temperature,
                 get_sampler,
                 ShortNames,
-                cutlass_plain_gemm,
+                cutlass_winning_plain_gemm,
             )
             reference = _indices(
                 "cutlass-gemm", functions["cutlass-gemm"]()
@@ -140,7 +143,7 @@ def _make_functions(
     temperature,
     get_sampler,
     short_names,
-    cutlass_plain_gemm,
+    cutlass_winning_plain_gemm,
 ):
     cutlass_sampler = get_sampler("fused-cutlass-greedy", weights=weights)
     triton_sampler = get_sampler(short_names.fused_triton_greedy, weights=weights)
@@ -155,10 +158,10 @@ def _make_functions(
         return cutlass_sampler.sample(**sample_kwargs)
 
     def cutlass_gemm():
-        return cutlass_plain_gemm(weights, hidden_states)
+        return cutlass_winning_plain_gemm(weights, hidden_states)
 
     def cutlass_gemm_argmax():
-        return cutlass_plain_gemm(weights, hidden_states).argmax(
+        return cutlass_winning_plain_gemm(weights, hidden_states).argmax(
             dim=0, keepdim=False
         )[:, None]
 
@@ -253,7 +256,11 @@ def summarize_timings(timings: pd.DataFrame) -> pd.DataFrame:
     return summary
 
 
-def _write_packet(results: list[dict]) -> None:
+def _write_packet(
+    results: list[dict],
+    architectures: tuple[str, ...],
+    hidden_state_sweep: tuple[int, ...] = HIDDEN_STATES,
+) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     timings = pd.DataFrame(
         [row for result in results for row in result["timings"]],
@@ -265,7 +272,9 @@ def _write_packet(results: list[dict]) -> None:
     kernel_attributes = pd.DataFrame(
         [result["kernel_attributes"] for result in results]
     )
-    _validate_coverage(timings, correctness)
+    _validate_coverage(
+        timings, correctness, architectures, hidden_state_sweep
+    )
     case_summary = summarize_timings(timings)
     fmms_rows = case_summary.query("provider == 'cutlass-fmms'")
     status = "pass" if fmms_rows["pass"].eq(1).all() else "no-go"
@@ -286,13 +295,13 @@ def _write_packet(results: list[dict]) -> None:
             "maximum": FEASIBILITY_THRESHOLD,
             "set_before_measurement": True,
         },
-        "architectures": list(ARCHITECTURES),
+        "architectures": list(architectures),
         "providers": list(PROVIDERS),
         "model_shapes": [
             {"vocab_size": vocab_size, "hidden_size": hidden_size}
             for vocab_size, hidden_size in MODEL_SHAPES
         ],
-        "hidden_state_sweep": list(HIDDEN_STATES),
+        "hidden_state_sweep": list(hidden_state_sweep),
         "warmup_repetitions": WARMUP_REPETITIONS,
         "benchmark_repetitions": BENCHMARK_REPETITIONS,
         "worst_shape": {
@@ -349,10 +358,13 @@ override the predeclared end-to-end threshold.
 
 
 def _validate_coverage(
-    timings: pd.DataFrame, correctness: pd.DataFrame
+    timings: pd.DataFrame,
+    correctness: pd.DataFrame,
+    architectures: tuple[str, ...],
+    hidden_state_sweep: tuple[int, ...] = HIDDEN_STATES,
 ) -> None:
     expected_configs = (
-        len(ARCHITECTURES) * len(MODEL_SHAPES) * len(HIDDEN_STATES)
+        len(architectures) * len(MODEL_SHAPES) * len(hidden_state_sweep)
     )
     expected_timing_rows = (
         expected_configs * len(PROVIDERS) * BENCHMARK_REPETITIONS
@@ -361,7 +373,7 @@ def _validate_coverage(
         raise RuntimeError(
             f"Expected {expected_timing_rows} timing rows, got {len(timings)}"
         )
-    if set(timings["architecture"]) != set(ARCHITECTURES):
+    if set(timings["architecture"]) != set(architectures):
         raise RuntimeError("One or more architectures are absent")
     counts = timings.groupby(
         [
@@ -381,6 +393,17 @@ def _validate_coverage(
 
 
 @app.local_entrypoint()
-def main() -> None:
+def main(b200_only: bool = False, h256_only: bool = False) -> None:
+    if h256_only:
+        hidden_state_sweep = (256,)
+        _write_packet(
+            [record_sm100.remote(hidden_state_sweep)],
+            ("sm100",),
+            hidden_state_sweep,
+        )
+        return
+    if b200_only:
+        _write_packet([record_sm100.remote()], ("sm100",))
+        return
     handles = [record_sm90.spawn(), record_sm100.spawn()]
-    _write_packet([handle.get() for handle in handles])
+    _write_packet([handle.get() for handle in handles], ARCHITECTURES)

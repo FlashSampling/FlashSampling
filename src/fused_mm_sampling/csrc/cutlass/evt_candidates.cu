@@ -360,6 +360,12 @@ struct DiscardPackedOutput {
 };
 
 using TileShape = Shape<Int<FMMS_TILE_M>, Int<FMMS_TILE_N>, Int<FMMS_TILE_K>>;
+#if defined(FMMS_SM100_2SM) && defined(FMMS_PER_CTA_CANDIDATES)
+using ReductionTileShape =
+    Shape<Int<FMMS_TILE_M / 2>, Int<FMMS_TILE_N>, Int<FMMS_TILE_K>>;
+#else
+using ReductionTileShape = TileShape;
+#endif
 #if defined(FMMS_SM100_2SM)
 using ClusterShape = Shape<Int<FMMS_CLUSTER_M>, _1, _1>;
 #else
@@ -391,7 +397,7 @@ using RowReduction = cutlass::epilogue::fusion::Sm90RowReduction<
     CandidateReduce,
 #endif
     0,
-    TileShape,
+    ReductionTileShape,
     PackedCandidate,
     PackedCandidate,
     cutlass::FloatRoundStyle::round_to_nearest,
@@ -540,7 +546,11 @@ __global__ void stage2_kernel(
 #endif
 
 void run_case(Case const& test_case) {
+#if defined(FMMS_SM100_2SM) && defined(FMMS_PER_CTA_CANDIDATES)
+  int m_tiles = (test_case.m + kTileM / 2 - 1) / (kTileM / 2);
+#else
   int m_tiles = (test_case.m + kTileM - 1) / kTileM;
+#endif
   int rounded_n = ((test_case.n + kTileN - 1) / kTileN) * kTileN;
   std::vector<ElementA> matrix_a(test_case.m * kK, ElementA(0.0f));
   std::vector<ElementB> matrix_b(kK * test_case.n, ElementB(0.0f));
@@ -604,7 +614,7 @@ void run_case(Case const& test_case) {
   StrideD stride_d{
       int64_t(rounded_n), _1{}, int64_t(test_case.m) * rounded_n};
   PackedCandidate identity = pack_candidate(-INFINITY, INT_MAX);
-#if defined(FMMS_FINAL_REDUCTION)
+#if defined(FMMS_FINAL_REDUCTION) || defined(FMMS_PER_CTA_CANDIDATES)
   std::vector<PackedCandidate> candidate_identities(
       m_tiles * rounded_n, identity);
   check_cuda(
@@ -697,9 +707,14 @@ void run_case(Case const& test_case) {
     }
   }
 #else
+#if defined(FMMS_SM100_2SM) && defined(FMMS_PER_CTA_CANDIDATES)
+  constexpr int kCandidateTileM = kTileM / 2;
+#else
+  constexpr int kCandidateTileM = kTileM;
+#endif
   for (int tile = 0; tile < m_tiles; ++tile) {
-    int begin = tile * kTileM;
-    int end = std::min(begin + kTileM, test_case.m);
+    int begin = tile * kCandidateTileM;
+    int end = std::min(begin + kCandidateTileM, test_case.m);
     for (int n = 0; n < test_case.n; ++n) {
       PackedCandidate expected = identity;
       for (int m = begin; m < end; ++m) {

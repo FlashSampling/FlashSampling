@@ -1280,6 +1280,18 @@ for official kernel discovery in Gate 2c.
 Profile the exact provider approved in Gate 2a without changing its
 correctness path.
 
+Treat Nsight Compute as a continuous kernel-development tool, not as a
+one-time gate artifact or an optional follow-up after timing fails.
+When a schedule, epilogue, reduction, or memory path changes materially, use
+matched timing to locate the affected regime and profile representative fast
+and slow cells before proposing a causal explanation or selecting the next
+optimization.
+Inspect instruction mix, atomic traffic, scheduler stalls, occupancy,
+registers, local memory, cache and DRAM traffic, and tensor-core utilization as
+applicable.
+Refresh the profile whenever the implementation changes enough that an older
+report no longer describes the production kernel.
+
 The diagnostic FP32 `[V,H]` destination allocation and store inherited from Gate 1h have been removed.
 The preferred callback-only implementation set `ElementD=void` while retaining the existing split-tree candidate EVT.
 With CUTLASS 4.6.1, this compiles through the SM90 TMA collective after the EVT advertises a non-void `ElementAux` type and inherits its visitor constructors.
@@ -1504,10 +1516,16 @@ packet based on cross-run minima or undocumented padding/layout differences.
 
 #### Gate 2d: transplant the winning B200 schedules into FMMS
 
-**Status:** Gate 2c passed and the Gate 2d B200 ownership diagnostic passed all
-five winning schedule instantiations. The first 2-SM fused-EVT transplant now
-passes exact boundary and tie comparisons plus memcheck and racecheck on B200.
-See `21-winning-schedule-evt.md` before changing the production provider.
+**Status:** Complete on B200.
+The per-CTA fused-EVT path plus cooperative Stage 2 passes 8,612 exact
+intermediate and final comparisons, memcheck, racecheck, and the production
+correctness suite.
+The final H=1--256 performance packet passes the predeclared CUTLASS baseline
+threshold with a worst ratio of 1.044.
+At H=256 it is 3.2--4.2% faster than `torch.mm` plus argmax and 18.2--42.3%
+faster than Triton.
+The supporting timing and NCU evidence is in
+`22-winning-schedule-performance.md`.
 
 Reproduce only the measured B200 winning schedule families in the production
 C++ builder.

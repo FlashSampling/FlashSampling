@@ -196,9 +196,9 @@ def add_library_code(image: modal.Image) -> modal.Image:
     )
 
 
-def make_ncu_image() -> modal.Image:
+def make_ncu_image(*, include_library_code: bool = True) -> modal.Image:
     image = make_image().run_commands(
         "apt-get update && apt-get install -y cuda-nsight-compute-13-2",
         "ln -sf /opt/nvidia/nsight-compute/2026.1.0/ncu /usr/local/bin/ncu",
     )
-    return add_library_code(image)
+    return add_library_code(image) if include_library_code else image

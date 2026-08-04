@@ -36,6 +36,36 @@ def cutlass_plain_gemm(
     return _get_module().plain_gemm(weights, hidden_states)
 
 
+def cutlass_winning_plain_gemm(
+    weights: torch.Tensor, hidden_states: torch.Tensor
+) -> torch.Tensor:
+    """Return BF16 logits from the plain schedule matching fused dispatch."""
+    if torch.cuda.get_device_capability(weights.device) != (10, 0):
+        return cutlass_plain_gemm(weights, hidden_states)
+    padded_hidden_states, output, _ = cutlass_make_plain_gemm_buffers(
+        weights, hidden_states
+    )
+    variant = _winning_plain_gemm_variant(
+        weights.size(1), hidden_states.size(0)
+    )
+    cutlass_launch_plain_gemm_variant(
+        variant, weights, padded_hidden_states, output
+    )
+    return output.narrow(1, 0, hidden_states.size(0))
+
+
+def _winning_plain_gemm_variant(hidden_size: int, n_hidden_states: int) -> str:
+    if n_hidden_states <= 64:
+        return "heur-128x64x128-c2x1x1"
+    if n_hidden_states <= 256 and hidden_size <= 4096:
+        return "heur-256x128x64-c4x1x1"
+    if 128 < n_hidden_states <= 256:
+        return "heur-256x128x64-c2x1x1"
+    if n_hidden_states <= 256:
+        return "heur-256x128x128-c2x1x1"
+    raise ValueError("The Gate 2c winning dispatch supports H <= 256")
+
+
 def cutlass_make_plain_gemm_buffers(
     weights: torch.Tensor, hidden_states: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor, int]:

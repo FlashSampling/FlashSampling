@@ -19,7 +19,7 @@ EXECUTABLES = {
     "256x256x64-c2": "/opt/fmms/cutlass_winning_evt_256x256x64-c2",
 }
 EXPECTED_COLUMNS = [
-    "architecture", "family", "case", "m", "n", "k", "m_tile",
+    "architecture", "family", "case", "m", "n", "k", "row_type", "m_tile",
     "column", "tile_begin", "tile_end", "expected_value_bits",
     "actual_value_bits", "expected_index", "actual_index", "pass",
 ]
@@ -56,11 +56,12 @@ def record() -> dict:
     if not cases["pass"].eq(1).all():
         failures = cases.query("`pass` != 1")
         raise RuntimeError(f"{len(failures)} fused-EVT comparisons failed")
-    expected_rows = cases[["case", "n"]].drop_duplicates().rename(
+    final_cases = cases.query("row_type == 'final'")
+    expected_rows = final_cases[["case", "n"]].drop_duplicates().rename(
         columns={"n": "expected"}
     )
     expected_rows["expected"] *= len(EXECUTABLES)
-    actual_rows = cases.groupby("case", as_index=False).agg(
+    actual_rows = final_cases.groupby("case", as_index=False).agg(
         actual=("column", "count")
     )
     coverage = expected_rows.merge(actual_rows, on="case", validate="one_to_one")

@@ -33,6 +33,8 @@ CUTLASS_GATES := toolchain accumulator-layout thread-local-max warp-max cta-max 
 # PHASE and RUN select the Gate 2c sub-run of the ordinary-gemm-tuning gate.
 PHASE := discover
 RUN := 1
+MODAL_ARGS :=
+MODAL_RUN_ARGS :=
 CUTLASS_MODULE_toolchain := toolchain
 CUTLASS_MODULE_accumulator-layout := accumulator_layout
 CUTLASS_MODULE_thread-local-max := thread_local_max
@@ -79,7 +81,7 @@ modal-cutlass:
 	mkdir -p benchmarking/modal-results/cutlass/$(CUTLASS_RESULT_$(GATE))
 	@set -o pipefail; \
 	PHASE=$(PHASE) RUN=$(RUN) \
-	modal run -m src.fused_mm_sampling.modal_lib.cutlass.$(CUTLASS_MODULE_$(GATE)) 2>&1 | \
+	modal run $(MODAL_RUN_ARGS) -m src.fused_mm_sampling.modal_lib.cutlass.$(CUTLASS_MODULE_$(GATE)) $(MODAL_ARGS) 2>&1 | \
 		tee benchmarking/modal-results/cutlass/$(CUTLASS_RESULT_$(GATE))/$(or $(CUTLASS_LOG_$(GATE)),log.txt)
 
 update-deps:

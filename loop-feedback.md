@@ -17,5 +17,10 @@ We work step by step. After each step is done we assume that a new agent with no
 ## Prevent Sprawl
 Working incrementally in steps means that a lot of intermediate code, runners, and artifacts will be created. This is good, but it can also lead to sprawl. The plan should mention how to keep the intermediate code and artifacts organized, and how to clean up after each step. This will help prevent confusion and make it easier to track progress.
 
+## Remove Infrastructure Friction
+Continuously monitor the full development loop, including environment and image creation, dependency setup, compilation, profiling, queueing, logging, and repeated validation work.
+Treat avoidable latency, cache invalidation, duplicate work, unreliable orchestration, and poor observability as implementation problems to diagnose and fix when they appear, rather than passive waiting costs.
+Record enough timing and cache evidence to distinguish necessary one-time setup from recurring friction, and keep the workflow fast for subsequent iterations.
+
 ## Explain Results Top-Down
 After each step, explain its results in a top-down narrative before diving into evidence: start with the bigger picture (what question the step answered and why it mattered), then what was done, what happened, and why it matters for the next step. Use plain language; introduce jargon only after the plain statement. The detailed tables, packets, and coverage audits sit below that narrative as supporting evidence, not as a substitute for it. A reader should be able to understand the outcome and its implication for the project from the summary alone.
