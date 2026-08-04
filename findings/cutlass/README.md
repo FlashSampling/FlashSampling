@@ -28,9 +28,11 @@ They keep the research context and completed gates in a stable reading order.
 23. `22-winning-schedule-performance.md`
 24. `23-stateless-philox.md`
 25. `24-gumbel-max-tp1.md`
+26. `25-development-infrastructure.md`
 
 The active roadmap in `01-fmms-kernel-plan.md` is B200-first.
 Read `current-handoff.md` for the active gate, blocker, production dispatch, and next bounded experiments.
+Read `25-development-infrastructure.md` for the staged process-optimization roadmap and its empirical admission rules.
 
 Run a gate with `make modal-cutlass GATE=<gate>`.
 The top-level `Makefile` contains the available gate names and maps each one to a numbered directory under `benchmarking/modal-results/cutlass/`.

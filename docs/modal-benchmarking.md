@@ -200,4 +200,32 @@ Independent Modal jobs may run concurrently because each receives separate resou
 With an empty Triton autotune cache, launch one warmup first when practical so later jobs reuse the selected configurations instead of autotuning independently.
 Kill a crashed `modal run` before relaunching because a crash-looping app can continue writing to the old log.
 
+## CUTLASS development-loop metrics
+
+Every `make modal-cutlass GATE=<gate>` invocation passes through `benchmarking/cutlass_dev_run.py`.
+The wrapper preserves live output and the Modal exit code while writing one ignored metrics record under `benchmarking/modal-results/cutlass/dev-metrics/`.
+It also prepends the current worktree's `src` directory to `PYTHONPATH` so a Modal CLI installed in another environment cannot submit stale package code.
+
+Summarize the accumulated measurements with:
+
+```bash
+make cutlass-dev-metrics
+```
+
+Pass `CUTLASS_DEV_LABEL=<label>` to group related attempts.
+The report separates explicit remote-start latency, extension load time, known timed stages, failures, and unattributed residual time.
+Do not assign the residual to a cause without another measurement.
+
+The CUTLASS JIT loader fingerprints only the recursive production include closure plus compiler flags, architecture, both applied CUTLASS patches, the pinned CUTLASS revision, and Python, Torch, and CUDA ABI identities.
+It emits one `FMMS_DEV_EVENT` per extension load with the dependency list, cache state, duration, and binary path.
+Keep instrumentation environment settings in a trailing Modal image layer so changing them does not invalidate apt, dependency, or CUTLASS checkout layers.
+
+Run the controlled B200 cache validation with:
+
+```bash
+make modal-cutlass GATE=dev-infra CUTLASS_DEV_LABEL=precise-cache
+```
+
+Its generated packet belongs under `benchmarking/modal-results/cutlass/dev-infra-phase1/` and must not be committed.
+
 See `findings/modal-vllm-run-anomalies.md` for retained vLLM results and examples of correlated or anomalous sweeps.

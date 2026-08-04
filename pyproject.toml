@@ -60,7 +60,12 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-fused_mm_sampling = ["py.typed", "csrc/cutlass/*.cu", "csrc/cutlass/*.cuh"]
+fused_mm_sampling = [
+    "py.typed",
+    "csrc/cutlass/*.cu",
+    "csrc/cutlass/*.cuh",
+    "csrc/cutlass/*.patch",
+]
 
 [tool.ruff]
 line-length = 100

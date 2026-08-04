@@ -29,12 +29,14 @@ modal-pytest-distributed:
 modal-versions:
 	modal run -m src.fused_mm_sampling.modal_lib.modal_versions
 
-CUTLASS_GATES := toolchain accumulator-layout thread-local-max warp-max cta-max cta-multi-column-max cta-boundary-max evt-candidates stage2 greedy-provider greedy-performance greedy-profile greedy-ncu ordinary-gemm ordinary-gemm-tuning winning-schedule-layout winning-schedule-evt stateless-philox gumbel-provider gumbel-ncu
+CUTLASS_GATES := toolchain accumulator-layout thread-local-max warp-max cta-max cta-multi-column-max cta-boundary-max evt-candidates stage2 greedy-provider greedy-performance greedy-profile greedy-ncu ordinary-gemm ordinary-gemm-tuning winning-schedule-layout winning-schedule-evt stateless-philox gumbel-provider gumbel-ncu dev-infra
 # PHASE and RUN select the Gate 2c sub-run of the ordinary-gemm-tuning gate.
 PHASE := discover
 RUN := 1
 MODAL_ARGS :=
 MODAL_RUN_ARGS :=
+CUTLASS_DEV_LABEL :=
+PYTHON ?= python3
 CUTLASS_MODULE_toolchain := toolchain
 CUTLASS_MODULE_accumulator-layout := accumulator_layout
 CUTLASS_MODULE_thread-local-max := thread_local_max
@@ -55,6 +57,7 @@ CUTLASS_MODULE_winning-schedule-evt := winning_schedule_evt
 CUTLASS_MODULE_stateless-philox := stateless_philox
 CUTLASS_MODULE_gumbel-provider := gumbel_provider
 CUTLASS_MODULE_gumbel-ncu := gumbel_ncu
+CUTLASS_MODULE_dev-infra := dev_infra
 CUTLASS_RESULT_toolchain := 00-toolchain
 CUTLASS_RESULT_accumulator-layout := 01-accumulator-layout
 CUTLASS_RESULT_thread-local-max := 02-thread-local-max
@@ -75,6 +78,7 @@ CUTLASS_RESULT_winning-schedule-evt := 16-winning-schedule-evt
 CUTLASS_RESULT_stateless-philox := 17-stateless-philox
 CUTLASS_RESULT_gumbel-provider := 18-gumbel-provider
 CUTLASS_RESULT_gumbel-ncu := 18-gumbel-provider
+CUTLASS_RESULT_dev-infra := dev-infra-phase1
 CUTLASS_LOG_toolchain := smoke.txt
 CUTLASS_LOG_ordinary-gemm-tuning := gate-2c-$(PHASE)-run$(RUN)-log.txt
 
@@ -85,10 +89,16 @@ modal-cutlass:
 	@test -n "$(CUTLASS_MODULE_$(GATE))" || \
 		(echo "Unknown CUTLASS gate '$(GATE)'. Choose one of: $(CUTLASS_GATES)"; exit 1)
 	mkdir -p benchmarking/modal-results/cutlass/$(CUTLASS_RESULT_$(GATE))
-	@set -o pipefail; \
-	PHASE=$(PHASE) RUN=$(RUN) \
-	modal run $(MODAL_RUN_ARGS) -m src.fused_mm_sampling.modal_lib.cutlass.$(CUTLASS_MODULE_$(GATE)) $(MODAL_ARGS) 2>&1 | \
-		tee benchmarking/modal-results/cutlass/$(CUTLASS_RESULT_$(GATE))/$(or $(CUTLASS_LOG_$(GATE)),log.txt)
+	@PHASE=$(PHASE) RUN=$(RUN) \
+	$(PYTHON) benchmarking/cutlass_dev_run.py \
+		--gate "$(GATE)" \
+		--phase "$(PHASE)" \
+		--label "$(CUTLASS_DEV_LABEL)" \
+		--log benchmarking/modal-results/cutlass/$(CUTLASS_RESULT_$(GATE))/$(or $(CUTLASS_LOG_$(GATE)),log.txt) \
+		-- modal run $(MODAL_RUN_ARGS) -m src.fused_mm_sampling.modal_lib.cutlass.$(CUTLASS_MODULE_$(GATE)) $(MODAL_ARGS)
+
+cutlass-dev-metrics:
+	$(PYTHON) benchmarking/cutlass_dev_metrics.py
 
 update-deps:
 	uv lock --upgrade  # Re-resolve all deps to latest compatible versions

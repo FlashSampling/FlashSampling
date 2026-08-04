@@ -60,8 +60,10 @@ Stop stale interrupted Modal apps before relaunching to avoid duplicate builds, 
 
 CUTLASS PyTorch JIT extensions must mount the shared `fused-mm-sample` volume and call `set_volume_caches()`.
 This places `TORCH_EXTENSIONS_DIR` on the shared cache so workers reuse multi-minute SM90 and SM100 builds.
-`_extension_name()` hashes all local CUTLASS `.cu`, `.cuh`, and `.patch` inputs so header changes cannot reuse a stale shared object.
+The extension fingerprint follows recursive quoted local includes and also hashes compiler flags, architecture, both applied patches, the pinned CUTLASS revision, and Python, Torch, and CUDA ABI identities.
+Standalone correctness harnesses are excluded so their edits do not invalidate production extensions.
 Keep architecture and feature variants under distinct prefixes, and do not launch concurrent first builds of the same content-keyed extension.
+Use `make cutlass-dev-metrics` to summarize end-to-end gate duration, startup, extension load time, cache state, failures, and residual time.
 
 The shared correctness-gate helpers live in `src/fused_mm_sampling/modal_lib/cutlass/gate_common.py` and the max-harness CUDA helper lives in `src/fused_mm_sampling/csrc/cutlass/max_harness.h`.
 Put new common sanitizer, CSV, pass-detection, packet, and CUDA-check logic in those helpers instead of copying it into another gate.

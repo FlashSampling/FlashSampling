@@ -1,12 +1,15 @@
 """CUTLASS BF16 TP1 greedy and Gumbel-Max FMMS providers."""
 
-import hashlib
 import os
+import sys
+import time
 from pathlib import Path
 
 import torch
-from torch.utils.cpp_extension import load
+from torch.utils.cpp_extension import get_default_build_root, load
 
+from .cutlass_build import ExtensionBuildSpec, extension_name
+from .dev_metrics import emit_dev_event
 from .tp_info import TP1, TPInfo
 
 _CSRC_DIR = Path(__file__).resolve().parent / "csrc" / "cutlass"
@@ -182,31 +185,20 @@ def cutlass_launch_greedy_stage2(
 def _get_module():
     global _module
     if _module is None:
-        cutlass_root = Path(os.environ.get("CUTLASS_ROOT", "/opt/cutlass"))
-        include_dirs = [
-            str(cutlass_root / "include"),
-            str(cutlass_root / "tools" / "util" / "include"),
-            str(_CSRC_DIR),
-        ]
         major, minor = torch.cuda.get_device_capability()
         architecture = f"{major}{minor}"
         if architecture not in {"90", "100"}:
             raise RuntimeError("The CUTLASS greedy provider supports SM90 and SM100 only")
-        _module = load(
-            name=_extension_name(f"fmms_cutlass_greedy_sm{architecture}"),
-            sources=[
-                str(_CSRC_DIR / "greedy_provider.cu"),
-                str(_CSRC_DIR / "winning_schedule_provider.cu"),
-            ],
-            extra_include_paths=include_dirs,
-            extra_cuda_cflags=[
+        _module = _load_cutlass_extension(
+            prefix=f"fmms_cutlass_greedy_sm{architecture}",
+            architecture=architecture,
+            cuda_flags=(
                 "-O3",
                 "-lineinfo",
                 "--expt-relaxed-constexpr",
                 f"-arch=sm_{architecture}a",
                 f"-DFMMS_ARCH_SM{architecture}",
-            ],
-            verbose=os.environ.get("FMMS_CUTLASS_VERBOSE", "") == "1",
+            ),
         )
     return _module
 
@@ -214,38 +206,85 @@ def _get_module():
 def _get_sampling_module():
     global _sampling_module
     if _sampling_module is None:
-        cutlass_root = Path(os.environ.get("CUTLASS_ROOT", "/opt/cutlass"))
-        include_dirs = [
-            str(cutlass_root / "include"),
-            str(cutlass_root / "tools" / "util" / "include"),
-            str(_CSRC_DIR),
-        ]
         if torch.cuda.get_device_capability() != (10, 0):
             raise RuntimeError("The Gate 4 CUTLASS sampling provider requires SM100")
-        _sampling_module = load(
-            name=_extension_name("fmms_cutlass_sampling_sm100"),
-            sources=[
-                str(_CSRC_DIR / "greedy_provider.cu"),
-                str(_CSRC_DIR / "winning_schedule_provider.cu"),
-            ],
-            extra_include_paths=include_dirs,
-            extra_cuda_cflags=[
+        _sampling_module = _load_cutlass_extension(
+            prefix="fmms_cutlass_sampling_sm100",
+            architecture="100",
+            cuda_flags=(
                 "-O3",
                 "-lineinfo",
                 "--expt-relaxed-constexpr",
                 "-arch=sm_100a",
                 "-DFMMS_ARCH_SM100",
                 "-DFMMS_GUMBEL",
-            ],
-            verbose=os.environ.get("FMMS_CUTLASS_VERBOSE", "") == "1",
+            ),
         )
     return _sampling_module
 
 
-def _extension_name(prefix: str) -> str:
-    digest = hashlib.sha256()
-    for path in sorted(_CSRC_DIR.iterdir()):
-        if path.suffix in {".cu", ".cuh", ".patch"}:
-            digest.update(path.name.encode())
-            digest.update(path.read_bytes())
-    return f"{prefix}_{digest.hexdigest()[:12]}"
+def _load_cutlass_extension(
+    prefix: str,
+    architecture: str,
+    cuda_flags: tuple[str, ...],
+):
+    cutlass_root = Path(os.environ.get("CUTLASS_ROOT", "/opt/cutlass"))
+    sources = (
+        _CSRC_DIR / "greedy_provider.cu",
+        _CSRC_DIR / "winning_schedule_provider.cu",
+    )
+    spec = ExtensionBuildSpec(
+        prefix=prefix,
+        source_root=_CSRC_DIR,
+        sources=sources,
+        cuda_flags=cuda_flags,
+        architecture=architecture,
+        toolchain_identity=os.environ.get(
+            "FMMS_CUTLASS_TOOLCHAIN_ID", "cutlass-toolchain-unspecified"
+        ),
+        python_abi=sys.implementation.cache_tag or "unknown",
+        torch_version=torch.__version__,
+        cuda_version=torch.version.cuda or "unknown",
+        supplemental_inputs=(
+            _CSRC_DIR / "sm100-void-d.patch",
+            _CSRC_DIR / "sm90-row-reduction-uint64.patch",
+        ),
+    )
+    name, fingerprint = extension_name(spec)
+    build_root = Path(
+        os.environ.get("TORCH_EXTENSIONS_DIR", get_default_build_root())
+    )
+    build_dir = build_root / name
+    cache_hit = any(build_dir.glob("*.so"))
+    start = time.perf_counter()
+    status = "success"
+    module = None
+    try:
+        module = load(
+            name=name,
+            sources=[str(path) for path in sources],
+            extra_include_paths=[
+                str(cutlass_root / "include"),
+                str(cutlass_root / "tools" / "util" / "include"),
+                str(_CSRC_DIR),
+            ],
+            extra_cuda_cflags=list(cuda_flags),
+            verbose=os.environ.get("FMMS_CUTLASS_VERBOSE", "") == "1",
+        )
+        return module
+    except BaseException:
+        status = "error"
+        raise
+    finally:
+        emit_dev_event(
+            "extension_load",
+            prefix=prefix,
+            extension_name=name,
+            fingerprint=fingerprint.digest,
+            dependencies=list(fingerprint.dependencies),
+            dependency_count=len(fingerprint.dependencies),
+            cache_hit=cache_hit,
+            duration_seconds=time.perf_counter() - start,
+            status=status,
+            binary_path=str(module.__file__) if module is not None else None,
+        )

@@ -154,6 +154,14 @@ def make_cutlass_provider_image(
             f"cd {CUTLASS_ROOT} && git apply /opt/fmms/sm90-row-reduction-uint64.patch",
             "pip install --break-system-packages pytest",
         )
+        # Keep run metadata in a trailing layer so instrumentation changes do
+        # not invalidate the expensive dependency and CUTLASS checkout layers.
+        .env(
+            {
+                "FMMS_CUTLASS_TOOLCHAIN_ID": f"cutlass-{CUTLASS_SHA}",
+                "FMMS_DEV_METRICS": "1",
+            }
+        )
     )
 
 
