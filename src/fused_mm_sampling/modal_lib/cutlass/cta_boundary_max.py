@@ -1,19 +1,17 @@
 """Validate CTA max-with-index predication on partial M and N tiles."""
 
-import json
-import subprocess
 from io import StringIO
-from pathlib import Path
 
 import pandas as pd
 
 from ..utils import make_app
+from .gate_common import result_dir, run_compute_sanitizer, sanitizer_pass, write_packet
 from .utils import add_cutlass_cta_boundary_max, make_cutlass_image
 
 app = make_app()
 image = add_cutlass_cta_boundary_max(make_cutlass_image())
 
-OUTPUT_DIR = Path("benchmarking/modal-results/cutlass/06-cta-boundary-max")
+OUTPUT_DIR = result_dir("06-cta-boundary-max")
 ARCHITECTURES = ("sm90", "sm100")
 M_EXTENTS = (100, 127, 128, 129, 255, 256, 257)
 N_EXTENTS = (1, 2, 63, 64, 65, 127, 128, 129)
@@ -37,58 +35,27 @@ EXPECTED_COLUMNS = [
     "actual_index",
     "pass",
 ]
+CSV_HEADER = ",".join(EXPECTED_COLUMNS)
 
 
 @app.function(gpu="H100", image=image, timeout=10 * 60)
 def record_sm90() -> dict[str, str]:
-    return _run("/opt/fmms/cutlass_cta_boundary_max_sm90")
+    return run_compute_sanitizer(
+        "/opt/fmms/cutlass_cta_boundary_max_sm90",
+        ("memcheck", "racecheck"),
+        CSV_HEADER,
+        exact_csv_header=True,
+    )
 
 
 @app.function(gpu="B200", image=image, timeout=10 * 60)
 def record_sm100() -> dict[str, str]:
-    return _run("/opt/fmms/cutlass_cta_boundary_max_sm100")
-
-
-def _run(executable: str) -> dict[str, str]:
-    reports = {}
-    csv_text = None
-    for tool in ("memcheck", "racecheck"):
-        result = subprocess.run(
-            [
-                "compute-sanitizer",
-                "--tool",
-                tool,
-                "--error-exitcode",
-                "99",
-                executable,
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        reports[tool] = result.stdout + result.stderr
-        if tool == "racecheck":
-            csv_text = _extract_csv(result.stdout)
-    if csv_text is None:
-        raise RuntimeError("Boundary result CSV is absent")
-    return {"csv": csv_text, **reports}
-
-
-def _extract_csv(stdout: str) -> str:
-    lines = stdout.splitlines()
-    header = ",".join(EXPECTED_COLUMNS)
-    csv_start = next(
-        (position for position, line in enumerate(lines) if line == header),
-        None,
+    return run_compute_sanitizer(
+        "/opt/fmms/cutlass_cta_boundary_max_sm100",
+        ("memcheck", "racecheck"),
+        CSV_HEADER,
+        exact_csv_header=True,
     )
-    if csv_start is None:
-        raise RuntimeError("Boundary result CSV is absent from sanitizer output")
-    csv_lines = []
-    for line in lines[csv_start:]:
-        if line.startswith("========="):
-            break
-        csv_lines.append(line)
-    return "\n".join(csv_lines) + "\n"
 
 
 def _validate(csv_text: str, architecture: str) -> pd.DataFrame:
@@ -156,27 +123,20 @@ def _boundary_extent(extent: int) -> int:
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     frames = []
-    sanitizer_pass = {}
+    sanitizer_pass_flags = {}
     for architecture, remote_function in (
         ("sm90", record_sm90),
         ("sm100", record_sm100),
     ):
         result = remote_function.remote()
         frames.append(_validate(result["csv"], architecture))
-        sanitizer_pass[architecture] = {
-            "memcheck": "ERROR SUMMARY: 0 errors" in result["memcheck"],
-            "racecheck": (
-                "RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)"
-                in result["racecheck"]
-            ),
-        }
+        sanitizer_pass_flags[architecture] = sanitizer_pass(result)
         for tool in ("memcheck", "racecheck"):
             (OUTPUT_DIR / f"{tool}-{architecture}.txt").write_text(result[tool])
-        if not all(sanitizer_pass[architecture].values()):
+        if not all(sanitizer_pass_flags[architecture].values()):
             raise RuntimeError(f"Sanitizer did not pass for {architecture}")
 
     cases = pd.concat(frames, ignore_index=True)
-    cases.to_csv(OUTPUT_DIR / "cases.csv", index=False)
     case_summary = (
         cases.assign(
             mismatch=cases["pass"].ne(1),
@@ -198,7 +158,6 @@ def main() -> None:
         )
         .rename(columns={"pass_status": "pass"})
     )
-    case_summary.to_csv(OUTPUT_DIR / "case-summary.csv", index=False)
     failures = cases.query("`pass` != 1")
     expected_count = len(ARCHITECTURES) * len(M_EXTENTS) * len(N_EXTENTS) * 128
     expected_summary_count = len(ARCHITECTURES) * len(M_EXTENTS) * len(N_EXTENTS)
@@ -221,7 +180,7 @@ def main() -> None:
             and len(case_summary) == expected_summary_count
             and all(
                 all(tool_results.values())
-                for tool_results in sanitizer_pass.values()
+                for tool_results in sanitizer_pass_flags.values()
             )
             else "fail"
         ),
@@ -240,7 +199,7 @@ def main() -> None:
         "padded_n_output_canary_preserved": True,
         "index_scope": "tile-local",
         "exact_fp32_bit_comparison": True,
-        "sanitizer_pass": sanitizer_pass,
+        "sanitizer_pass": sanitizer_pass_flags,
         "warp_specialized_cutlass_kernel": False,
         "raw_measurements": {
             "applicable": False,
@@ -253,9 +212,16 @@ def main() -> None:
     }
     if summary["status"] != "pass":
         raise RuntimeError("Gate 1f verification packet is incomplete")
-    (OUTPUT_DIR / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-    (OUTPUT_DIR / "VERIFY.md").write_text(
-        """# Gate 1f verification
+    write_packet(
+        OUTPUT_DIR,
+        cases,
+        case_summary,
+        summary,
+        _VERIFY,
+    )
+
+
+_VERIFY = """# Gate 1f verification
 
 Expected:
 
@@ -285,5 +251,3 @@ Gate 1f intentionally retains tile-local indices.
 Gate 1g adds global vocabulary indices and cross-tile tie handling.
 Gate 1f does not run a warp-specialized CUTLASS kernel.
 """
-    )
-    print(json.dumps(summary, indent=2))

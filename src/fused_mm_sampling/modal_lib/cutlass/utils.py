@@ -157,9 +157,21 @@ def make_cutlass_provider_image(
     )
 
 
-def add_cutlass_thread_local_max(image: modal.Image) -> modal.Image:
-    """Add the Gate 1b thread-local max-with-index binaries."""
+def _add_cutlass_max_binary(
+    image: modal.Image,
+    stem: str,
+    source_file: str,
+    *,
+    lineinfo: bool = False,
+) -> modal.Image:
+    """Compile one max-with-index gate source into the SM90/SM100 binary pair.
+
+    `stem` names the two output binaries (`cutlass_{stem}_sm90`/`_sm100`) and
+    `source_file` is the `.cu` in `csrc/cutlass` to compile. The four
+    max-hierarchy gates (1b-1f) differ only in this pair.
+    """
     csrc_root = _repo_root / "src/fused_mm_sampling/csrc/cutlass"
+    lineinfo_flag = " -lineinfo" if lineinfo else ""
     return (
         image.add_local_file(
             str(csrc_root / "max_with_index.cuh"),
@@ -167,124 +179,56 @@ def add_cutlass_thread_local_max(image: modal.Image) -> modal.Image:
             copy=True,
         )
         .add_local_file(
-            str(csrc_root / "thread_local_max.cu"),
-            remote_path="/opt/fmms/thread_local_max.cu",
+            str(csrc_root / "max_harness.h"),
+            remote_path="/opt/fmms/max_harness.h",
+            copy=True,
+        )
+        .add_local_file(
+            str(csrc_root / source_file),
+            remote_path=f"/opt/fmms/{source_file}",
             copy=True,
         )
         .run_commands(
-            "nvcc -std=c++17 -O2 -arch=sm_90a -DFMMS_ARCH_SM90"
-            " -I/opt/fmms"
-            " /opt/fmms/thread_local_max.cu"
-            " -o /opt/fmms/cutlass_thread_local_max_sm90",
-            "nvcc -std=c++17 -O2 -arch=sm_100a -DFMMS_ARCH_SM100"
-            " -I/opt/fmms"
-            " /opt/fmms/thread_local_max.cu"
-            " -o /opt/fmms/cutlass_thread_local_max_sm100",
+            f"nvcc -std=c++17 -O2{lineinfo_flag}"
+            " -arch=sm_90a -DFMMS_ARCH_SM90"
+            f" -I/opt/fmms /opt/fmms/{source_file}"
+            f" -o /opt/fmms/cutlass_{stem}_sm90",
+            f"nvcc -std=c++17 -O2{lineinfo_flag}"
+            " -arch=sm_100a -DFMMS_ARCH_SM100"
+            f" -I/opt/fmms /opt/fmms/{source_file}"
+            f" -o /opt/fmms/cutlass_{stem}_sm100",
         )
+    )
+
+
+def add_cutlass_thread_local_max(image: modal.Image) -> modal.Image:
+    """Add the Gate 1b thread-local max-with-index binaries."""
+    return _add_cutlass_max_binary(
+        image, "thread_local_max", "thread_local_max.cu"
     )
 
 
 def add_cutlass_warp_max(image: modal.Image) -> modal.Image:
     """Add the Gate 1c warp-local max-with-index binaries."""
-    csrc_root = _repo_root / "src/fused_mm_sampling/csrc/cutlass"
-    return (
-        image.add_local_file(
-            str(csrc_root / "max_with_index.cuh"),
-            remote_path="/opt/fmms/max_with_index.cuh",
-            copy=True,
-        )
-        .add_local_file(
-            str(csrc_root / "warp_max.cu"),
-            remote_path="/opt/fmms/warp_max.cu",
-            copy=True,
-        )
-        .run_commands(
-            "nvcc -std=c++17 -O2 -arch=sm_90a -DFMMS_ARCH_SM90"
-            " -I/opt/fmms /opt/fmms/warp_max.cu"
-            " -o /opt/fmms/cutlass_warp_max_sm90",
-            "nvcc -std=c++17 -O2 -arch=sm_100a -DFMMS_ARCH_SM100"
-            " -I/opt/fmms /opt/fmms/warp_max.cu"
-            " -o /opt/fmms/cutlass_warp_max_sm100",
-        )
-    )
+    return _add_cutlass_max_binary(image, "warp_max", "warp_max.cu")
 
 
 def add_cutlass_cta_max(image: modal.Image) -> modal.Image:
     """Add the Gate 1d CTA-local max-with-index binaries."""
-    csrc_root = _repo_root / "src/fused_mm_sampling/csrc/cutlass"
-    return (
-        image.add_local_file(
-            str(csrc_root / "max_with_index.cuh"),
-            remote_path="/opt/fmms/max_with_index.cuh",
-            copy=True,
-        )
-        .add_local_file(
-            str(csrc_root / "cta_max.cu"),
-            remote_path="/opt/fmms/cta_max.cu",
-            copy=True,
-        )
-        .run_commands(
-            "nvcc -std=c++17 -O2 -arch=sm_90a -DFMMS_ARCH_SM90"
-            " -I/opt/fmms /opt/fmms/cta_max.cu"
-            " -o /opt/fmms/cutlass_cta_max_sm90",
-            "nvcc -std=c++17 -O2 -arch=sm_100a -DFMMS_ARCH_SM100"
-            " -I/opt/fmms /opt/fmms/cta_max.cu"
-            " -o /opt/fmms/cutlass_cta_max_sm100",
-        )
-    )
+    return _add_cutlass_max_binary(image, "cta_max", "cta_max.cu")
 
 
 def add_cutlass_cta_multi_column_max(image: modal.Image) -> modal.Image:
     """Add the Gate 1e multi-column CTA max-with-index binaries."""
-    csrc_root = _repo_root / "src/fused_mm_sampling/csrc/cutlass"
-    return (
-        image.add_local_file(
-            str(csrc_root / "max_with_index.cuh"),
-            remote_path="/opt/fmms/max_with_index.cuh",
-            copy=True,
-        )
-        .add_local_file(
-            str(csrc_root / "cta_multi_column_max.cu"),
-            remote_path="/opt/fmms/cta_multi_column_max.cu",
-            copy=True,
-        )
-        .run_commands(
-            "nvcc -std=c++17 -O2 -lineinfo"
-            " -arch=sm_90a -DFMMS_ARCH_SM90"
-            " -I/opt/fmms /opt/fmms/cta_multi_column_max.cu"
-            " -o /opt/fmms/cutlass_cta_multi_column_max_sm90",
-            "nvcc -std=c++17 -O2 -lineinfo"
-            " -arch=sm_100a -DFMMS_ARCH_SM100"
-            " -I/opt/fmms /opt/fmms/cta_multi_column_max.cu"
-            " -o /opt/fmms/cutlass_cta_multi_column_max_sm100",
-        )
+    return _add_cutlass_max_binary(
+        image, "cta_multi_column_max", "cta_multi_column_max.cu", lineinfo=True
     )
 
 
 def add_cutlass_cta_boundary_max(image: modal.Image) -> modal.Image:
     """Add the Gate 1f boundary-predicated CTA max binaries."""
-    csrc_root = _repo_root / "src/fused_mm_sampling/csrc/cutlass"
-    return (
-        image.add_local_file(
-            str(csrc_root / "max_with_index.cuh"),
-            remote_path="/opt/fmms/max_with_index.cuh",
-            copy=True,
-        )
-        .add_local_file(
-            str(csrc_root / "cta_boundary_max.cu"),
-            remote_path="/opt/fmms/cta_boundary_max.cu",
-            copy=True,
-        )
-        .run_commands(
-            "nvcc -std=c++17 -O2 -lineinfo"
-            " -arch=sm_90a -DFMMS_ARCH_SM90"
-            " -I/opt/fmms /opt/fmms/cta_boundary_max.cu"
-            " -o /opt/fmms/cutlass_cta_boundary_max_sm90",
-            "nvcc -std=c++17 -O2 -lineinfo"
-            " -arch=sm_100a -DFMMS_ARCH_SM100"
-            " -I/opt/fmms /opt/fmms/cta_boundary_max.cu"
-            " -o /opt/fmms/cutlass_cta_boundary_max_sm100",
-        )
+    return _add_cutlass_max_binary(
+        image, "cta_boundary_max", "cta_boundary_max.cu", lineinfo=True
     )
 
 
@@ -382,6 +326,17 @@ def add_cutlass_accumulator_layout(image: modal.Image) -> modal.Image:
     )
 
 
+# The five winning B200 2-SM schedule donors: (name, tile_m, tile_n, tile_k,
+# cluster_m). Shared by the accumulator-ownership and fused-EVT gates.
+WINNING_VARIANTS = (
+    ("128x64x128-c2", 128, 64, 128, 2),
+    ("256x128x64-c2", 256, 128, 64, 2),
+    ("256x128x64-c4", 256, 128, 64, 4),
+    ("256x128x128-c2", 256, 128, 128, 2),
+    ("256x256x64-c2", 256, 256, 64, 2),
+)
+
+
 def add_cutlass_winning_schedule_layout(image: modal.Image) -> modal.Image:
     """Add Gate 2d ownership diagnostics for the winning B200 schedules."""
     csrc_root = _repo_root / "src/fused_mm_sampling/csrc/cutlass"
@@ -389,20 +344,13 @@ def add_cutlass_winning_schedule_layout(image: modal.Image) -> modal.Image:
     include_flags = (
         f"-I{CUTLASS_ROOT}/include -I{CUTLASS_ROOT}/tools/util/include"
     )
-    variants = (
-        ("128x64x128-c2", 128, 64, 128, 2),
-        ("256x128x64-c2", 256, 128, 64, 2),
-        ("256x128x64-c4", 256, 128, 64, 4),
-        ("256x128x128-c2", 256, 128, 128, 2),
-        ("256x256x64-c2", 256, 256, 64, 2),
-    )
     commands = [
         "nvcc -std=c++17 -O2 --expt-relaxed-constexpr -arch=sm_100a "
         "-DFMMS_ARCH_SM100 -DFMMS_SM100_2SM "
         f"-DFMMS_TILE_M={tile_m} -DFMMS_TILE_N={tile_n} "
         f"-DFMMS_TILE_K={tile_k} -DFMMS_CLUSTER_M={cluster_m} "
         f"{include_flags} {source} -o /opt/fmms/cutlass_winning_layout_{name}"
-        for name, tile_m, tile_n, tile_k, cluster_m in variants
+        for name, tile_m, tile_n, tile_k, cluster_m in WINNING_VARIANTS
     ]
     return image.add_local_file(
         str(csrc_root / "accumulator_layout.cu"),
@@ -417,13 +365,6 @@ def add_cutlass_winning_schedule_evt(image: modal.Image) -> modal.Image:
     include_flags = (
         f"-I{CUTLASS_ROOT}/include -I{CUTLASS_ROOT}/tools/util/include"
     )
-    variants = (
-        ("128x64x128-c2", 128, 64, 128, 2),
-        ("256x128x64-c2", 256, 128, 64, 2),
-        ("256x128x64-c4", 256, 128, 64, 4),
-        ("256x128x128-c2", 256, 128, 128, 2),
-        ("256x256x64-c2", 256, 256, 64, 2),
-    )
     commands = [
         "nvcc -std=c++17 -O2 -lineinfo --expt-relaxed-constexpr "
         "-arch=sm_100a -DFMMS_ARCH_SM100 -DFMMS_SM100_2SM "
@@ -432,7 +373,7 @@ def add_cutlass_winning_schedule_evt(image: modal.Image) -> modal.Image:
         f"-DFMMS_TILE_K={tile_k} -DFMMS_CLUSTER_M={cluster_m} "
         f"{include_flags} /opt/fmms/evt_candidates.cu "
         f"-o /opt/fmms/cutlass_winning_evt_{name}"
-        for name, tile_m, tile_n, tile_k, cluster_m in variants
+        for name, tile_m, tile_n, tile_k, cluster_m in WINNING_VARIANTS
     ]
     return (
         image.add_local_file(

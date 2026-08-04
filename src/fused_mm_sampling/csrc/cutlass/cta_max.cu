@@ -9,6 +9,7 @@
 
 #include <cuda_runtime.h>
 
+#include "max_harness.h"
 #include "max_with_index.cuh"
 
 #if !defined(FMMS_ARCH_SM90) && !defined(FMMS_ARCH_SM100)
@@ -21,6 +22,7 @@ using fmms_cutlass::MaxWithIndex;
 using fmms_cutlass::choose_max;
 using fmms_cutlass::float_bits;
 using fmms_cutlass::reduce_warp_xor;
+using fmms_harness::check_cuda;
 
 constexpr int kWarps = 4;
 constexpr int kWarpSize = 32;
@@ -76,13 +78,6 @@ __global__ void reduce_cta(
       }
     }
     __syncthreads();
-  }
-}
-
-void check_cuda(cudaError_t status, char const* operation) {
-  if (status != cudaSuccess) {
-    std::cerr << operation << " failed: " << cudaGetErrorString(status) << '\n';
-    std::exit(EXIT_FAILURE);
   }
 }
 

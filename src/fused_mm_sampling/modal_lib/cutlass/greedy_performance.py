@@ -6,6 +6,7 @@ from pathlib import Path
 import pandas as pd
 
 from ..utils import make_app
+from .ordinary_gemm_common import benchmark
 from .utils import add_cutlass_greedy_provider, make_cutlass_provider_image
 
 app = make_app()
@@ -113,7 +114,7 @@ def _run(
                         f"H={n_hidden_states}, provider={provider}"
                     )
                 for repetition, latency_ms in enumerate(
-                    _benchmark(function, WARMUP_REPETITIONS, BENCHMARK_REPETITIONS)
+                    benchmark(function)
                 ):
                     rows.append(
                         {
@@ -184,35 +185,6 @@ def _indices(provider, output):
     if provider == "cutlass-gemm":
         return output.argmax(dim=0, keepdim=False)[:, None]
     return output
-
-
-def _benchmark(function, warmup_repetitions, benchmark_repetitions):
-    import torch
-
-    cache = torch.empty(
-        256 * 1024 * 1024 // 4, dtype=torch.int, device="cuda"
-    )
-    for _ in range(warmup_repetitions):
-        function()
-    torch.cuda.synchronize()
-    start_events = [
-        torch.cuda.Event(enable_timing=True)
-        for _ in range(benchmark_repetitions)
-    ]
-    end_events = [
-        torch.cuda.Event(enable_timing=True)
-        for _ in range(benchmark_repetitions)
-    ]
-    for start, end in zip(start_events, end_events):
-        cache.zero_()
-        start.record()
-        function()
-        end.record()
-    torch.cuda.synchronize()
-    return [
-        start.elapsed_time(end)
-        for start, end in zip(start_events, end_events)
-    ]
 
 
 def summarize_timings(timings: pd.DataFrame) -> pd.DataFrame:

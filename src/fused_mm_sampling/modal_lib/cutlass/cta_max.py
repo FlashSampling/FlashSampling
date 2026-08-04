@@ -1,20 +1,19 @@
 """Validate CTA-local max-with-index on H100 and B200."""
 
-import json
-import subprocess
 from io import StringIO
-from pathlib import Path
 
 import pandas as pd
 
 from ..utils import make_app
+from .gate_common import result_dir, run_compute_sanitizer, sanitizer_pass, write_packet
 from .utils import add_cutlass_cta_max, make_cutlass_image
 
 app = make_app()
 image = add_cutlass_cta_max(make_cutlass_image())
 
-OUTPUT_DIR = Path("benchmarking/modal-results/cutlass/04-cta-max")
+OUTPUT_DIR = result_dir("04-cta-max")
 ARCHITECTURES = ("sm90", "sm100")
+CSV_HEADER = "architecture,case,expected_value_bits,actual_value_bits,"
 EXPECTED_CASES = {
     *(f"maximum_in_warp_{warp}" for warp in range(4, 8)),
     "all_negative",
@@ -25,47 +24,16 @@ EXPECTED_CASES = {
 
 @app.function(gpu="H100", image=image, timeout=10 * 60)
 def record_sm90() -> dict[str, str]:
-    return _run("/opt/fmms/cutlass_cta_max_sm90")
+    return run_compute_sanitizer(
+        "/opt/fmms/cutlass_cta_max_sm90", ("racecheck",), CSV_HEADER
+    )
 
 
 @app.function(gpu="B200", image=image, timeout=10 * 60)
 def record_sm100() -> dict[str, str]:
-    return _run("/opt/fmms/cutlass_cta_max_sm100")
-
-
-def _run(executable: str) -> dict[str, str]:
-    result = subprocess.run(
-        [
-            "compute-sanitizer",
-            "--tool",
-            "racecheck",
-            "--error-exitcode",
-            "99",
-            executable,
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
+    return run_compute_sanitizer(
+        "/opt/fmms/cutlass_cta_max_sm100", ("racecheck",), CSV_HEADER
     )
-    output = result.stdout + result.stderr
-    lines = result.stdout.splitlines()
-    header = "architecture,case,expected_value_bits,actual_value_bits,"
-    csv_start = next(
-        (
-            position
-            for position, line in enumerate(lines)
-            if line.startswith(header)
-        ),
-        None,
-    )
-    if csv_start is None:
-        raise RuntimeError("CTA result CSV is absent from racecheck output")
-    csv_lines = []
-    for line in lines[csv_start:]:
-        if line.startswith("========="):
-            break
-        csv_lines.append(line)
-    return {"csv": "\n".join(csv_lines) + "\n", "racecheck": output}
 
 
 def _validate(csv_text: str, architecture: str) -> pd.DataFrame:
@@ -106,20 +74,15 @@ def main() -> None:
         frames.append(_validate(result["csv"], architecture))
         racecheck_text = result["racecheck"]
         (OUTPUT_DIR / f"racecheck-{architecture}.txt").write_text(racecheck_text)
-        racecheck_pass[architecture] = (
-            "RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)"
-            in racecheck_text
-        )
+        racecheck_pass[architecture] = sanitizer_pass(result)["racecheck"]
         if not racecheck_pass[architecture]:
             raise RuntimeError(f"Racecheck did not report zero errors for {architecture}")
 
     cases = pd.concat(frames, ignore_index=True)
-    cases.to_csv(OUTPUT_DIR / "cases.csv", index=False)
     case_summary = cases.assign(
         value_bits_match=cases["expected_value_bits"].eq(cases["actual_value_bits"]),
         index_match=cases["expected_index"].eq(cases["actual_index"]),
     )
-    case_summary.to_csv(OUTPUT_DIR / "case-summary.csv", index=False)
     failures = cases.query("`pass` != 1")
     summary = {
         "gate": "1d",
@@ -163,9 +126,16 @@ def main() -> None:
     }
     if len(cases) != summary["expected_count"]:
         raise RuntimeError("Combined Gate 1d row count is incomplete")
-    (OUTPUT_DIR / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-    (OUTPUT_DIR / "VERIFY.md").write_text(
-        """# Gate 1d verification
+    write_packet(
+        OUTPUT_DIR,
+        cases,
+        case_summary,
+        summary,
+        _VERIFY,
+    )
+
+
+_VERIFY = """# Gate 1d verification
 
 Expected:
 
@@ -191,5 +161,3 @@ Gate 1d fails if either architecture, simulated contributing warp role, tie
 order, or all-negative case is absent, any exact comparison fails, or
 racecheck reports an error.
 """
-    )
-    print(json.dumps(summary, indent=2))

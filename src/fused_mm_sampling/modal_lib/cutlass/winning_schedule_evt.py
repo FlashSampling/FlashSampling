@@ -2,15 +2,15 @@
 
 import subprocess
 from io import StringIO
-from pathlib import Path
 
 from ..utils import make_app
+from .gate_common import csv_from_sanitizer_stdout, result_dir
 from .utils import add_cutlass_winning_schedule_evt, make_cutlass_image
 
 app = make_app()
 image = add_cutlass_winning_schedule_evt(make_cutlass_image())
 
-OUTPUT_DIR = Path("benchmarking/modal-results/cutlass/16-winning-schedule-evt")
+OUTPUT_DIR = result_dir("16-winning-schedule-evt")
 EXECUTABLES = {
     "128x64x128-c2": "/opt/fmms/cutlass_winning_evt_128x64x128-c2",
     "256x128x64-c2": "/opt/fmms/cutlass_winning_evt_256x128x64-c2",
@@ -23,6 +23,7 @@ EXPECTED_COLUMNS = [
     "column", "tile_begin", "tile_end", "expected_value_bits",
     "actual_value_bits", "expected_index", "actual_index", "pass",
 ]
+CSV_HEADER = ",".join(EXPECTED_COLUMNS)
 
 
 @app.function(gpu="B200", image=image, timeout=15 * 60)
@@ -46,7 +47,7 @@ def record() -> dict:
             if result.returncode != 0:
                 return {"returncode": result.returncode, **reports}
             if tool == "racecheck":
-                csv_text = _extract_csv(result.stdout)
+                csv_text = csv_from_sanitizer_stdout(result.stdout, CSV_HEADER)
                 frame = pd.read_csv(StringIO(csv_text))
                 frame.insert(1, "schedule", family)
                 case_frames.append(frame)
@@ -69,23 +70,6 @@ def record() -> dict:
         raise RuntimeError("Incomplete fused-EVT candidate coverage")
     print(f"passed {len(cases)} exact candidate comparisons")
     return {"returncode": 0, "csv": cases.to_csv(index=False), **reports}
-
-
-def _extract_csv(stdout: str) -> str:
-    lines = stdout.splitlines()
-    header = ",".join(EXPECTED_COLUMNS)
-    csv_start = next(
-        (position for position, line in enumerate(lines) if line == header),
-        None,
-    )
-    if csv_start is None:
-        raise RuntimeError("Fused-EVT CSV is absent from sanitizer output")
-    csv_lines = []
-    for line in lines[csv_start:]:
-        if line.startswith("========="):
-            break
-        csv_lines.append(line)
-    return "\n".join(csv_lines) + "\n"
 
 
 @app.local_entrypoint()

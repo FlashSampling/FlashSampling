@@ -8,6 +8,7 @@
 
 #include <cuda_runtime.h>
 
+#include "max_harness.h"
 #include "max_with_index.cuh"
 
 #if !defined(FMMS_ARCH_SM90) && !defined(FMMS_ARCH_SM100)
@@ -19,6 +20,7 @@ namespace fmms_thread_local_max {
 using fmms_cutlass::MaxWithIndex;
 using fmms_cutlass::choose_max;
 using fmms_cutlass::float_bits;
+using fmms_harness::check_cuda;
 
 constexpr int kConsumerThreads = 128;
 constexpr int kFragmentSize = 16;
@@ -57,13 +59,6 @@ __global__ void reduce_fragments(
         (test_case * kConsumerThreads + consumer_thread) * kFragmentSize;
     results[test_case * kConsumerThreads + consumer_thread] =
         reduce_thread_fragment(values + offset, indices + offset, order);
-  }
-}
-
-void check_cuda(cudaError_t status, char const* operation) {
-  if (status != cudaSuccess) {
-    std::cerr << operation << " failed: " << cudaGetErrorString(status) << '\n';
-    std::exit(EXIT_FAILURE);
   }
 }
 
