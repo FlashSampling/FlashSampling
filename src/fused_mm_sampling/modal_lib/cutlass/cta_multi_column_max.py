@@ -1,20 +1,19 @@
 """Validate independent CTA-local max-with-index across 128 N columns."""
 
-import json
-import subprocess
 from io import StringIO
-from pathlib import Path
 
 import pandas as pd
 
 from ..utils import make_app
+from .gate_common import result_dir, run_compute_sanitizer, sanitizer_pass, write_packet
 from .utils import add_cutlass_cta_multi_column_max, make_cutlass_image
 
 app = make_app()
 image = add_cutlass_cta_multi_column_max(make_cutlass_image())
 
-OUTPUT_DIR = Path("benchmarking/modal-results/cutlass/05-cta-multi-column-max")
+OUTPUT_DIR = result_dir("05-cta-multi-column-max")
 ARCHITECTURES = ("sm90", "sm100")
+CSV_HEADER = "architecture,case,column,epi_n,boundary,"
 CASES = ("independent_unique", "all_negative")
 N = 128
 EPILOGUE_N_WIDTH = {"sm90": 32, "sm100": 16}
@@ -22,47 +21,16 @@ EPILOGUE_N_WIDTH = {"sm90": 32, "sm100": 16}
 
 @app.function(gpu="H100", image=image, timeout=10 * 60)
 def record_sm90() -> dict[str, str]:
-    return _run("/opt/fmms/cutlass_cta_multi_column_max_sm90")
+    return run_compute_sanitizer(
+        "/opt/fmms/cutlass_cta_multi_column_max_sm90", ("racecheck",), CSV_HEADER
+    )
 
 
 @app.function(gpu="B200", image=image, timeout=10 * 60)
 def record_sm100() -> dict[str, str]:
-    return _run("/opt/fmms/cutlass_cta_multi_column_max_sm100")
-
-
-def _run(executable: str) -> dict[str, str]:
-    result = subprocess.run(
-        [
-            "compute-sanitizer",
-            "--tool",
-            "racecheck",
-            "--error-exitcode",
-            "99",
-            executable,
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
+    return run_compute_sanitizer(
+        "/opt/fmms/cutlass_cta_multi_column_max_sm100", ("racecheck",), CSV_HEADER
     )
-    output = result.stdout + result.stderr
-    lines = result.stdout.splitlines()
-    header = "architecture,case,column,epi_n,boundary,"
-    csv_start = next(
-        (
-            position
-            for position, line in enumerate(lines)
-            if line.startswith(header)
-        ),
-        None,
-    )
-    if csv_start is None:
-        raise RuntimeError("Multi-column result CSV is absent from racecheck output")
-    csv_lines = []
-    for line in lines[csv_start:]:
-        if line.startswith("========="):
-            break
-        csv_lines.append(line)
-    return {"csv": "\n".join(csv_lines) + "\n", "racecheck": output}
 
 
 def _validate(csv_text: str, architecture: str) -> pd.DataFrame:
@@ -136,15 +104,11 @@ def main() -> None:
         frames.append(_validate(result["csv"], architecture))
         racecheck_text = result["racecheck"]
         (OUTPUT_DIR / f"racecheck-{architecture}.txt").write_text(racecheck_text)
-        racecheck_pass[architecture] = (
-            "RACECHECK SUMMARY: 0 hazards displayed (0 errors, 0 warnings)"
-            in racecheck_text
-        )
+        racecheck_pass[architecture] = sanitizer_pass(result)["racecheck"]
         if not racecheck_pass[architecture]:
             raise RuntimeError(f"Racecheck did not pass for {architecture}")
 
     cases = pd.concat(frames, ignore_index=True)
-    cases.to_csv(OUTPUT_DIR / "cases.csv", index=False)
     case_summary = (
         cases.assign(
             mismatch=cases["pass"].ne(1),
@@ -164,7 +128,6 @@ def main() -> None:
         )
         .rename(columns={"pass_status": "pass"})
     )
-    case_summary.to_csv(OUTPUT_DIR / "case-summary.csv", index=False)
     failures = cases.query("`pass` != 1")
     summary = {
         "gate": "1e",
@@ -216,9 +179,16 @@ def main() -> None:
         raise RuntimeError("Combined Gate 1e row count is incomplete")
     if len(case_summary) != summary["expected_case_summary_count"]:
         raise RuntimeError("Combined Gate 1e case summary is incomplete")
-    (OUTPUT_DIR / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-    (OUTPUT_DIR / "VERIFY.md").write_text(
-        """# Gate 1e verification
+    write_packet(
+        OUTPUT_DIR,
+        cases,
+        case_summary,
+        summary,
+        _VERIFY,
+    )
+
+
+_VERIFY = """# Gate 1e verification
 
 Expected:
 
@@ -245,5 +215,3 @@ It fails if either architecture, case, column, epilogue iteration boundary, or
 M winner position is absent, any exact comparison fails, or racecheck reports
 an error.
 """
-    )
-    print(json.dumps(summary, indent=2))

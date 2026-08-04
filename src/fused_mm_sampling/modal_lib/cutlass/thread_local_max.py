@@ -1,19 +1,18 @@
 """Validate thread-local max-with-index on H100 and B200."""
 
-import json
 import subprocess
 from io import StringIO
-from pathlib import Path
 
 import pandas as pd
 
 from ..utils import make_app
+from .gate_common import result_dir, write_packet
 from .utils import add_cutlass_thread_local_max, make_cutlass_image
 
 app = make_app()
 image = add_cutlass_thread_local_max(make_cutlass_image())
 
-OUTPUT_DIR = Path("benchmarking/modal-results/cutlass/02-thread-local-max")
+OUTPUT_DIR = result_dir("02-thread-local-max")
 ARCHITECTURES = ("sm90", "sm100")
 EXPECTED_CASES = {
     *(f"maximum_in_slot_{slot:02d}" for slot in range(16)),
@@ -75,7 +74,6 @@ def _validate(csv_text: str, architecture: str) -> pd.DataFrame:
 
 @app.local_entrypoint()
 def main() -> None:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     frames = []
     for architecture, remote_function in (
         ("sm90", record_sm90),
@@ -85,7 +83,6 @@ def main() -> None:
         frames.append(_validate(csv_text, architecture))
 
     cases = pd.concat(frames, ignore_index=True)
-    cases.to_csv(OUTPUT_DIR / "cases.csv", index=False)
     failures = cases.query("`pass` != 1")
     case_summary = (
         cases.assign(mismatch=cases["pass"].ne(1))
@@ -99,7 +96,6 @@ def main() -> None:
             actual_index=("actual_index", "first"),
         )
     )
-    case_summary.to_csv(OUTPUT_DIR / "case-summary.csv", index=False)
     summary = {
         "gate": "1b",
         "architectures": list(ARCHITECTURES),
@@ -123,9 +119,16 @@ def main() -> None:
             "reason": "Gate 1b performs deterministic exact comparisons.",
         },
     }
-    (OUTPUT_DIR / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-    (OUTPUT_DIR / "VERIFY.md").write_text(
-        """# Gate 1b verification
+    write_packet(
+        OUTPUT_DIR,
+        cases,
+        case_summary,
+        summary,
+        _VERIFY,
+    )
+
+
+_VERIFY = """# Gate 1b verification
 
 Expected:
 
@@ -146,5 +149,3 @@ Search `log.txt` for errors, exceptions, skipped tests, NaNs, and fallbacks.
 Gate 1b fails if either architecture or any case is absent, any row has fewer
 than 128 threads, any mismatch is nonzero, or the log contains a runtime error.
 """
-    )
-    print(json.dumps(summary, indent=2))

@@ -1,19 +1,18 @@
 """Validate warp-local max-with-index on H100 and B200."""
 
-import json
 import subprocess
 from io import StringIO
-from pathlib import Path
 
 import pandas as pd
 
 from ..utils import make_app
+from .gate_common import result_dir, write_packet
 from .utils import add_cutlass_warp_max, make_cutlass_image
 
 app = make_app()
 image = add_cutlass_warp_max(make_cutlass_image())
 
-OUTPUT_DIR = Path("benchmarking/modal-results/cutlass/03-warp-max")
+OUTPUT_DIR = result_dir("03-warp-max")
 ARCHITECTURES = ("sm90", "sm100")
 WARPS = set(range(4, 8))
 PARTICIPATING_LANES = {
@@ -85,7 +84,6 @@ def _validate(csv_text: str, architecture: str) -> pd.DataFrame:
 
 @app.local_entrypoint()
 def main() -> None:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     frames = []
     for architecture, remote_function in (
         ("sm90", record_sm90),
@@ -95,7 +93,6 @@ def main() -> None:
         frames.append(_validate(csv_text, architecture))
 
     cases = pd.concat(frames, ignore_index=True)
-    cases.to_csv(OUTPUT_DIR / "cases.csv", index=False)
     failures = cases.query("`pass` != 1")
     case_summary = (
         cases.assign(mismatch=cases["pass"].ne(1))
@@ -111,7 +108,6 @@ def main() -> None:
         )
         .rename(columns={"pass_status": "pass"})
     )
-    case_summary.to_csv(OUTPUT_DIR / "case-summary.csv", index=False)
     summary = {
         "gate": "1c",
         "command": "make modal-cutlass GATE=warp-max",
@@ -155,9 +151,16 @@ def main() -> None:
         raise RuntimeError("Combined Gate 1c row count is incomplete")
     if len(case_summary) != summary["expected_case_summary_count"]:
         raise RuntimeError("Combined Gate 1c case summary is incomplete")
-    (OUTPUT_DIR / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
-    (OUTPUT_DIR / "VERIFY.md").write_text(
-        """# Gate 1c verification
+    write_packet(
+        OUTPUT_DIR,
+        cases,
+        case_summary,
+        summary,
+        _VERIFY,
+    )
+
+
+_VERIFY = """# Gate 1c verification
 
 Expected:
 
@@ -180,5 +183,3 @@ Search `log.txt` for errors, exceptions, skipped tests, NaNs, and fallbacks.
 Gate 1c fails if either architecture, warp, required case, or participating
 lane is absent, any mismatch is nonzero, or the log contains a runtime error.
 """
-    )
-    print(json.dumps(summary, indent=2))
