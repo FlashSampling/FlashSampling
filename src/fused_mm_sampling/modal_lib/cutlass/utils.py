@@ -451,3 +451,25 @@ def add_cutlass_winning_schedule_evt(image: modal.Image) -> modal.Image:
             *commands,
         )
     )
+
+
+def add_cutlass_stateless_philox(image: modal.Image) -> modal.Image:
+    """Add the Gate 3 stateless Philox correctness harness."""
+    csrc_root = _repo_root / "src/fused_mm_sampling/csrc/cutlass"
+    return (
+        image.add_local_file(
+            str(csrc_root / "stateless_philox.cuh"),
+            remote_path="/opt/fmms/stateless_philox.cuh",
+            copy=True,
+        )
+        .add_local_file(
+            str(csrc_root / "stateless_philox.cu"),
+            remote_path="/opt/fmms/stateless_philox.cu",
+            copy=True,
+        )
+        .run_commands(
+            "nvcc -std=c++17 -O3 -lineinfo -arch=sm_100a "
+            "/opt/fmms/stateless_philox.cu "
+            "-o /opt/fmms/cutlass_stateless_philox"
+        )
+    )
