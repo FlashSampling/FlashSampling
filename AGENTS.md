@@ -1,305 +1,119 @@
 # AGENTS.md
 
-- the speed test runner is in `benchmarking/speed_test.py`, and the triton benchmark runner is in `benchmarking/triton_benchmark.py`. There are useful commands to run benchs in `./benchmarking/Makefile`.
-- equivalent commands for modal can be found in `./Makefile`.
-- The shared `Args` class for both speed_test and triton_benchmark lives in `triton_benchmark_lib.py`. speed_test's `CliArgs` overrides defaults (`case="small"`, `n_hidden_states=1`).
-- to plot all plots use `make plot-all`.
-- to test the distributed code works use `make modal-pytest-distributed` (requires >= 2 GPUs with NVLink for symmetric memory). `make pytest-distributed` also works but auto-skips on single-GPU machines.
-- when benchmarking many combinations, don't run the bench in parallel, since they will contend for the same resources. Instead launch them sequentially. On modal, you can launch benchmarks in parallel, since each job should get its own resources. When launching many parallel Modal benchmarks with an empty Triton autotune cache, consider running a single warmup job first to populate the cache on the volume. Otherwise every parallel job will autotune independently, wasting GPU time and risking inconsistent config selection.
-- available CLIs: hugging face, brev, github
-- The blog post is in `~/code/tomasruizt.github.io/tomas-blog/posts/07_fused-mm-sample/index.qmd`.
-- The paper is in `~/code/papers/flashsampling-paper/`.
+## Required startup reading
+
+Before planning or implementation, read [loop-feedback.md](loop-feedback.md) completely and apply its checklist throughout the task.
+This file is intentionally a compact startup index.
+Load only the task-specific documents linked below instead of reading every historical finding.
+
+## Documentation policy
+
+- Keep `AGENTS.md` limited to rules and routing information that apply to most tasks.
+- Put stable workflows and operational instructions in a focused file under `docs/`.
+- Put measured results, investigations, rejected approaches, and design decisions in a focused file under `findings/`.
+- Put the active CUTLASS state in `findings/cutlass/current-handoff.md`, not here.
+- Update an existing focused document when one already covers the topic.
+- Add new documents to the relevant index so future agents can discover them.
+- Do not append run-specific results, benchmark packets, or temporary handoff notes to this file.
+- `CLAUDE.md` is a symlink to this file.
+  Do not put durable project knowledge in `~/.claude/MEMORY.md` because it does not travel with the repository.
+
+## Task-specific reading
+
+| Task area | Read first |
+| --- | --- |
+| Planning or implementation | [loop-feedback.md](loop-feedback.md) |
+| Local benchmarks and timing | [docs/benchmarking.md](docs/benchmarking.md) |
+| Modal benchmarks and caching | [docs/modal-benchmarking.md](docs/modal-benchmarking.md) |
+| Testing and distribution checks | [docs/testing.md](docs/testing.md) |
+| Tensor parallel and process launch | [docs/distributed-development.md](docs/distributed-development.md) |
+| Proton, NCU, or nsys profiling | [docs/profiling.md](docs/profiling.md) |
+| vLLM integration | [docs/vllm-integration.md](docs/vllm-integration.md) |
+| Blog updates | [docs/blog-maintenance.md](docs/blog-maintenance.md) |
+| Triton TMA work | [docs/triton-tma-pitfalls.md](docs/triton-tma-pitfalls.md) |
+| Helion work | [docs/helion-pitfalls.md](docs/helion-pitfalls.md) |
+| Brev setup | [docs/brev-environment.md](docs/brev-environment.md) |
+| Historical or empirical context | [findings/README.md](findings/README.md) |
+| CUTLASS work | [findings/cutlass/README.md](findings/cutlass/README.md) and [findings/cutlass/current-handoff.md](findings/cutlass/current-handoff.md) |
+
+## Project map
+
 - The FMMS Triton kernel is in `src/fused_mm_sampling/core.py`.
-- Generally speaking, do imports at the top of the file, not inside functions.
-- Do no speculate blindly about why code is slow. Causal statements need to be backed by empirical evidence. Choose appropriate language to hedge, e.g. "Possibly", "Potentially", and point out what data would let us clear the uncertainty and make confident claims.
-- **Don't block the user with long sleeps.** When waiting for a task, never `sleep` for 60s+ in a single foreground call — that freezes the conversation and prevents the user from steering. For tasks that may run >1 min, launch with `run_in_background=true` and wait for the completion notification. For shorter polling, use 5-15s sleeps and check in.
-- **Independent Modal runs can go in parallel** (each job gets its own resources), but never launch two runs that write to the same local log file, and always `kill` a crashed `modal run` before relaunching — a crash-looping app keeps writing to the old log and interleaves with the new run's output. When a benchmark compares a baseline against candidates, measure them interleaved in the same remote function: separate Modal functions may land on different host classes, and a same-process ratio cancels host variance (this project's documented B200 fast/slow host hazard). A same-process torch.mm baseline can still enter a slow state mid-sweep (observed 0.75 ms vs 0.43 ms at identical reported clocks at V=128,256 D=8,192 H=256); use cross-run agreement, not a single packet, for gate decisions.
-
-Development notes and lessons learned while building this project.
-
-**Meta-rule: Continuously update this file.** After every task, write new insights, patterns, and lessons learned into this file. Proactively review and update outdated information — if a timeout was changed, a cache strategy was revised, or a workaround is no longer needed, update the relevant section. This file is the project's living knowledge base.
-
-## Code style
-
-- **Top-down structure**: Define high-level functions first, helpers below. A reader should encounter the main logic before the details it delegates to. Helper functions go **after** the function that calls them, not before.
-- **Never introduce GPU-CPU synchronizations.** Operations like `tensor.item()`, `float(tensor)`, `tensor.cpu()`, or `print(tensor)` on CUDA tensors force the CPU to wait for all pending GPU work to finish, destroying pipeline parallelism. Pass scalar values as 0-d CUDA tensors instead of extracting Python floats. Both the Triton kernel (`tl.load(temperature_ptr)`) and the Helion kernel (`temperature: torch.Tensor`) accept 0-d tensors directly.
-- **Cache CUDA device properties on hot paths.** Use `num_sms_cached()` in `core.py` instead of repeatedly calling `torch.cuda.get_device_properties(...).multi_processor_count` inside decode-time wrappers.
-- **Always save logs to the output folder.** When running servers, benchmarks, or evals, pipe stdout/stderr to a log file in the results directory so logs are always accessible after the run. Never discard or hide process output.
-- **Pandas style**: Always use pandas (or equivalent DataFrame library) for data analysis. Never write nested loops with manual data joins when a pandas-based solution exists. Use `.query()` for row filtering, never boolean indexing (`df[df["col"] == val]`). Use `.merge()` for joins. Use `.groupby().agg()` instead of manual loops over unique values. Use `.pivot()` / `.melt()` for reshaping. Use `pd.concat()` to build DataFrames, not list-of-dicts loops.
-
-## Writing style (README, blog post, docs)
-
-- Single author project. Never use "we". Prefer "I" + active voice, but use passive voice when it sounds more natural.
-- One sentence per line in prose sections, to make git diffs cleaner.
-- Don't write `torch.compile`-d or `torch.compiled` — say "torch compiled".
-- Avoid jargon like "unfused" or "lean" when simpler words work ("baseline", "Gumbel-max kernel").
-- In rebuttals, omit internal benchmark labels such as “large configuration”; report the relevant dimensions or measurements only when needed.
-- When stating speedup ranges, verify them against the actual table data. Use "generally outperforms" rather than "always" when there are exceptions.
-- Never use em dashes (—). Use periods, commas, or parentheses instead.
-
-## Blog post
-
-The blog post lives at `~/code/tomasruizt.github.io/tomas-blog/posts/07_fused-mm-sample/index.qmd` (Quarto format).
-It should be kept in sync with the README benchmark numbers.
-The blog uses both "large" (V=128,256, d=8,192) and "small" (V=151,936, d=4,096) configs, presented as the outermost tabset in the kernel benchmarks section.
-
-### Quarto conventions
-
-- **Panel tabsets**: `::: {.panel-tabset group="name"}` with `# Tab Name` headers. The `group=` attribute synchronizes tab selection across multiple tabsets with the same group name.
-- **Nested tabsets**: Use `::::` (4 colons) for the outer tabset and `:::` (3 colons) for the inner tabset. Outer tabs use `#` headers, inner tabs use `##` headers. Example:
-
-  ```markdown
-  :::: {.panel-tabset group="baseline"}
-  # vs PyTorch Compiled
-  ::: {.panel-tabset group="gpu"}
-  ## B300
-  ![](imgs/relative-perf-vs-pytorch-b300.png)
-  ## H100
-  ![](imgs/relative-perf-vs-pytorch-h100.png)
-  :::
-  # vs FlashInfer
-  ...
-  ::::
-  ```
-
-- **Plots before tables**: Show the plot first, then the data table beneath it. This gives the reader the visual takeaway before the numbers.
-- **GPU ordering**: B300, B200, H200, H100, A100 (strongest to weakest) in all tabsets and table rows.
-- **Table precision**: At most 2 decimal places for all numeric values.
-- **Images**: Blog images are stored in `~/code/tomasruizt.github.io/tomas-blog/posts/07_fused-mm-sample/imgs/` and referenced as `![](imgs/filename.png)`. Copy from `benchmarking/modal-results/` when updating.
-- **TODO section**: A commented-out HTML section (`<!-- ... -->`) near the top of the blog post tracks planned improvements. When a TODO is completed, remove it from the list entirely (don't strike it through).
-- **Copying plots to the blog**: `make -C ~/code/tomasruizt.github.io/tomas-blog/posts/07_fused-mm-sample copy-imgs` copies all benchmark plots from `benchmarking/modal-results/` into the blog's `imgs/` directory. Run this after regenerating any plots.
-- **Color palette**: FMMS is bold red (`#d62728`), baselines are gray/blue. Defined in `PROVIDER_COLORS` in `benchmarking/plot-triton-bench.py` and `VARIANT_COLORS` in `benchmarking/vllm/plot_tpot.py`. Both scripts use the same red for FMMS.
-
-## Development environment
-
-- Use the `.venv` in the repo root (not system Python). Run tests/scripts with `.venv/bin/python` or `.venv/bin/pytest`.
-- **Save all learnings in this file (`CLAUDE.md`), not in `~/.claude/` MEMORY.md.** The `~/.claude/` directory is local to the server and will be lost when switching machines. This file is checked into git and travels with the code.
-- **Keep Modal submission modules CPU-importable.** Import GPU-only runtime dependencies such as Torch, Triton, FlashInfer, and benchmark modules inside the remote function. Pass primitive serializable arguments from the local entrypoint and construct runtime argument objects inside the Modal container.
-- Use `make modal-verify-correctness-tp1` to run the correctness checks on one Modal GPU. `modal-pytest-distributed` accepts `N_PROCS` for other world sizes. Both launch through `torchrun`, including TP1, so the worker can use `TPInfo.from_world()` with an initialized process group.
-- Use the `fused-triton-p2p-no-overlap` provider to isolate TP communication overlap. It writes candidates locally in the FMMS kernel, then a separate Triton kernel fans the same candidate values and indices out to peer symmetric-memory buffers before the existing barrier and reduction. The default `fused-triton` provider performs the same remote stores inside the FMMS kernel. The ablation therefore holds the P2P mechanism, payload, destination layout, and reduction fixed while moving communication after computation.
-- `make plot-tp-scaling` includes `FlashSampling (P2P No Overlap)` alongside FlashSampling and the three paper baselines.
-- The superseded NCCL all-gather experiment is stored under `triton-bench/own/{b200,b200-rerun1,...,b200-rerun9}/tp2`. It changed the communication mechanism and reduced locally before exchanging candidates, so it did not isolate overlap. Across those ten runs, same-NUMA placement was associated with the fast latency cluster but was not sufficient: one of seven same-NUMA hosts was a major outlier.
-- The TP2 distributed correctness suite passed for `fused-triton-p2p-no-overlap` across V=100/256/512 and H=1/2 on B200.
-- A B200 TP2 large-config CUDA-event sweep found that overlapping P2P stores reduced FMMS latency by 0.039-0.049 ms (13.0-16.1%) at H=1-128. At H=256 the reduction was 0.004 ms (1.1%). The paired results are in `triton-bench/own/b200/tp2/fused-mm-sample-batch-scaling-large.csv`.
-- Multiple B200 reruns do not support a relationship between GPU NUMA placement and the P2P-overlap ablation. At TP2, both same-NUMA and split-NUMA groups contained two runs where the H<=128 median difference was 0.003-0.004 ms and one run where it was 0.045-0.047 ms. At TP4, no-overlap was 0.029-0.036 ms slower whether all GPUs shared one NUMA node or were split 2+2. At TP8, both completed split-NUMA runs showed a 0.035-0.036 ms difference. The new split-NUMA TP2 runs used torchrun binding, while the older same-NUMA and TP4/TP8 runs did not, so launcher generation is also a confounder.
-- Use `make modal-verify-correctness-large-vocab VOCAB_SIZE=... NUM_SAMPLES=... SAMPLES_PER_CALL=...` for the TP1 large-vocabulary chi-squared check. It batches sampling, accumulates counts on GPU, reports test statistics and coverage, and passes parameters to Modal as CLI options.
-- At V=128,000 and 10M samples on B200, bfloat16 per-tile maxima caused measurable bias. Changing `maxs` to float32 passed the test (reduced chi-squared 0.99844, p=0.6503, 99.84% probability mass). The RNG now also uses separate sample streams and unique tile-element offsets to avoid collisions.
-- Use `make modal-memory-traffic-all CASE=large N_HIDDEN_STATES=64` to profile FlashSampling, its `return_logits=True` ablation, and the three paper baselines concurrently on Modal. Each provider gets `report.ncu-rep`, `traffic.csv`, `memory.json`, and `log.txt`; `parse-memory-traffic` aggregates them with pandas.
-- On B200 with the large case at B=1/64/256, FlashSampling used 0.05/0.77/2.97 MiB peak temporary memory, a 98.48-99.53% reduction against the three baselines. Its HBM-read reduction grew from 0.17-0.33% at B=1 to 4.33-26.52% at B=256, while its HBM-write reduction grew from 37.98-43.30% to 95.73-97.94%.
-- For rebuttal Q3, use FP32 logits consistently: at B=64 and V=128,256, the full logits use 31.31 MiB, while the theoretical f32-value/int64-index candidates use 0.734 MiB and measure 0.77 MiB. Validate the `2B/D` I/O term separately by toggling only the FP32 logits store inside FlashSampling.
-- A paired B200 NCU profile at B=64 found that `return_logits=True` leaves reads unchanged, adds 27.45 MiB of physical HBM writes, and adds 32.00 MiB of peak temporary allocation. The extra writes are below the 31.31 MiB logical FP32 logits size, so excess DRAM bytes do not explain why the timing slowdown exceeds the I/O prediction; profiling kernel duration and execution metrics is still needed.
-- Brev machine quirks and CUDA toolkit setup: see [docs/brev-environment.md](docs/brev-environment.md).
-
-## Triton TMA (Tensor Memory Access) pitfalls
-
-See [docs/triton-tma-pitfalls.md](docs/triton-tma-pitfalls.md). Key points: innermost dim must be 16-byte aligned, `tl.dot(a, b.T)` fails with TMA blocks, Triton enforces `strides[-1] == 1`.
-`set_torch_allocator_for_tma_descriptors_cached()` is called by `fused_mm_sample_triton()`, so clients that use the sampler/wrapper APIs do not need to call it directly. Keep direct calls only for raw TMA kernel launch paths that bypass the wrapper.
-
-## Findings
-
-The `findings/` directory contains detailed write-ups of bugs, workarounds, and design decisions discovered during development:
-
-- `upcasting-before-softmax.md` — `torch.multinomial` produces wrong distributions with bfloat16. Fix: upcast to float32 before softmax.
-- `helion-hl-rand-specialize-1-bug.md` — `hl.rand` crashes when a dimension is `hl.specialize(1)`. Includes root cause analysis, in-place fix, and minimal reproduction.
-- `helion-barrier-single-kernel.md` — Merging stage 2 into the Helion kernel with `hl.barrier()`. Eliminates host-side reduction, reduces kernel launches from 3 to 1. Rigorous benchmarking shows barrier is ~3% slower at H=1 (host overhead is negligible). Barrier code is on the `barrier-kernel` branch.
-- `rtx3090-barrier-comparison/` — Raw benchmark results (speed test, proton, NCU) for barrier vs two-stage on RTX 3090.
-- `fused-top-k-top-p-feasibility.md` — Analysis of fusing top-k/top-p into the FMMS kernel. Top-k is feasible (tile-local top-k + merge); top-p is not directly fusible (needs global softmax + sorted cumsum). Practical path: fuse top-k, apply top-p on survivors post-kernel.
-- `arithmetic-intensity-decode-matmul.md` — The decode matmul has arithmetic intensity ≈ H (batch size). Memory-bound up to H≈295 on H100 (BF16), H≈152 on RTX 3090. Includes ops:byte ratio derivation and data sources.
-- `lm-head-configurations.md` — Survey of LM head shapes (vocab_size, hidden_size) across popular LLMs. Conclusion: vocab sizes cluster around 128K-152K; hidden_size is the real variable. Two benchmark groups: small (d=4,096) and large (d=8,192).
-- `qwen3-8b-tpot-gap-at-high-concurrency.md` — Unexplained 29% TPOT improvement at concurrency 256 for Qwen3-8B on B200, despite FMMS being 18% slower in kernel microbenchmarks at that batch size. Hypotheses point to vLLM sampling code path overhead (GPU-CPU syncs, extra kernel launches, memory allocation). Proposed investigation: nsys profiling on Modal.
-- `argsort-topk-complexity.md` — Why the fused top-k kernel uses a custom argsort (Triton has no `tl.argsort`; `tl.topk` returns values only). Complexity analysis shows that for our parameters (BLOCK_SIZE_V=128, top_k=20 → effective k=32), `tl.topk` saves only 1 sequential round vs full sort (4% latency reduction). Upstream Triton maintainers have declined to add argsort/topk-with-indices to the standard library.
-- `tma-cache-modifiers.md` — Analysis of using L2 cache modifiers (`evict_first`/`evict_last`) for FMMS Triton kernel loads. Hidden states should be kept warm (reused across V tiles), weights should stream through (no reuse at low batch sizes). Conclusion: TMA `desc.load()` does not support cache modifiers (the PTX `cp.async.bulk.tensor` instruction lacks those fields), and switching to regular `tl.load()` to get them would lose TMA's async prefetch pipeline. The tile swizzling (GROUP_SIZE_V=4) already provides the main L2 benefit, and hidden states are too small relative to L2 (0.03% at H=1) to be evicted.
-- `torch-compile-overhead-tp2.md` — torch.compile adds 0.05-0.13ms overhead at TP2 that hurts all baselines at low batch sizes (up to 1.43x for multinomial, 1.23x for FlashInfer on small config). FMMS is the exception: its compiled `_local_reduce`/`_stack_and_select_winner` are small enough that compile helps. The effect is weaker for large config. At H>=64 compile wins for all providers.
-- `register-spilling-bsz256.md` — At H=256 the kernel spills 118 MB due to three [128, 64] f32 tensors being live simultaneously (persistent loop iter_arg + scaled logits + Gumbel noise). Fix: raise `maxnreg` from 128 to 255 (1.74x speedup on RTX 3090). Fusing noise into the matmul accumulator eliminates spilling but breaks D-loop software pipelining (30% regression). Datacenter GPUs keep `maxnreg=128` because warp specialization adds warps that exceed the register file at 255.
-- `proton-scopes-persistent-kernel.md` — DSL-level Proton scopes don't work inside persistent kernels (by design). Solution: TTGIR-level injection via `insert_proton_records.py`. Six scopes (kernel, setup, mask, tile-mgmt, sample, store); matmul derived by subtraction. Includes buffer overflow constraints, warp sampling, HBM vs SMEM comparison, and per-bsz results showing sampling grows from 1% (bsz=1) to 23% (bsz=256) due to BLOCK_SIZE_H increase and register spilling.
-- `tp2-collective-overhead.md` — FMMS TP2 collective overhead was ~0.12-0.20ms from NCCL latency. Fixed by allocating kernel outputs in symmetric memory (direct NVLink writes, no NCCL). Reduced H=1 latency from 0.304ms to 0.246ms (large) and 0.329ms to 0.254ms (small) on B200 x2.
-- `tp2-dispatch-asymmetry.md` — One rank dispatches kernels 300-700us slower per iteration than the other. Which rank is slow varies by run. Likely caused by OS CPU scheduling noise on shared cloud hardware. NUMA binding reduces but does not eliminate the asymmetry (median 364us unbound vs 277us bound). Affects all providers (fused-triton, naive-compiled, flashinfer). mp.spawn and torchrun both exhibit the asymmetry. CPU sampling not available on Modal (gVisor blocks perf_event_open). `modal-nsys-profile` uses per-rank nsys via `benchmarking/nsys_wrapper.py` to capture both devices.
-- `tma-store-blackwell-singleton-dims.md` — On B200 (sm_100, Triton 3.6), `tl.make_tensor_descriptor(...).store(...)` with a 3D `block_shape=[1, 1, BLOCK_SIZE_H]` (two singleton dims) silently no-ops most stores in a persistent loop: only ~2/1187 V-tile slots written, the rest left uninitialized. The same pattern works on Hopper and RTX 3090. Caused vLLM to crash with OOB token ids on the first decode step. Fix: drop TMA descriptors for the per-tile output stores entirely (they're tiny and TMA gives no bandwidth win below ~32 KB), use plain `tl.store` with computed offsets instead. Keep TMA on the matmul *load* descriptors. Not just int64 — bf16 is affected too. Microbench was a false negative because it only checked the gathered final id, not all maxs_idx slots; uninit memory on freshly-allocated CUDA pages is mostly zeros, which `0 <= x < V` happily accepts.
-- `tp2-fullgraph-via-functional-collective.md` — TP>1 used `torch.compile(...)` (no fullgraph) for `sample_compiled`/`greedy_sample_compiled` because dynamo could not trace through the `dist.all_gather` call inside `_allgather_logits` (decorated with `@torch.compiler.disable`). Switched to `torch.distributed._functional_collectives.all_gather_tensor` (compile-friendly, returns `AsyncCollectiveTensor`), dropped the decorator, and collapsed both wrappers to a single fullgraph path. Also pulled `torch.manual_seed(seed)` out of the compiled body (dynamo skips `manual_seed`). On B200 TP2 small config (3+3 runs each side): `Multinomial Sampling (Compiled)` is ~28% faster at H=1-8, ~19% at H=32, ~12% at H=64, but ~5-6% slower at H=128/256 (real, not noise — std is 0.001-0.003 ms on both sides). FMMS is unchanged (uses `kraken_post_kernel_reduce`, not `_allgather_logits`).
-- `2cta-mma-operand-swap-regression.md` — Attempt to enable Blackwell `tcgen05.mma cta_group::2` for the FMMS kernel. Direct `num_ctas=2` aborts in Triton's `ReduceOpToLLVM` because our `tl.argmax` over V crosses CTAs. Swapping operands (`tl.dot(hidden, weights.T)`) makes V the N axis and lets the reduce stay within one CTA, but the MMA M-dim then inherits H's variability via `BLOCK_SIZE_H`. On B200 TP1 the swap alone (no `num_ctas=2`) regresses FMMS by 6-7% at H≤16 and 13-23% at H=32 (M=32, non-native sm_100 bf16 shape, padded to M=64). H≥64 is flat. Net expected value of 2-CTA after the swap is approximately zero. Abandoned; transposed kernel preserved on `worktree-2cta-mma` branch as record.
-- `b200-warp-spec-single-tile-crash.md` — On B200 / Triton 3.6, warp specialization crashes the `NVWSInsertAref` MLIR pass (`PassManager::run failed`) for small correctness-test shapes with `num_samples=10_000`. The original failure had one tile; a later V=512 failure had 2--4 tiles, so tile count alone does not characterize the trigger. Workaround: enable `WARP_SPECIALIZE` only when `num_samples == 1` (the production decode path), while multi-sample distribution tests use the non-WS lowering. Verified on Modal B200 TP1 across 30 distribution and 6 greedy cases.
-- `tp-scaling-fast-pod-b200.md` — Apples-to-apples TP=2/4/8 scaling on fast-pod b200. Low-H gains stay clean (TP4≈0.7×TP2 small; TP8≈0.7×TP4 large). At high H on small, TP=8 *regresses* vs TP=4 (1.13-1.47×) because the fan-out symm-mem write cost scales O(world_size) and dominates once the matmul shrinks. Fast-pod hit-rate at TP=8 was 1/5 (vs 7/11 at TP=2); HGX runs hit the 1200s Modal timeout 2/5 times, never the fast pod.
-- Fresh B200 reruns mixed two Modal host classes, making pointwise minima produce a false TP2-to-TP4 regression. A current-image TP8 diagnostic reproduced the old fast timings within 0-4%; disabling NUMA binding did not make slow hosts fast. Full-provider searches found fast TP4 runs but no fast TP8 run with the no-overlap ablation. See `tp-scaling-fast-pod-b200.md`.
-- For reviewer Q4, define overlap speedup as `latency(no overlap) / latency(overlap)`. Average across batch sizes within each run before summarizing runs; pointwise minima may fall below 1 due to noise. Interpret the growing TP benefit through increasing P2P fan-out, not as proof that P2P alone is effective.
-- The checked-in Figure 3 summary gives average FMMS speedups of 2.24x over Multinomial Sampling (Compiled) and 1.63x over FI2 across TP1/2/4/8. Mean overlap speedup is 1.13x across TP2/4/8, contributing about 10% and 21% of the respective excess speedups.
-- `inter-node-scale-out.md` — Follow-up options for scaling FMMS beyond one NVLink domain. Covers direct global NVSHMEM fan-out, hierarchical node-local reduction plus a small inter-node exchange, a hybrid transport, PyTorch's incomplete NVSHMEM handle barrier, and a staged TP16 validation plan. This is explicitly out of scope for the NeurIPS rebuttal.
-- CUTLASS findings live under `findings/cutlass/` with zero-padded chronological prefixes. Run every Modal CUTLASS gate through `make modal-cutlass GATE=<gate>`. The allowlisted gate names and their numbered result directories are defined together in the top-level `Makefile`.
-- `findings/cutlass/01-fmms-kernel-plan.md` — Stage-gated plan for a CUTLASS C++ FMMS port. Establish a reproducible, versioned H100/B200 toolchain baseline, prove standalone M-axis max-with-index, then make greedy TP1 performance a go/no-go gate before adding stateless Philox and Gumbel-Max. Toolchain upgrades are allowed, but create a new recorded baseline and require rerunning the ordinary-GEMM smoke checks. Bring up B200 from the first gate. Implement TP before top-k; start top-k with a fixed-K warp-group merge, not private CUB APIs. DSMEM is an optional post-TP experiment admitted only when profiling makes a predeclared 3% total improvement plausible. The performant mapping is `W[V,D] @ H[D,H]`, so vocabulary is CUTLASS M and the custom reduction derives from `Sm90RowReduction`.
-- Gate 0 of the CUTLASS plan is implemented by `make modal-cutlass GATE=toolchain`. It pins CUTLASS 4.6.1 at commit `e05f953a5b3d38adc240df2ff928e0421c2abba3`, builds ordinary GEMMs for SM90a and SM100a, logs the full toolchain metadata, and validates the outputs on H100 and B200. The 2026-07-29 baseline passed with CUDA 13.0.88, PyTorch 2.11.0+cu130, and GCC 13.3.0. The Gate 2a matrix and its 18 CUTLASS pytest cases per architecture were rerun successfully after the upgrade. Logs are saved in `benchmarking/modal-results/cutlass/00-toolchain/smoke.txt`.
-- `findings/cutlass/03-dsmem-cluster-reduction.md` — Corrected analysis of Hopper/Blackwell DSMEM for a CUTLASS FMMS kernel. A cluster along M can merge adjacent vocabulary-tile candidates before HBM and may multicast the shared hidden-state N tile. It does not shrink the fixed CUTLASS CTA accumulator tile and cannot be assumed to cure the persistent Triton kernel's H=256 register spill. Quack's ~1.5x recovery divided a large per-CTA reduction domain, so that number is not transferable. Default to no clustering and retain it only after paired end-to-end measurements. DSMEM remains intra-GPU; inter-rank TP still uses NVLink plus symmetric memory.
-- `findings/cutlass/02-topk-softmax-epilogue.md` — Detailed analysis of CUTLASS example 61 (`Sm90TopKSoftmaxColReduction`). It reduces N, requires `N <= tile_N`, tracks values but not indices, and optimizes only K=2/K=4. FMMS reduces vocabulary M in the performant GEMM orientation, so example 61 cannot be its visitor skeleton. Use `Sm90RowReduction` for the M-axis layout and reduction choreography; reuse only example 61's sorted-array and PTX top-k merge ideas. CUTLASS does not ship a corresponding `Sm100TopKSoftmaxColReduction`, so Blackwell callback compatibility must be implemented and compiled rather than assumed.
-- `findings/cutlass/04-accumulator-layout.md` — Gate 1a records the actual CUTLASS EVT ownership mapping for one 128x128 output tile. H100 and B200 both cover every coordinate exactly once with consumer threads 128-255 and 16 values per callback, but their layouts differ: SM90 uses two `epi_m` by four `epi_n` iterations and each thread spans two M positions, while SM100 uses one `epi_m` by eight `epi_n` iterations and each thread owns one M position. Run `make modal-cutlass GATE=accumulator-layout`; raw CSV mappings and logs are saved under `benchmarking/modal-results/cutlass/01-accumulator-layout/`. Do not carry SM90 fragment assumptions into the SM100 reduction.
-- `findings/cutlass/05-thread-local-max.md` — Gate 1b validates the deterministic thread-local FP32 max-with-index primitive on H100 and B200. It covers a maximum in every one of 16 fragment slots, all-negative values, both tie index orders, both ascending and descending visitation, and all 128 consumer threads. All 9,728 exact value-bit and index comparisons passed. Run `make modal-cutlass GATE=thread-local-max`; the verification packet is under `benchmarking/modal-results/cutlass/02-thread-local-max/`. This gate intentionally has no warp or shared-memory communication.
-- `findings/cutlass/06-warp-max.md` — Gate 1c validates the warp-local FP32 max-with-index shuffle primitive on H100 and B200. Gate 1a showed that SM90 uses lanes 0,4,...,28 for one N column while SM100 uses all 32 lanes, so the primitive uses architecture-specific masks and XOR strides. Unique winners cover every participating lane across all four consumer warps, plus all-negative and both cross-lane tie orders. All 4,832 exact comparisons passed. Gate 1b also passed all 9,728 comparisons after both harnesses were moved to the shared `csrc/cutlass/max_with_index.cuh` comparator. CUTLASS-specific CUDA sources are grouped under `src/fused_mm_sampling/csrc/cutlass/`, and their Modal entrypoints and image helpers are grouped under `src/fused_mm_sampling/modal_lib/cutlass/`. Run `make modal-cutlass GATE=warp-max`; generated evidence remains ignored under `benchmarking/modal-results/cutlass/03-warp-max/`.
-- `findings/cutlass/07-cta-max.md` — Gate 1d validates the full CTA FP32 max-with-index hierarchy for one complete M tile and one N column on H100 and B200. Harness warps 0-3 simulate CUTLASS consumer-warp roles 4-7, publish their Gate 1c winners through shared memory, synchronize, and reduce to one deterministic result. This gate does not instantiate a warp-specialized CUTLASS GEMM. Unique winners from every simulated warp role, all-negative values, and both cross-warp tie orders produced 14 exact value-bit and index matches. Compute Sanitizer racecheck reported zero hazards, errors, and warnings on both architectures. Run `make modal-cutlass GATE=cta-max`; the verification packet is under `benchmarking/modal-results/cutlass/04-cta-max/`. Keep multi-column routing isolated in Gate 1e.
-- `findings/cutlass/08-cta-multi-column-max.md` — Gate 1e validates independent FP32 max-with-index state for all 128 N columns of a complete 128x128 tile on H100 and B200. SM90 uses four 32-column epilogue iterations and four shifted lane-group masks; SM100 uses eight 16-column iterations and full-warp reductions. Two winner permutations exercise every M position in every case, producing 512 exact value-bit and index matches. Compute Sanitizer racecheck reported zero hazards, errors, and warnings on both architectures. The shared shuffle helper now lives in `max_with_index.cuh`; rerun Gates 1b-1d after changing it. Run `make modal-cutlass GATE=cta-multi-column-max`; the verification packet is under `benchmarking/modal-results/cutlass/05-cta-multi-column-max/`. Keep boundary predication isolated in Gate 1f.
-- `findings/cutlass/09-cta-boundary-max.md` — Gate 1f validates explicit M and N predication on H100 and B200 for the full Cartesian product M={100,127,128,129,255,256,257} and N={1,2,63,64,65,127,128,129}. All 14,336 exact comparisons passed across 112 architecture-shape combinations. Larger values in padded M rows never won, padded N outputs retained their canaries, memcheck reported zero errors, and racecheck reported zero hazards, errors, and warnings. Run `make modal-cutlass GATE=cta-boundary-max`; the verification packet is under `benchmarking/modal-results/cutlass/06-cta-boundary-max/`. Indices remain tile-local so Gate 1g can integrate global offsets and ties with real EVT candidates.
-- `findings/cutlass/10-evt-candidates.md` — Gate 1g integrates the packed FP32-value/i32-index reduction into a real warp-specialized CUTLASS GEMM with `FinalReduction=false`. All 1,744 per-tile candidates matched exactly on H100 and B200, and both sanitizer tools passed. The EVT must use the Gate 1a architecture-specific accumulator ownership formulas; `tCcD` describes the store-copy partition and produced wrong global indices on SM90. Partial N cases must remain multiples of four for the FP32 TMA epilogue, so N=68 and N=132 exercise partial tiles without violating alignment. Run `make modal-cutlass GATE=evt-candidates`; evidence is under `benchmarking/modal-results/cutlass/07-evt-candidates/`.
-- `findings/cutlass/11-stage2.md` — Gate 1h adds a separate CUDA Stage 2 merge to the exact Gate 1g GEMM and EVT path. All 2,176 intermediate candidates and 944 final outputs matched bit-for-bit on H100 and B200, including first-, middle-, and last-M-tile winners and deterministic cross-tile ties. Memcheck and racecheck passed on both architectures. Run `make modal-cutlass GATE=stage2`; evidence is under `benchmarking/modal-results/cutlass/08-stage2/`. Gate 1 deterministic reduction correctness is now closed; Gate 2a is the greedy TP1 production-provider integration.
-- Gate 2d dispatches the complete B200 H=1 through H=256 sweep to the winning 2-SM schedules with the 64-bit atomic final reduction. These paths emit one final candidate per hidden state and skip the separate Stage 2 merge. The complete H100/B200 Gate 2a matrix passes after the transplant. See the current CUTLASS handoff for the exact shape dispatch.
-- CUTLASS Gate 4 Gumbel-Max now uses a per-family partial-unroll experiment to contain callback liveness: H<=64 remains fully unrolled, cluster-2 256x128 donors use unroll 2, and the D=4,096 cluster-4 256x128 donor uses unroll 4. The exact B200 mixed configuration passes all nine deterministic cases and measures 1.06x/1.52x/2.30x at D=8,192 and 1.22x/2.41x/3.39x at D=4,096 for H=64/128/256. It still fails the 1.20x high-H gate. NCU reports 255 registers at H>=128 and confirms that the change reshapes, but does not remove, local-memory spill traffic. Details are in `findings/cutlass/24-gumbel-max-tp1.md`.
-- `findings/cutlass/12-greedy-provider.md` — Gate 2a exposes `fused-cutlass-greedy` through the production `get_sampler()` path. All 52 boundary, tie, and primary model-shape cases passed on H100 and B200 across H=1,2,4,...,256. The existing `test_greedy_sampling` pytest is parameterized unconditionally over Triton and CUTLASS; its 18 CUTLASS cases pass independently on both GPUs using the standard FMMS Modal image with pinned CUTLASS sources layered onto it. Run `make modal-cutlass GATE=greedy-provider`; evidence is under `benchmarking/modal-results/cutlass/09-greedy-provider/`. The inherited diagnostic FP32 D store allocates and writes `[V,H]`, so Gate 2b must remove it before performance approval while preserving the validated auxiliary candidates and Stage 2 comparator.
-- `findings/cutlass/13-void-d-epilogue.md` — Gate 2b removes the diagnostic FP32 `[V,H]` allocation and output store from the production greedy provider. A narrow patch gives the SM100 TMA collective the same void-D contract as SM90: use the EVT auxiliary type for internal layout arithmetic, skip D descriptor construction and prefetch, disable D-dependent shared-memory reuse, and skip the D shared-memory output copy and D TMA store. The D-shaped shared-memory buffer remains only as `cst_callbacks.reduce` workspace. The post-change Gate 2a matrix passed 52/52 cases plus 18/18 shared pytest cases per architecture on H100 and B200. NCU must still verify physical D-write traffic before approving any reworked implementation.
-- `findings/cutlass/14-greedy-performance.md` — The first Gate 2b sweep reached a no-go decision under the predeclared 5% threshold. Across both primary shapes and H=1,2,4,...,256, only 12/36 configurations passed and the worst ratio was 1.38. The profiling follow-up and improved current result are recorded in `findings/cutlass/15-greedy-profile-stage2.md`.
-- `findings/cutlass/15-greedy-profile-stage2.md` — Targeted CUPTI and NCU profiles found that greedy Stage 2 spent 0.092-0.144 ms in a serial scan over 1,187 candidates per active thread. It now launches one CTA per hidden state and performs a deterministic cooperative reduction, cutting Stage 2 to 0.004-0.006 ms while preserving all Gate 2a results. The updated Gate 2b sweep passes 29/36 configurations instead of 12/36, and the worst ratio improved from 1.38 to 1.14. The seven remaining failures are at H=1,2,4. The next target is the fused epilogue's low-H resource cost: NCU measured 187 versus 154 registers on H100 and 255 versus 81 on B200 against the matching plain GEMM, while the H100 mainloop dropped from six stages to five. These correlations identify what to investigate next but do not yet prove the remaining causal mechanism.
-- Run `make modal-cutlass GATE=ordinary-gemm` before changing the fused epilogue. This prerequisite compares ordinary CUTLASS with `torch.mm` using identical BF16 inputs and outputs, logical unpadded N for the H=1 and H=2 specialization, N padding to a multiple of eight for tensor-core GEMM (required for a 16-byte BF16 TMA row stride), preallocated output buffers, and cold-L2 CUDA-event timing across both primary shapes and H=1 through H=256. Gate 2c now performs the stronger official kernel search and requires the selected dispatch to remain within 5% of `torch.mm` everywhere.
-- `findings/cutlass/16-ordinary-gemm-specialization.md` — The ordinary-GEMM prerequisite now specializes H=1 and H=2 with a BF16 warp-per-vocabulary-row kernel that loads each weight once and accumulates both outputs in registers. H100 passes all four small-N cases; B200 passes both H=2 cases and the V=151,936, D=4,096 H=1 case, while V=128,256, D=8,192 H=1 remains 10.5% behind `torch.mm`. The full gate remains tuning-required at 7/18 H100 and 10/18 B200 passes, with a worst ratio of 1.35 at H=256 on H100. A 128x256x64 tile did not pass, and SM100 rejects 256x128x64 because one-CTA BF16 UMMA restricts M to 64 or 128.
-- `findings/cutlass/17-ordinary-gemm-tuning.md` — `make modal-cutlass GATE=ordinary-gemm-tuning` retains all raw repetitions and correctness results for 64x128x64, 128x64x64, and 128x128x64 ordinary GEMMs using automatic and architecture-native schedules. All 216 candidate outputs matched `torch.mm` bit-for-bit. Per-case selection passed 31/36 configurations; the five failures are at H=128 or H=256, and the worst measured ratio was 1.56. Its proposed explicit-stage follow-up is completed in `findings/cutlass/18-ordinary-gemm-stage-no-go.md`.
-- `findings/cutlass/18-ordinary-gemm-stage-no-go.md` — The bounded explicit-stage screen tested both automatic and native schedules for 128x64x64 and 128x128x64 on H100 and B200 at H=128/256. All 144 outputs matched `torch.mm` bit-for-bit, but only 4/8 selected configurations passed and all H=256 cases remained 1.17-1.38x `torch.mm`. No candidate met the original 3% promotion rule, so the conditional cluster search was not launched. That rule is now recognized as too restrictive because cluster multicast changes reuse independently of stage count. The finding closes only the manual cluster-1 family, whose explicit Blackwell native schedule was 1-SM and which did not audit named 2-SM coverage. Gate 2c in the revised plan reopens official kernel discovery.
-- Gate 2c uses `torch.mm` as the sole strong matmul baseline. Use CUTLASS's official `nvidia-matmul-heuristics` plus `cutlass_profiler` workflow on the exact B200 BF16 shapes. The prior Blackwell search omitted named 2-SM coverage, nontrivial clusters and flexible clusters, raster order, swizzle, and split-K. In particular, clusters along M are an independent candidate because they can multicast the hidden-state B tile reused across many vocabulary tiles; requiring a stage-count promotion before testing clusters was not technically justified. Hopper persistent ping-pong/cooperative schedules are deferred to Gate 8. Do not introduce a separate library ceiling unless the user changes the baseline policy.
-- `findings/cutlass/19-gemm-heuristics.md` — Gate 2c passed on 2026-08-01: two independent confirmation runs each selected a CUTLASS dispatch within 5% of `torch.mm` in all 18 B200 cells (worst cell 1.049). Run `make modal-cutlass GATE=ordinary-gemm-tuning PHASE=discover` and `PHASE=confirm RUN=<n>`; packets are under `benchmarking/modal-results/cutlass/14-ordinary-gemm-tuning/gate-2c-*`. The dispatch donors for Gate 2d: `128x64x128` 2-SM c(2,1,1) for H<=64, `256x128x64`/`256x128x128` 2-SM at H=128, `256x256x64` 2-SM c(2,1,1) at H=256, along_m raster below N=256. nvidia-matmul-heuristics emitted only 2-SM kernels, no split-K, swizzle 1 only, cta_tile_n <= 192, and no 1-SM/flexible/(1,2,1) clusters; the H=256-winning N-tile=256 family came from an explicit coverage control, not from the heuristic. cutlass_profiler silently omits StreamK cases with multi-CTA clusters (rc=0, no rows); profiler CSV Status is lowercase 'success'; the emitted testlist contains duplicate test cases that must be deduplicated before joining with profiler output.
-- The active CUTLASS roadmap is B200-first. Gates 2c through 7 implement the complete Blackwell provider, including greedy, unrestricted Gumbel-Max, TP1/2/4/8, fixed-K top-k with supported top-p-on-survivors, memory profiling, and end-to-end vLLM integration. Gate 7 must show strict pointwise wins over Triton FlashSampling in every declared B200 kernel and end-to-end cell in two independent confirmation runs, with no cross-cell averages or cross-run minima. H100/H200 work is Gate 8 and must not begin until B200 passes. Existing Hopper correctness evidence remains historical coverage rather than an active cross-architecture requirement.
-- TODO: upstream `sm100-void-d.patch` to NVIDIA/CUTLASS. First extract a minimal SM100 `ElementD=void` reproducer with an EVT auxiliary output and add a focused regression test. Keep the downstream patch tied to the exact pinned CUTLASS revision until an upstream release containing the fix is adopted and the full Gate 2a matrix passes without it.
-- Every CUTLASS plan gate must leave a human-verifiable packet under `benchmarking/modal-results/cutlass/<number>-<gate-name>/`: `VERIFY.md` as the review entry point, `summary.json` for the overall result, `case-summary.csv` for compact per-case expected/actual/error/pass evidence, `cases.csv` for raw evidence, and the complete `log.txt`. These are generated artifacts and must remain ignored rather than committed to Git. Commit the reproducible runner and finding. A verifier must be able to approve a passing gate without inspecting raw rows. Performance and distribution compact reports must include their thresholds, decision statistics, repetition or sample counts, variability where applicable, and explicit pass columns. The finding must state failure signatures, constraint rationale, and limitations. A successful process exit alone does not complete a gate.
-- At each CUTLASS gate, explicitly review whether its constraints still reduce risk or instead obstruct the implementation. Preserve constraints that isolate one failure domain, document that rationale in the finding, and relax constraints or upgrade dependencies when doing so materially improves the chance of success. Use a formal gate for a distinct mechanism, integration boundary, or go/no-go decision. Keep narrower thread, warp, CTA, boundary, and tie checks as test families inside one gate unless they isolate independent failure domains that must be approved separately.
-- Prevent incremental CUTLASS gate work from sprawling. Each gate gets one canonical harness, runner entry, artifact directory, and finding, all exposed through the shared `modal-cutlass` Make target. Move reused primitives into shared production code instead of copying them. After approval, remove failed prototypes, stale formats, temporary outputs, unused build commands, and superseded runners before starting the next gate, while retaining the minimal reproducer and evidence until permanent tests provide equivalent coverage. End each gate by auditing `git status --short` and explaining every retained gate-specific file.
-
-## Architecture
-
-- **Weights**: `[V, D]`, **hidden_states**: `[H, D]` everywhere in public APIs.
-- The Helion kernel internally uses `hidden_states` as `[D, H]` (transposed) for matmul efficiency. The wrapper handles the transpose.
-- All sampler variants are registered in `get_sampler()` in `core.py` via a match/case. New samplers only need a case there.
-- The `Sampler` Protocol requires `prepare()` and `sample(**kwargs)`. Wrap simple callables with `SimpleSampler`.
-- **Qitra** (`src/fused_mm_sampling/qitra.py`): Vendored from vLLM. Sort-free top-k/top-p Triton kernel based pivots (it does not sample tough). Used via the `pt-qitra` provider.
-
-## Helion kernel pitfalls
-
-See [docs/helion-pitfalls.md](docs/helion-pitfalls.md). Covers: argmax global indices, parallel tiles, tensor allocations, gather indexing, RNG, autotuning, barrier vs two-stage performance.
-
-## `torch.multinomial` and bfloat16
-
-`torch.multinomial` produces incorrect sampling distributions when given bfloat16 probabilities. Fix: upcast to float32 before softmax:
-
-```python
-probs = (logits.float() / temperature).softmax(dim=1)
-```
-
-See `findings/upcasting-before-softmax.md` for details.
-
-## Testing
-
-- `test_sampling_distribution` uses a chi-squared goodness-of-fit test comparing empirical samples against theoretical softmax probabilities.
-- Parametrized over all providers, multiple vocab sizes (100, 256), and n_hidden_states (1, 2) to catch tile-boundary and dimension-edge-case bugs.
-- Bins with expected count < 5 are excluded (chi-squared assumption). Expected counts are rescaled to match observed totals.
-- `make_synthetic_inputs()` in `src/fused_mm_sampling/testing.py` constructs weights/hidden_states that produce known logit vectors (ascending and descending) via SVD + pseudoinverse.
-
-## Naming conventions
-
-The algorithm is called **FMMS** (Fused Matrix Multiplication & Sampling). Provider display names in benchmarks follow the pattern:
-- `"FMMS (Triton)"` — hand-written Triton kernel
-- `"FMMS (Helion)"` — Helion kernel
-- `"FMMS (Triton NoNoise)"` — Triton kernel without Gumbel noise (for profiling)
-
-These names are defined in `provider_names` in `src/fused_mm_sampling/bench/triton_benchmark.py` and used in plots, CSVs, and the README.
-
-## Profiling (Proton, NCU, nsys)
-
-See [docs/profiling.md](docs/profiling.md).
-
-### Proton intra-kernel profiling (TTGIR override)
-
-DSL-level scopes (`pl.enter_scope`) don't work in persistent kernels (compiler hoists them out of loops).
-Instead, `insert_proton_records.py` injects `proton.record` ops directly into the TTGIR after compilation.
-See `findings/proton-scopes-persistent-kernel.md` for full details.
-
-Key files:
-- `benchmarking/proton_profile.py` — standalone profiling script (calls kernel directly, skips `_local_reduce` to avoid inductor conflict)
-- `benchmarking/insert_proton_records.py` — injects six scopes into TTGIR: kernel, setup, mask, tile-mgmt, sample, store
-- `benchmarking/parse_proton_intrakernel.py` — parses chrome traces, derives matmul = kernel - setup - mask - tile-mgmt - sample - store
-- `benchmarking/dump_ttgir.sh` — dumps TTGIR via `TRITON_DUMP_DIR`
-
-Makefile targets: `make proton-profile` (all-in-one), `make sweep-bsz-proton` (per-bsz sweep).
-
-Constraints:
-- The persistent kernel's D-loop is fused (not unrolled), so per-chunk matmul scopes are impossible without overflowing the 128-slot shared buffer.
-- At high bsz (>=256), the buffer overflows even with the current 6 scopes. Use `BUFFER_TYPE.GLOBAL` (HBM) for those. HBM vs SMEM gives identical ratios.
-- `SAMPLING_STRATEGY.SELECTIVE` with `sampling_options="0"` profiles only warp 0 to reduce event count.
-- When multiple proton.record ops share a line index, the sort key in `insert_proton_records.py` ensures correct nesting (end before start, kernel outermost).
-
-## Symmetric memory TP reduction
-
-`src/fused_mm_sampling/tensor_parallel_reduce.py` replaces the NCCL all_gather in the TP>1 code path with symmetric memory. Used automatically when `tp.size > 1`.
-
-Flow: the kernel output buffers (`maxs`, `maxs_idx`) are allocated in symmetric memory via `get_symm_mem_workspace`, so the kernel's existing TMA stores write directly to NVLink-mapped addresses. After the kernel completes, a host-side barrier ensures all ranks' writes are visible. Each rank then reads all ranks' per-tile outputs from symmetric memory, runs `_local_reduce` per rank, and picks the global winner via `_stack_and_select_winner`.
-
-Requires: NVLink-connected GPUs, PyTorch >= 2.6, CUDA >= 12.4. See `findings/tp2-collective-overhead.md` for motivation and analysis.
-
-PyTorch 2.11 fabric handles may extend the current raw-pointer path across an NVL72 rack, but this needs TP72 validation.
-Separate NVLink domains require explicit NVSHMEM operations or a hierarchical node-local reduction followed by a small NCCL/InfiniBand exchange; see `findings/inter-node-scale-out.md`.
-
-## Distributed process launching (torchrun vs mp.spawn)
-
-`run_maybe_distributed()` in `src/fused_mm_sampling/tp_info.py` supports two backends:
-- **torchrun** (preferred for profiling): Detected automatically via `RANK`/`WORLD_SIZE` env vars. Uses `init_method="env://"`. No parent process overhead.
-- **mp.spawn** (fallback): Used when torchrun env vars are absent. Uses a `tcp://` init method and a parent process that polls child sentinels. It does not apply NUMA binding.
-
-`modal-nsys-profile` uses torchrun for TP>1 runs, with per-rank nsys instances via `benchmarking/nsys_wrapper.py`. Each rank gets its own `.nsys-rep` file. This is necessary because nsys cannot capture both devices when wrapping torchrun from outside (the `--capture-range=cudaProfilerApi` only captures the first child process's CUDA context). The dispatch asymmetry persists with torchrun (see `findings/tp2-dispatch-asymmetry.md`), confirming it is not an mp.spawn artifact.
-
-Modal Triton benchmarks and distributed correctness tests also launch through torchrun. Triton benchmarks pass `--numa-binding=node`, and the shared Modal image installs `numactl`, which PyTorch requires for its supported NUMA-binding interface. Do not call private functions from `torch.numa.binding`; `_apply_numa_binding_to_current_thread` is absent in PyTorch 2.11. The worker logs its actual `os.sched_getaffinity(0)` set after launch. A B200 TP2 smoke test bound both ranks to the GPU-local CPUs 12-55 without warnings.
-NUMA binding is intentionally unconditional. A temporary toggle showed that disabling it did not recover fast-host performance, so the diagnostic option was removed.
-
-**Speed test modes**: `speed_test.py` has two separate code paths controlled by `--nsys_profile=true`:
-- `benchmark()`: timing with CUDA events, no profiler API. Used for speed measurements.
-- `nsys_profile()`: `cudaProfilerStart/Stop`, `dist.barrier()` for rank sync, NVTX ranges. Used for nsys capture. No timing events.
-
-The `--nsys_profile` flag is a pydantic-settings `bool` field. On the CLI, pass `--nsys_profile=true` (not just `--nsys_profile`, which fails with "expected one argument").
-
-## vLLM integration
-
-See [docs/vllm-integration.md](docs/vllm-integration.md). Covers: sampler wrapper, env vars, local benchmarking, `.item()` sync bug, autotuning fix.
-The derivation and validation of `VLLM_PRECOMPILED_WHEEL_SHA` are documented under "Modal vLLM image build" in [docs/modal-benchmarking.md](docs/modal-benchmarking.md).
-
-## Benchmark timing functions
-
-Shared timing primitives live in `triton_benchmark_lib.py`:
-
-- **`bench_cupti(fn, ...)`**: FlashInfer's CUPTI-based `bench_gpu_time`. Uses hardware counters. Adaptive iteration count for TP1, fixed counts for distributed (to avoid collective mismatches).
-- **`bench_cuda_events(fn, ...)`**: CUDA event timing with L2 cache flushing via `create_l2_cache()`/`clear_l2_cache()`. Fixed iteration counts always.
-- **`synchronize(is_distributed)`**: `dist.barrier()` for distributed, `torch.cuda.synchronize()` for TP1.
-
-Both return `list[float]` (per-iteration times in ms). The `bench_fn` parameter (`"fi-cupti"` or `"own"`) selects which one to use. Empirical comparison (b200, h200, h100!, TP1) shows the two methods produce equivalent results (mean diff 1.46%, within noise). At TP2, `own` reports systematically higher latencies than `fi-cupti` (mean +7.3% on h100!), so the methods are not interchangeable for distributed runs.
-
-### fi-cupti + TP2 SIGSEGV (non-deterministic)
-
-`bench_fn=fi-cupti` with TP2 causes non-deterministic SIGSEGV crashes in the NCCL watchdog thread (`cudaSetDevice` inside `c10d::ProcessGroupNCCL::Watchdog`). Observed on b200 and h200, not on h100!. The crash occurred when `triton_benchmark` used `mp.spawn` and called `bench_cupti` repeatedly across 9 batch sizes, but it also crashed with a single provider and succeeded on retry. The behavior has not been revalidated after switching Modal Triton benchmarks to torchrun. Workaround: use `bench_fn=own` for distributed benchmarks.
-
-## Modal benchmarking
-
-See [docs/modal-benchmarking.md](docs/modal-benchmarking.md). Covers: Modal profiles, volume management, triton-bench pipeline, vllm-bench pipeline, image build, caching.
-
-- Parallel `modal-create-results-vllm-bench` invocations for the same model can collide in the local log path because it uses only the model slug and a one-second timestamp. Until the filename includes the variant or another unique identifier, do not use a collided local log to attribute messages to a provider. Use the provider-specific Modal app log or the `sweep.log` stored inside the provider's experiment directory.
-- The retained Qwen3-8B rebuttal experiment is baseline `20260727_135427`, FI2 `20260727_141150`, and FMMS `20260727_154330`. After taking the median over five runs per batch size and then across batch sizes 1-64, TPOT is 3.86 ms, 3.91 ms, and 3.72 ms, respectively. A later independent battery was removed locally and from Modal because its low-batch provider ordering did not reproduce this experiment.
-
-### Directory structure
-
-Modal triton-bench results are organized as: `modal-results/triton-bench/{bench_fn}/{gpu}/tp{N}/`. Custom plots go into `custom-plots/case-{small,large}/` subdirectories within each tp directory. The `BENCH_FN` make variable (default: `fi-cupti`) controls which timing method and directory to use.
-
-### Makefile variable passing
-
-Makefile variables use `:=` assignment, so environment variables do NOT override them. Always pass overrides as make arguments (`make FOO=bar target`), not env vars (`FOO=bar make target`). The `NAME` variable defaults to `default` (all providers). `Args.providers()` treats both `None` and `"default"` as the sentinel for `DEFAULT_PROVIDERS`.
-
-### vLLM run-level anomalies
-
-- The first concurrent Qwen3-1.7B TP1 B200 serving sweep produced implausible high-concurrency slowdowns for both FlashSampling and FI2.
-- Isolated reruns did not reproduce them. At concurrency 64, FI2 TPOT fell from 3.190 ms to 2.109 ms and TTFT fell from 28.102 ms to 11.403 ms. The isolated FI2 curve increased only 0.236 ms from concurrency 1 to 64, consistent with the sub-0.45 ms FI2 kernel microbenchmark.
-- Treat repetitions within one `vllm bench sweep serve` process as correlated measurements from one Modal host. If a curve conflicts with kernel-level bounds or unrelated metrics such as TTFT degrade together, rerun that variant as a fresh isolated sweep before drawing conclusions.
-- The `all` vLLM sweep covers batch sizes 1, 2, 4, 8, 16, 32, and 64. Figure 5 and its rebuttal aggregate do not use batch sizes 128 or 256.
-- A combined Qwen3-8B invocation stopped after 27 minutes during FI2: baseline completed, FI2 reached batch size 8, and FlashSampling never started. This was not the two-hour function timeout. The cause was not established, so use one app per provider and resume partial experiments when applicable.
-- Dates inside vLLM `summary.csv` are UTC, while `modal app list --json` renders app timestamps in the local timezone. Convert them before comparing benchmark completion with app lifetime. Completed Qwen3-8B FI2 and FlashSampling apps stopped within 5–6 seconds of their final summary row.
-
-## Current CUTLASS handoff
-
-- Nsight Compute is a continuous CUTLASS development tool, not a gate that is run only for a final packet or after a user asks. After any material schedule, epilogue, reduction, or memory-path change, use matched timings to select representative fast and slow cells, then profile the exact production kernels before making causal performance claims or choosing the next optimization. Refresh stale profiles instead of applying results from an older kernel.
-- Gate 2c passed on B200. Gate 2d accumulator ownership passed for all five winning 2-SM GEMM schedule instantiations with `make modal-cutlass GATE=winning-schedule-layout`. The 128x64, 256x128, and 256x256 output tiles require three distinct coordinate formulas; see `findings/cutlass/20-winning-schedule-accumulator-layout.md`.
-- The B200 production dispatch emits one packed candidate per physical CTA and uses a cooperative Stage 2 merge. H<=64 uses `128x64x128` cluster (2,1,1); H=128 uses K64 cluster (4,1,1) at D=4,096 and K128 cluster (2,1,1) at D=8,192; H=256 runs two N tiles and uses K64 cluster (4,1,1) at D=4,096 and K64 cluster (2,1,1) at D=8,192. The focused gate passed 8,612 exact intermediate/final comparisons plus memcheck and racecheck, and the production B200 correctness suite passed.
-- NVIDIA CUTLASS PR #3426 (open as of 2026-08-03) introduces a separate public `cutlass_compiler/` MLIR stack: a CuTe layout-algebra dialect, `cutegen`-backed inference/expansion, lowering through upstream MLIR dialects to LLVM/NVVM, and PTX/cubin/fatbin emission. It does not modify or integrate the existing CuTe Python DSL or CUTLASS C++ template frontend in that initial commit.
-- Gate 2d's fused-EVT experiment passes all five winning 2-SM schedule instantiations on B200 with `make modal-cutlass GATE=winning-schedule-evt`. Direct compact per-tile output does not merge cooperating CTAs, so the gate uses a packed 64-bit atomic final reduction. CUTLASS's 2-SM `tile_coord_mnkl.m` is already a per-CTA coordinate: the 128-row family uses `global_m = cta_m * 64 + consumer_thread % 64`, while the 256-row families use `global_m = cta_m * 128 + consumer_thread`. All 2,000 exact comparisons and per-schedule memcheck/racecheck runs pass; the shared Gate 1g source still passes all 1,744 H100/B200 comparisons and sanitizers. See `findings/cutlass/21-winning-schedule-evt.md`.
-- Gate 5a must compare per-tile symmetric-memory fan-out with a locally atomic-reduced packed-MAX path. The latter communicates only one 64-bit candidate per hidden state and rank, but it cannot overlap communication before the local GEMM finishes. Raw FP32 bits plus index are not directly MAX-sortable. Use an order-preserving FP32 transform, invert the global index for lower-index tie-breaking, and validate signed collective semantics before an integer-MAX all-reduce. Compare the collective against symmetric-memory fan-out with paired total timings because launch latency may dominate the `8H`-byte payload.
-- The top-level `modal-cutlass` recipe enables pipe failure propagation so `tee` does not mask a failing `modal run`. The system Modal client showed repeated TLS/heartbeat failures; `uv tool run --from modal --with pydantic-settings modal run --detach ...` was reliable during the Gate 2d experiment.
-- The preliminary ACM Europe MLIR School 2026 program puts compiler fundamentals and the MLIR IR model on Day 1, followed by ODS and transformations on Day 2. For understanding PR #3426, learn operations/regions/blocks/SSA/dialects on Day 1, then map its `.td` definitions and lowering passes onto the Day 2 material.
-- `findings/cutlass/22-winning-schedule-performance.md` — NCU showed that the original H=256 atomic 256-column donor combined contended atomics with 12.4--14.7M local-load and 16.9--20.0M local-store sectors. Per-CTA candidates plus cooperative Stage 2 remove atomics, and reusing K64 256x128 donors over two N tiles reduces local traffic by 15--27x. The final full B200 sweep measures 0.327 ms at V=151,936/D=4,096 and 0.484 ms at V=128,256/D=8,192, 18.2--42.3% faster than Triton and 3.2--4.2% faster than `torch.mm` plus argmax. All 90 correctness rows pass and the worst fused-to-CUTLASS-GEMM-plus-argmax ratio is 1.044. A 64-column N donor regressed and was rejected. Use `--h256-only` for focused timing and the narrowed `greedy-ncu` runner for four GEMM-only H=256 profiles.
-- The correctness-gate runners (the seven max/EVT/Stage-2 modules) share their sanitizer wrapper, CSV extraction, pass-flag detection, and packet writing in `modal_lib/cutlass/gate_common.py` (`run_compute_sanitizer`, `csv_from_sanitizer_stdout`, `sanitizer_pass`, `write_packet`). The five max-hierarchy `.cu` harnesses share `check_cuda` in `csrc/cutlass/max_harness.h`. Keep new gate duplicated boilerplate in these shared helpers instead of copying it. The small-N GEMV and other production-driven runners keep their own per-gate orchestration on purpose. Gate runs can be directed into a distinct packet directory by setting `CUTLASS_RESULT_POSTFIX` (the Makefile `POSTFIX`), honored via `gate_common.result_dir(slug)`; the gates default to no postfix, so normal runs are unchanged.
-- `findings/cutlass/23-stateless-philox.md` — Gate 3 passes on B200. Philox4x32-10 maps the 64-bit seed and global `(sample, hidden, vocab)` coordinates without launch-order state. Four seeds each generated 1,048,576 blocks with zero full-block collisions, zero word mismatches across three launch/tile layouts, exact agreement on 32 CPU reference vectors, and four Bonferroni-corrected byte-uniformity tests with minimum p=0.1047. NCU measured 20 registers, no local-memory instructions, 3.3125 warp instructions per output block, 62.55% issue activity, 0% XU/SFU utilization, and no `MUFU` opcodes. Use `make modal-cutlass GATE=stateless-philox`.
-- `findings/cutlass/24-gumbel-max-tp1.md` — Gate 4 correctness and distribution pass on B200, but performance is no-go. The selected per-family partial-unroll control measures 1.06x/1.52x/2.30x at D=8,192 and 1.22x/2.41x/3.39x at D=4,096 for H=64/128/256. NCU still reports 255 registers and substantial local-memory traffic at H>=128. The stock no-smem epilogue is closed because it rejects `ElementD=void`. The current handoff is the bounded Gate 4 recovery plan: audit SASS spill ownership, then compare one smaller-granularity custom SM100 epilogue and one maintained vendor-backed Philox candidate. Gate 5 is blocked unless a candidate removes RNG-caused spill and passes the pointwise 1.20x limit, or the project explicitly revises scope to a greedy-only provider. Use `make modal-cutlass GATE=gumbel-provider` with phases `deterministic`, `distribution`, and `performance`, then `make modal-cutlass GATE=gumbel-ncu`.
-- CUTLASS Modal provider sources, tests, and the NCU profile target are runtime mounts. Source edits must not rebuild dependency, NCU, or CUTLASS layers. After changing image composition, expect one cache migration, then verify the next startup reports mounts and no image builds. Check for and stop stale interrupted Modal apps before relaunching to avoid duplicate builds, profiling, or log writers.
-- CUTLASS PyTorch JIT extensions should mount the shared `fused-mm-sample` Modal volume and call `set_volume_caches()`. This sets `TORCH_EXTENSIONS_DIR` under the shared cache so new workers reuse the multi-minute SM90/SM100 extension builds. `_extension_name()` content-hashes all local CUTLASS `.cu`, `.cuh`, and `.patch` inputs because PyTorch can otherwise reuse a stale shared `.so` after a mounted header changes. Keep architecture and feature variants in distinct prefixes, and do not launch concurrent first builds of the same content-keyed name.
+- The speed-test runner is `benchmarking/speed_test.py`.
+- The Triton benchmark runner is `benchmarking/triton_benchmark.py`.
+- Their shared `Args` class lives in `src/fused_mm_sampling/bench/triton_benchmark_lib.py`.
+- Local benchmark commands live in `benchmarking/Makefile`.
+- Equivalent Modal commands and every allowlisted CUTLASS gate live in the root `Makefile`.
+- The blog post is `~/code/tomasruizt.github.io/tomas-blog/posts/07_fused-mm-sample/index.qmd`.
+- The paper is `~/code/papers/flashsampling-paper/`.
+
+## Development workflow
+
+- Use the repository `.venv`.
+  Run Python tools with `.venv/bin/python` and tests with `.venv/bin/pytest`.
+- Put imports at module scope by default.
+- Keep Modal submission modules CPU-importable.
+  Import Torch, Triton, FlashInfer, benchmark runners, and other GPU-only dependencies inside the remote function, and pass primitive serializable values from the local entry point.
+- Save stdout and stderr from servers, benchmarks, evaluations, and profilers into the corresponding results directory.
+  Never discard or hide process output.
+- Do not block the user with a foreground sleep of 60 seconds or more.
+  Use background execution for long tasks and poll at short intervals when needed.
+
+## Code and data style
+
+- Define high-level functions before their helpers.
+  A reader should encounter the main logic before the details it delegates to.
+- Public APIs use weights shaped `[V, D]` and hidden states shaped `[H, D]`.
+  The Helion kernel internally transposes hidden states to `[D, H]`.
+- Register sampler variants in `get_sampler()` in `core.py`.
+  The `Sampler` protocol requires `prepare()` and `sample(**kwargs)`, and simple callables should use `SimpleSampler`.
+- Use pandas or an equivalent DataFrame library for data analysis.
+  Use `.query()` for filtering, `.merge()` for joins, `.groupby().agg()` for aggregation, `.pivot()` or `.melt()` for reshaping, and `pd.concat()` to combine frames.
+  Do not replace these operations with manual nested joins or loops over unique values.
+
+## GPU correctness and performance invariants
+
+- Never introduce a GPU-to-CPU synchronization on a hot path.
+  Operations such as `tensor.item()`, `float(tensor)`, `tensor.cpu()`, or printing a CUDA tensor wait for pending GPU work.
+  Pass scalar parameters as zero-dimensional CUDA tensors when the kernel accepts them.
+- Use `num_sms_cached()` in `core.py` rather than repeatedly querying CUDA device properties on decode-time paths.
+- Do not make causal performance claims without empirical evidence.
+  Use qualified language for hypotheses and state what measurement would resolve the uncertainty.
+- Do not infer a sampling distribution from bfloat16 multinomial probabilities.
+  Upcast logits to float32 before softmax as documented in `findings/upcasting-before-softmax.md`.
+
+## Benchmark discipline
+
+- Do not run local GPU benchmarks concurrently because they contend for the same resources.
+- Independent Modal benchmarks may run concurrently when each job receives separate resources and writes to a distinct local log.
+- With an empty Triton autotune cache, prefer one warmup job before launching a large parallel Modal batch.
+- Kill a crashed `modal run` before relaunching it because a crash loop can keep writing into the previous log.
+- Compare a baseline and candidates interleaved in the same remote function when possible.
+  Separate Modal functions can land on different B200 host classes.
+- A same-process `torch.mm` baseline can still change performance state during a sweep.
+  Use agreement across independent runs instead of one packet for gate decisions.
+- Verify every reported speedup against the underlying table and account for exceptions.
+- Use `make plot-all` to regenerate every plot.
+
+## Testing entry points
+
+- Use `make modal-verify-correctness-tp1` for one-GPU Modal correctness.
+- Use `make modal-pytest-distributed N_PROCS=2` for distributed correctness on two NVLink-connected GPUs.
+- Use `make pytest-distributed` locally.
+  It skips automatically on a single-GPU machine.
+- Set `N_PROCS` when validating another distributed world size.
+- Every implementation plan and handoff must state the validation command, expected result, actual result, possible failure modes, and artifact location as required by `loop-feedback.md`.
+
+## Writing style
+
+- This is a single-author project.
+  Never use “we”.
+  Prefer “I” with active voice, but use passive voice when it reads more naturally.
+- Put one sentence on each line in prose sections to keep diffs clean.
+- Write “torch compiled”, not “torch.compile-d” or “torch.compiled”.
+- Prefer plain terms such as “baseline” and “Gumbel-max kernel” over unnecessary jargon.
+- Never use em dashes.
+  Use a period, comma, or parentheses instead.
+- In rebuttals, omit internal benchmark labels and report the relevant dimensions or measurements directly.
+- Use “generally outperforms” instead of “always” when exceptions exist.
+- Show plots before tables, use no more than two decimal places in tables, and follow the GPU order documented in `docs/blog-maintenance.md`.

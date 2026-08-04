@@ -1,23 +1,8 @@
 # Profiling
 
-## Proton profiling
-
-Documentation: https://github.com/triton-lang/triton/tree/main/third_party/proton
-
-`speed_test.py --use_proton=True` enables Proton profiling with `mode="pcsampling"` (instruction sampling), which gives per-line runtime breakdowns for Triton kernels. Key API:
-
-- `proton.start(name, hook="triton", backend="cupti", mode="pcsampling")` — initialize profiling. `mode="pcsampling"` enables PC sampling for per-line stats (~20x end-to-end overhead, but per-kernel overhead is negligible).
-- `proton.scope(name)` — context manager to annotate regions (warmup, timing, etc.).
-- `proton.finalize()` — flush and write profile data.
-- `proton-viewer` CLI to render `.hatchet` files as trees.
-
-**Known issue**: `mode="pcsampling"` segfaults when non-Triton CUDA kernels (e.g. `torch.gather`) are launched during profiling. This affects the Helion barrier kernel which calls `torch.gather` in stage 2. Workaround: use `--name fused-triton` to profile only the hand-written Triton kernel, or omit `mode="pcsampling"` (loses per-line granularity).
-
-**CUDA 13+ CUPTI compatibility**: Triton 3.6.0 bundles CUPTI 2025.1.1 which segfaults in `cuptiPCSamplingEnable` → `NVPW_CUDA_LoadDriver` on CUDA 13+ drivers. Fix: set `TRITON_CUPTI_LIB_PATH` to a directory containing a driver-compatible `libcupti.so` (e.g. `/usr/local/cuda-13.1/targets/x86_64-linux/lib`). This env var tells Proton where to `dlopen` CUPTI from. Note: this is a **directory** path, not a file path. The Makefile's `proton-profile` target sets this automatically.
-
-**`--bench_fn=own` required for Proton**: The default `fi-cupti` benchmark path (FlashInfer's `bench_gpu_time`) does not call `setup_proton()` / `proton.finalize()`, so no `.hatchet` file is produced. The `own` benchmark function is the one wired to Proton.
-
-**Pitfall: Proton inflates per-launch overhead.** Proton adds fixed instrumentation cost per kernel launch. When comparing approaches with different numbers of launches (e.g. 1 vs 4), the wall-clock difference under Proton is misleading. For example, the barrier vs two-stage comparison showed a ~5ms gap under Proton that doesn't exist in uninstrumented runs (~0.01ms real overhead). Always cross-reference Proton wall-clock with `speed_test.py --use_proton=False`.
+The supported Proton path is the TTGIR override workflow below.
+The former `speed_test.py --use_proton` and PC-sampling workflow no longer exists in the current runner.
+Use ordinary uninstrumented benchmarks for end-to-end latency comparisons.
 
 ## Proton intra-kernel profiling (TTGIR override)
 
@@ -26,8 +11,8 @@ DSL-level scopes (`pl.enter_scope`/`pl.exit_scope`) are disabled inside persiste
 ### Workflow
 
 ```bash
-make proton-profile N_HIDDEN_STATES=1    # dump → inject → run, prints breakdown table
-make sweep-bsz-proton                    # runs proton-profile per bsz (1,4,16,64,128,256)
+make -C benchmarking proton-profile N_HIDDEN_STATES=1
+make -C benchmarking sweep-bsz-proton
 ```
 
 Three steps (individual targets: `proton-dump-ttgir`, `proton-inject`, `proton-run`):
@@ -80,14 +65,14 @@ Each `.txt` file is NCU output with `--csv --page raw` containing `gpu__time_dur
 **Method file names** (mapped to display labels in `METHOD_FILES`): `fused-triton.txt`, `naive-pt.txt`, `naive-compiled.txt`, `flashinfer:sampling_from_logits.txt` → `fi-sample`, `flashinfer:top_k_top_p_sampling_from_logits.txt` → `fi-topkp`.
 
 **Data locations**:
-- `benchmarking/profiles/sweeps/bsz/ncu-txt/tp1/case-small/` — tp1 data (RTX 3090, but files lack CSV metrics, only log output)
-- `benchmarking/profiles/sweeps/bsz/ncu-txt/tp2/case-small/` — tp2 data (has valid CSV data)
+- `benchmarking/profiles/sweeps/bsz/ncu-txt/tp1/case-small/`: TP1 data from RTX 3090 without CSV metrics.
+- `benchmarking/profiles/sweeps/bsz/ncu-txt/tp2/case-small/`: TP2 data with valid CSV metrics.
 
 **Usage**:
 ```bash
-python benchmarking/parse_ncu_sweep.py --dir benchmarking/profiles/sweeps/bsz/ncu-txt/tp2/case-small
+.venv/bin/python benchmarking/parse_ncu_sweep.py --dir benchmarking/profiles/sweeps/bsz/ncu-txt/tp2/case-small
 # Or via Makefile:
-make parse-sweep-ncu N_PROCS=2 CASE=small
+make -C benchmarking parse-sweep-ncu N_PROCS=2 CASE=small
 ```
 
 **Ruff pitfall**: `first_baseline` variable looks unused (F841) but is referenced via pandas `@first_baseline` in `.query()`. Suppressed with `# noqa: F841`.

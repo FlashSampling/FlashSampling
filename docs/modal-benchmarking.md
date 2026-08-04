@@ -36,23 +36,28 @@ make modal-get-results-triton-bench GPU=h100!      # downloads from Modal volume
 make modal-plot-triton-bench GPU=h100!             # generates plots from CSVs
 ```
 
-**GPU options**: `h100!`, `h100`, `a100-80gb`, `b200`, `h200` (the `!` suffix means dedicated/reserved GPU on Modal). Default is `b200`.
+**GPU options**: `b300`, `b200`, `h200`, `h100!`, `h100`, and `a100-80gb`.
+The `!` suffix means a dedicated or reserved GPU on Modal.
+The default is `b200`.
 
-**Benchmark cases**: Controlled by `CASE` env var (default `"all"` → runs `["large", "small"]`). Available cases in `src/fused_mm_sampling/bench/triton_benchmark.py`:
+**Benchmark cases**: Pass the `CASE` Make variable as a command argument.
+The default `all` runs `large` and `small`.
+Available cases are defined in `src/fused_mm_sampling/bench/triton_benchmark_lib.py`:
 - `large`: V=128,256, d=8,192 (Llama 3 70B)
-- `small`: V=128,256, d=4,096 (Llama 3 8B)
+- `small`: V=151,936, d=4,096 (Qwen3 8B and Qwen3-235B MoE)
 - `qwen3-1.7b`: V=151,936, d=2,048
 - `gpt-oss-120b`: V=201,088, d=2,880
+- `kimi-k2.5`: V=163,840, d=7,168
 
 **POSTFIX**: Use `POSTFIX=-foo` to create separate result directories for A/B comparisons without overwriting previous runs: `make modal-triton-benchmark GPU=h100! POSTFIX=-experiment1`.
 
 **Key files**:
-- `src/fused_mm_sampling/modal_lib/modal_triton_benchmark.py` — Modal app definition
-- `src/fused_mm_sampling/modal_lib/utils.py` — image (PyTorch 2.10.0 + CUDA 13.0), volume config
-- `src/fused_mm_sampling/bench/triton_benchmark.py` — benchmark runner, `Args` dataclass, `BENCHMARK_CASES`
-- `benchmarking/plot-triton-bench.py` — plotting script, also contains `GPU_PEAK_BW_GBS` and `GPU_PEAK_COMPUTE_TFLOPS` dicts with per-GPU specs (HBM bandwidth, peak BF16 TFLOP/s)
+- `src/fused_mm_sampling/modal_lib/modal_triton_benchmark.py`: Modal app definition.
+- `src/fused_mm_sampling/modal_lib/utils.py`: PyTorch 2.11.0 and CUDA 13.0 image plus volume configuration.
+- `src/fused_mm_sampling/bench/triton_benchmark_lib.py`: runner, `Args`, and `BENCHMARK_CASES`.
+- `benchmarking/plot-triton-bench.py`: plotting and per-GPU HBM and BF16 peak specifications.
 
-**Results location**: `benchmarking/modal-results/triton-bench-{GPU}{POSTFIX}/` containing CSVs, plots in `custom-plots/`, and `logs.txt`.
+**Results location**: `benchmarking/modal-results/triton-bench/{BENCH_FN}/{GPU}{POSTFIX}/tp{N_PROCS}/` containing CSVs, plots under `custom-plots/`, and `logs.txt`.
 
 ## Triton benchmark CSV format
 
@@ -81,22 +86,24 @@ make modal-collect-results-vllm-bench GPU=b200 VLLM_MODEL=...  # runs collect_re
 ```
 
 **Key files**:
-- `src/fused_mm_sampling/modal_lib/modal_vllm_benchmark.py` — Modal app that runs `vllm bench sweep serve` for each variant
-- `benchmarking/vllm/bench-params.json` / `quick-bench-params.json` — single source of truth for sweep parameters (shared between local and Modal benchmarks)
-- `benchmarking/vllm/collect_results.py` — result collection, run locally after downloading
-- `benchmarking/vllm/parse_engine_stats.py` — works with both `sweep.log` and Modal log files (engine stats lines are the same format)
+- `src/fused_mm_sampling/modal_lib/modal_vllm_benchmark.py`: Modal app that runs `vllm bench sweep serve` for each variant.
+- `benchmarking/vllm/bench-params.json` and `quick-bench-params.json`: shared sweep parameters for local and Modal runs.
+- `benchmarking/vllm/collect_results.py`: local result collection after download.
+- `benchmarking/vllm/parse_engine_stats.py`: engine-stat parsing for `sweep.log` and Modal logs.
 
-**Results location**: `benchmarking/modal-results/vllm-bench-{GPU}{POSTFIX}/` with per-model subdirectories containing `baseline/`, `fmms-triton/`, `logs/`, and `results.txt`.
+**Results location**: `benchmarking/modal-results/vllm-bench-{GPU}-tp{N_PROCS}{POSTFIX}/` with per-model subdirectories containing `baseline/`, `fi2/`, `fmms-triton/`, `logs/`, and `results.txt`.
 
 **Makefile variables**:
-- `GPU` — Modal GPU type (default: `b200`)
-- `VLLM_MODEL` — HuggingFace model ID (default: `openai/gpt-oss-120b`)
-- `VLLM_SWEEP` — `quick` (1 concurrency, 1 run, `--enforce-eager`) or `all` (batch sizes 1–64, 5 runs)
-- `VLLM_VARIANTS` — comma-separated variant filter, e.g. `baseline` or `fmms-triton`. Empty = all variants.
-- `VLLM_RESUME_EXPERIMENT` — if set to a previous experiment dir name (e.g. `20260409_101524`), passes `--resume --experiment-name <name>` to `vllm bench sweep serve` so it picks up where the previous run left off, skipping any `(concurrency, run)` combos that already have a `run=N.json` on the modal volume. See "Resuming a partial sweep" below.
-- `POSTFIX` — suffix for result directory (for A/B comparisons)
+- `GPU`: Modal GPU type, defaulting to `b200`.
+- `VLLM_MODEL`: Hugging Face model ID, defaulting to `openai/gpt-oss-120b`.
+- `VLLM_SWEEP`: `quick` for one eager run or `all` for five runs at batch sizes 1 through 64.
+- `VLLM_VARIANTS`: comma-separated variant filter such as `baseline` or `fmms-triton`; empty means every variant.
+- `VLLM_RESUME_EXPERIMENT`: previous experiment directory to resume through `--resume --experiment-name`.
+- `POSTFIX`: result-directory suffix for A/B comparisons.
 
-**Logs**: Timestamped per-model in `<model_slug>/logs/<YYYYMMDD_HHMMSS>.txt`. Multiple parallel runs won't collide.
+**Logs**: Timestamped per-model in `<model_slug>/logs/<YYYYMMDD_HHMMSS>.txt`.
+Parallel launches for different models do not collide.
+Two launches for the same model within the same second can still select the same local path, so use provider-specific Modal app logs or the `sweep.log` inside each experiment directory when attribution is ambiguous.
 
 ### Resuming a partial sweep
 
@@ -174,8 +181,23 @@ The second variant (fmms-triton) benefits from the compilation cache warmed by t
 
 ### Caching on Modal volumes
 
-Ephemeral container caches (torch.compile graphs, flashinfer cubins) are lost between runs, causing expensive re-compilation. **Fix: set `XDG_CACHE_HOME` to the Modal volume path.** This is the standard Linux env var for cache directories — both vLLM (`~/.cache/vllm/`) and flashinfer (`~/.cache/flashinfer/`) respect it automatically. Prefer env vars over symlinks for redirecting caches.
+Ephemeral container caches such as torch compile graphs and FlashInfer cubins are lost between runs, causing expensive recompilation.
+Set `XDG_CACHE_HOME` to the Modal volume path.
+Both vLLM (`~/.cache/vllm/`) and FlashInfer (`~/.cache/flashinfer/`) respect this standard cache variable.
+Prefer environment variables over symlinks for redirecting caches.
 
 The Modal function sets three cache-related env vars:
 - `HF_HOME` → `{volume_path}/hf-cache` (model weights)
 - `XDG_CACHE_HOME` → `{volume_path}/cache` (torch.compile, flashinfer cubins, etc.)
+
+## Run-level interpretation
+
+Modal can place independent runs on different host classes.
+When a benchmark compares a baseline with candidates, measure them interleaved in the same remote function whenever possible so the ratio cancels host variance.
+A same-process `torch.mm` baseline can still enter a slower state during a sweep, so use agreement across independent runs rather than one packet for gate decisions.
+
+Independent Modal jobs may run concurrently because each receives separate resources, but every job must write to a distinct local log path.
+With an empty Triton autotune cache, launch one warmup first when practical so later jobs reuse the selected configurations instead of autotuning independently.
+Kill a crashed `modal run` before relaunching because a crash-looping app can continue writing to the old log.
+
+See `findings/modal-vllm-run-anomalies.md` for retained vLLM results and examples of correlated or anomalous sweeps.

@@ -22,10 +22,15 @@ They keep the research context and completed gates in a stable reading order.
 17. `16-ordinary-gemm-specialization.md`
 18. `17-ordinary-gemm-tuning.md`
 19. `18-ordinary-gemm-stage-no-go.md`
+20. `19-gemm-heuristics.md`
+21. `20-winning-schedule-accumulator-layout.md`
+22. `21-winning-schedule-evt.md`
+23. `22-winning-schedule-performance.md`
+24. `23-stateless-philox.md`
+25. `24-gumbel-max-tp1.md`
 
 The active roadmap in `01-fmms-kernel-plan.md` is B200-first.
-Gates 2c through 7 complete and validate the Blackwell implementation before
-Gate 8 begins the Hopper port.
+Read `current-handoff.md` for the active gate, blocker, production dispatch, and next bounded experiments.
 
 Run a gate with `make modal-cutlass GATE=<gate>`.
 The top-level `Makefile` contains the available gate names and maps each one to a numbered directory under `benchmarking/modal-results/cutlass/`.

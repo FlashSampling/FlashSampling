@@ -48,9 +48,9 @@ gen_inputs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/tomasruizt/fused-mm-sample"
-Repository = "https://github.com/tomasruizt/fused-mm-sample"
-Issues = "https://github.com/tomasruizt/fused-mm-sample/issues"
+Homepage = "https://github.com/FlashSampling/FlashSampling"
+Repository = "https://github.com/FlashSampling/FlashSampling"
+Issues = "https://github.com/FlashSampling/FlashSampling/issues"
 
 [build-system]
 requires = ["setuptools>=61.0", "wheel"]

@@ -10,7 +10,8 @@ The FMMS sampler is integrated into vLLM on the `feature/fmms-sampler` branch in
 
 End-to-end vLLM benchmarks live in `benchmarking/vllm/`. Key files:
 
-- `Makefile` — `make all` (full sweep, 3 runs) and `make quick` (smoke test, 1 run, `--enforce-eager`). Supports `MODEL=` override for different models.
+- `Makefile`: `make all` runs five repetitions and `make quick` runs one eager smoke test.
+  Both support a `MODEL=` override.
 - `bench-params.json` / `quick-bench-params.json` — sweep parameters (concurrency levels, num_prompts, request_rate)
 - `collect_results.py` — reads `summary.csv` from each variant's latest timestamped run, prints summary table (last run only) and per-run breakdown. Usage: `python collect_results.py <model_dir>`
 - `parse_engine_stats.py` — extracts KV cache occupancy, running/waiting request counts from `sweep.log` files. Parses the periodic engine stats lines emitted every 10s by vLLM. Usage: `python parse_engine_stats.py <sweep.log> [--by-concurrency]`. The `--by-concurrency` flag aggregates across runs per concurrency level. Useful for diagnosing KV cache pressure at high batch sizes.
@@ -21,7 +22,9 @@ End-to-end vLLM benchmarks live in `benchmarking/vllm/`. Key files:
 
 vLLM's default (baseline) sampling path uses plain PyTorch ops (softmax + multinomial), **not** a flashinfer sampling kernel. In nsys traces, the baseline `sample` scope shows `compute_logits` (lm_head matmul) followed by PyTorch ops, not a fused flashinfer call.
 
-**TODO**: Add an FMMS baseline variant that uses the `naive-compiled` provider (compiled PyTorch matmul + sampling, unfused). This gives a fairer apples-to-apples comparison for both nsys profiling and TPOT benchmarks — same code path, same overhead, only the fusion differs. Currently the baseline uses vLLM's native sampler which has a different code path entirely.
+**TODO**: Add an FMMS baseline variant that uses the `naive-compiled` provider with separate compiled PyTorch matmul and sampling.
+This would compare the same integration path and overhead while changing only fusion.
+The current baseline uses vLLM's native sampler and therefore follows a different code path.
 
 ## `.item()` CPU-GPU synchronization bug
 
