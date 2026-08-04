@@ -883,7 +883,7 @@ Initial thresholds:
 | M reduction | Exact max-with-index across boundary shapes | Leave generic EVT and use a handwritten epilogue |
 | B200 plain-GEMM discovery | A measured CUTLASS dispatch is within 5% of `torch.mm` for all 18 B200 model-shape and H cells | Expand only the official heuristic-selected population or document the remaining unsupported Blackwell family before stopping |
 | Greedy FMMS | No more than 5% slower than plain CUTLASS GEMM plus the unavoidable reduction work | Rework or abandon the epilogue design |
-| Gumbel-Max | Correct large-vocab distribution with no RNG-caused spill | Replace the RNG implementation or schedule |
+| Gumbel-Max | Correct large-vocab distribution, no RNG-caused spill, and at most 1.20x the identical greedy kernel in every declared cell | Execute the bounded Gate 4 recovery plan; do not start Gate 5 |
 | Top-k | Matches or beats the existing Triton top-k path | Keep Triton top-k as the dispatched fallback |
 | TP | Correct TP2 with competitive total latency | Use local output plus a separate fan-out kernel |
 | Optional optimization | At least 3% repeatable end-to-end improvement | Drop it |
@@ -1608,6 +1608,14 @@ kernel.
 Measure the incremental cost relative to greedy with the same GEMM
 configuration.
 
+**Status:** correctness and distribution pass, but performance is no-go.
+The selected control keeps H<=64 fully unrolled, uses callback unroll 2 for
+the cluster-2 256x128 donors, and uses unroll 4 for the D=4,096 cluster-4
+256x128 donor.
+Its worst paired ratio is 3.39x, and NCU still reports 255 registers plus
+substantial local-memory traffic at H=128/256.
+Gate 5 is blocked on this result.
+
 Gate 4 has three ordered acceptance phases in one integration packet:
 
 1. Run deterministic stream and provider-agnostic correctness tests.
@@ -1615,8 +1623,8 @@ Gate 4 has three ordered acceptance phases in one integration packet:
 3. Only after both pass, profile registers, local-memory traffic, latency, and
    SM/SFU pipe utilization against the identical greedy kernel.
 
-**Exit:** correct sampling distribution on B200, no RNG-caused spill, and
-acceptable incremental latency.
+**Exit:** correct sampling distribution on B200, no RNG-caused spill, and no
+more than 1.20x the identical greedy kernel in every declared timing cell.
 
 **Human verification:** require provider-agnostic test rows and the complete
 10M-sample large-vocabulary statistics on B200.
@@ -1627,11 +1635,47 @@ Distribution failure, new spill, or an undeclared latency regression fails the
 gate.
 This gate is TP1 and does not prove distributed stream uniqueness.
 
-**Fallback:** try a different stateless Philox implementation or a
-non-warp-specialized epilogue schedule.
+**Closed experiments:** a device `noinline` Philox/Gumbel helper and
+per-family partial unrolling remain in the best control because they produce
+measured recoveries, but they do not pass the gate.
+The stock SM100 `NoSmemWarpSpecialized2Sm` epilogue is not a viable drop-in
+fallback because CUTLASS rejects the provider's required `ElementD=void`
+configuration.
+The midpoint uniform conversion is not the high-H solution; changing it to a
+cheaper `[0,1)` construction did not materially change the worst ratio.
 Pre-generated noise is not an acceptable production fallback.
 
+**Bounded recovery plan:**
+
+1. Audit the selected control's generated SASS and compiler spill slots at
+   H=128/256.
+   Distinguish accumulator fragments, callback output fragments, call ABI
+   state, and Philox/Gumbel temporaries before attributing the remaining
+   latency to one source.
+2. Prototype one custom SM100 epilogue path that consumes and reduces smaller
+   accumulator groups without keeping the current input and packed-output
+   `cutlass::Array` fragments live together.
+   If its visitation or ownership mapping changes, rerun the accumulator-layout
+   gate before using it for sampling.
+3. In a separate candidate, compare one maintained vendor-backed Philox device
+   implementation with the current stateless helper.
+   Preserve the global `(seed, sample, hidden, vocab)` mapping when possible;
+   otherwise record the new stream contract and rerun deterministic vectors
+   and the 10M-sample distribution test.
+4. Screen both candidates with paired H=64/128/256 timings against the exact
+   greedy donor, then run matched NCU only for candidates that materially
+   improve the slow cells.
+   A retained candidate must rerun all three Gate 4 phases.
+
+**Stop rule:** if neither bounded candidate removes RNG-caused spilling and
+meets the pointwise 1.20x limit, keep Gate 4 as no-go and stop the complete
+CUTLASS sampling roadmap before Gate 5.
+Continuing with a greedy-only CUTLASS provider requires an explicit scope and
+gate-policy revision rather than silently skipping unrestricted Gumbel-Max.
+
 ### Gate 5: B200 tensor parallelism
+
+**Status:** blocked on Gate 4.
 
 Implement TP before top-k and DSMEM.
 Gate 5 has three formal milestones because each introduces a separate

@@ -21,6 +21,7 @@
 #undef FMMS_TILE_K
 #undef FMMS_CLUSTER_M
 
+#define FMMS_GUMBEL_PARTIAL_UNROLL 2
 #define FMMS_TILE_M 256
 #define FMMS_TILE_N 128
 #define FMMS_TILE_K 64
@@ -32,7 +33,9 @@
 #undef FMMS_TILE_N
 #undef FMMS_TILE_K
 #undef FMMS_CLUSTER_M
+#undef FMMS_GUMBEL_PARTIAL_UNROLL
 
+#define FMMS_GUMBEL_PARTIAL_UNROLL 2
 #define FMMS_TILE_M 256
 #define FMMS_TILE_N 128
 #define FMMS_TILE_K 128
@@ -44,7 +47,9 @@
 #undef FMMS_TILE_N
 #undef FMMS_TILE_K
 #undef FMMS_CLUSTER_M
+#undef FMMS_GUMBEL_PARTIAL_UNROLL
 
+#define FMMS_GUMBEL_PARTIAL_UNROLL 4
 #define FMMS_TILE_M 256
 #define FMMS_TILE_N 128
 #define FMMS_TILE_K 64
@@ -56,6 +61,7 @@
 #undef FMMS_TILE_N
 #undef FMMS_TILE_K
 #undef FMMS_CLUSTER_M
+#undef FMMS_GUMBEL_PARTIAL_UNROLL
 
 #define FMMS_TILE_M 256
 #define FMMS_TILE_N 256
@@ -130,6 +136,12 @@ void launch_winning_schedule(
     int rounded_n,
     int tile_m,
     int tile_n,
+#if defined(FMMS_GUMBEL)
+    torch::Tensor temperature,
+    uint64_t seed,
+    int original_n,
+    int sample_base,
+#endif
     char const* label) {
   int m = int(weights.size(0));
   int k = int(weights.size(1));
@@ -155,7 +167,12 @@ void launch_winning_schedule(
   PackedCandidate identity =
       fmms_winning_128x64x128_c2::pack_candidate(-INFINITY, INT_MAX);
   typename CandidateEVT::Arguments evt_arguments{
-      {}, {{}, {candidate_ptr, identity, {}}}, {}};
+#if defined(FMMS_GUMBEL)
+      {seed, temperature.data_ptr<float>(), original_n, sample_base},
+#else
+      {},
+#endif
+      {{}, {candidate_ptr, identity, {}}}, {}};
   cutlass::KernelHardwareInfo hardware_info =
       cutlass::KernelHardwareInfo::make_kernel_hardware_info<GemmKernel>(
           weights.get_device());
@@ -190,17 +207,28 @@ void launch_winning_schedule(
               "CUTLASS winning-schedule launch failed");
 }
 
+#if defined(FMMS_GUMBEL)
+#define FMMS_GUMBEL_FUNCTION_PARAMETERS                                      \
+      , torch::Tensor temperature, uint64_t seed, int original_n, int sample_base
+#define FMMS_GUMBEL_CALL_ARGUMENTS                                           \
+      , temperature, seed, original_n, sample_base
+#else
+#define FMMS_GUMBEL_FUNCTION_PARAMETERS
+#define FMMS_GUMBEL_CALL_ARGUMENTS
+#endif
+
 #define FMMS_DEFINE_WINNING_LAUNCH(FUNCTION_NAME, KERNEL_NAMESPACE, LABEL)     \
   void FUNCTION_NAME(                                                         \
       torch::Tensor weights, torch::Tensor padded_hidden_states,              \
       torch::Tensor candidates, torch::Tensor output, int gemm_n,             \
-      int rounded_n) {                                                        \
+      int rounded_n FMMS_GUMBEL_FUNCTION_PARAMETERS) {                        \
     launch_winning_schedule<                                                  \
         KERNEL_NAMESPACE::Gemm, KERNEL_NAMESPACE::GemmKernel,                 \
         KERNEL_NAMESPACE::CandidateEVT, KERNEL_NAMESPACE::ElementA,           \
         KERNEL_NAMESPACE::ElementB>(                                          \
         weights, padded_hidden_states, candidates, output, gemm_n, rounded_n, \
-        KERNEL_NAMESPACE::kTileM, KERNEL_NAMESPACE::kTileN, LABEL);           \
+        KERNEL_NAMESPACE::kTileM, KERNEL_NAMESPACE::kTileN                    \
+        FMMS_GUMBEL_CALL_ARGUMENTS, LABEL);                                   \
   }
 
 FMMS_DEFINE_WINNING_LAUNCH(launch_128x64x128_c2,
@@ -213,6 +241,9 @@ FMMS_DEFINE_WINNING_LAUNCH(launch_256x128x64_c4,
                            fmms_winning_256x128x64_c4, "256x128x64-c4")
 FMMS_DEFINE_WINNING_LAUNCH(launch_256x256x64_c2,
                            fmms_winning_256x256x64_c2, "256x256x64-c2")
+
+#undef FMMS_GUMBEL_FUNCTION_PARAMETERS
+#undef FMMS_GUMBEL_CALL_ARGUMENTS
 
 }  // namespace fmms_cutlass_winning
 

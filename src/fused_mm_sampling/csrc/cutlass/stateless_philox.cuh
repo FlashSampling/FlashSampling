@@ -54,4 +54,9 @@ __host__ __device__ inline float uniform_open_closed(uint32_t value) {
   return (static_cast<float>(value) + 1.0f) * 0x1p-32f;
 }
 
+__host__ __device__ inline float uniform_open_open(uint32_t value) {
+  // Use 23 random bits so both half-step endpoints are exactly representable.
+  return (static_cast<float>(value >> 9) + 0.5f) * 0x1p-23f;
+}
+
 }  // namespace fmms

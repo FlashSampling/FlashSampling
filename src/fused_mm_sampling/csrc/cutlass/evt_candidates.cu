@@ -21,10 +21,26 @@
 #include "cutlass/gemm/device/gemm_universal_adapter.h"
 #include "cutlass/gemm/kernel/gemm_universal.hpp"
 #include "cutlass/util/packed_stride.hpp"
+#if defined(FMMS_GUMBEL)
+#include "stateless_philox.cuh"
+#endif
 
 using namespace cute;
 
 namespace fmms_evt_candidates {
+
+#if defined(FMMS_GUMBEL)
+__device__ __noinline__ float gumbel_noise(
+    uint64_t seed,
+    uint32_t sample_idx,
+    uint32_t hidden_idx,
+    uint64_t vocab_idx) {
+  auto random = fmms::philox4x32_10(
+      seed, sample_idx, hidden_idx, vocab_idx);
+  float uniform = fmms::uniform_open_open(random.x);
+  return -logf(-logf(uniform));
+}
+#endif
 
 #ifndef FMMS_TILE_M
 #define FMMS_TILE_M 128
@@ -194,13 +210,34 @@ void verify_atomic_candidate_tie() {
 
 struct PackCandidate {
   struct SharedStorage {};
+#if defined(FMMS_GUMBEL)
+  struct Arguments {
+    uint64_t seed;
+    float const* temperature;
+    int original_n;
+    int sample_base;
+  };
+  struct Params {
+    uint64_t seed;
+    float const* temperature;
+    int original_n;
+    int sample_base;
+  };
+#else
   struct Arguments {};
   struct Params {};
+#endif
 
   template <class ProblemShape>
   static constexpr Params to_underlying_arguments(
-      ProblemShape const&, Arguments const&, void*) {
+      ProblemShape const&, Arguments const& arguments, void*) {
+#if defined(FMMS_GUMBEL)
+    return {
+        arguments.seed, arguments.temperature,
+        arguments.original_n, arguments.sample_base};
+#else
     return {};
+#endif
   }
 
   template <class ProblemShape>
@@ -242,6 +279,10 @@ struct PackCandidate {
   struct ConsumerStoreCallbacks
       : cutlass::epilogue::fusion::EmptyConsumerStoreCallbacks {
     int tile_m;
+#if defined(FMMS_GUMBEL)
+    int tile_n;
+    Params params;
+#endif
 
     template <
         typename ElementAccumulator,
@@ -252,7 +293,19 @@ struct PackCandidate {
         int epi_m,
         int epi_n) {
       cutlass::Array<PackedCandidate, FragmentSize> output;
+#if defined(FMMS_GUMBEL) && defined(FMMS_GUMBEL_PARTIAL_UNROLL)
+#if FMMS_GUMBEL_PARTIAL_UNROLL == 2
+#pragma unroll 2
+#elif FMMS_GUMBEL_PARTIAL_UNROLL == 4
+#pragma unroll 4
+#elif FMMS_GUMBEL_PARTIAL_UNROLL == 8
+#pragma unroll 8
+#else
+#error "Unsupported FMMS_GUMBEL_PARTIAL_UNROLL value"
+#endif
+#else
       CUTLASS_PRAGMA_UNROLL
+#endif
       for (int i = 0; i < FragmentSize; ++i) {
 #if defined(FMMS_ARCH_SM90)
         int consumer_thread = int(threadIdx.x) - 128;
@@ -280,7 +333,30 @@ struct PackCandidate {
 #else
         int global_m = tile_m * kTileM + local_m;
 #endif
+#if defined(FMMS_GUMBEL)
+#if defined(FMMS_SM100_2SM)
+        int local_n;
+        if constexpr (kTileM == 128) {
+          local_n = 32 * (consumer_thread / 64) + 16 * epi_n + i;
+        } else if constexpr (kTileN == 128) {
+          local_n = 16 * epi_n + i;
+        } else {
+          local_n = 32 * epi_n + i;
+        }
+#else
+        int local_n = 16 * epi_n + i;
+#endif
+        int global_n = tile_n * kTileN + local_n;
+        int hidden_idx = global_n % params.original_n;
+        int sample_idx = params.sample_base + global_n / params.original_n;
+        float gumbel = gumbel_noise(
+            params.seed, uint32_t(sample_idx), uint32_t(hidden_idx),
+            uint64_t(global_m));
+        float value = float(accumulators[i]) / *params.temperature + gumbel;
+        output[i] = pack_candidate(value, global_m);
+#else
         output[i] = pack_candidate(float(accumulators[i]), global_m);
+#endif
       }
       return output;
     }
@@ -290,7 +366,11 @@ struct PackCandidate {
   CUTLASS_DEVICE auto get_consumer_store_callbacks(
       cutlass::epilogue::fusion::detail::ConsumerStoreArgs<Args...> const& args) {
     return ConsumerStoreCallbacks{
-        {}, int(get<0>(args.tile_coord_mnkl))};
+        {}, int(get<0>(args.tile_coord_mnkl))
+#if defined(FMMS_GUMBEL)
+        , int(get<1>(args.tile_coord_mnkl)), params
+#endif
+    };
   }
 };
 

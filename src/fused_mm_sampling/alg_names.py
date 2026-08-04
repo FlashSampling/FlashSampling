@@ -10,6 +10,7 @@ class ShortNames:
     fused_triton_ret_logits = "fused-triton-ret-logits"
     fused_triton_greedy = "fused-triton-greedy"
     fused_cutlass_greedy = "fused-cutlass-greedy"
+    fused_cutlass = "fused-cutlass"
     fused_cuda = "fused-cuda"
     fused_topk = "fused-topk"
     helion = "helion"
@@ -30,6 +31,7 @@ class LongNames:
     fmms_triton_ret_logits = "FMMS (Triton, Return Logits)"
     fmms_greedy_triton = "FMMS Greedy (Triton)"
     fmms_greedy_cutlass = "FMMS Greedy (CUTLASS)"
+    fmms_cutlass = "FMMS (CUTLASS)"
     fmms_cuda = "FMMS (CUDA)"
     fmms_topk = "FMMS Top-k (Triton)"
     fmms_helion = "FMMS (Helion)"
@@ -75,6 +77,7 @@ short2long: dict[str, str] = {
     S.fused_triton_ret_logits: L.fmms_triton_ret_logits,
     S.fused_triton_greedy: L.fmms_greedy_triton,
     S.fused_cutlass_greedy: L.fmms_greedy_cutlass,
+    S.fused_cutlass: L.fmms_cutlass,
     S.fused_cuda: L.fmms_cuda,
     S.fused_topk: L.fmms_topk,
     S.helion: L.fmms_helion,

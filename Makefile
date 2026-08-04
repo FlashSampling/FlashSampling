@@ -29,7 +29,7 @@ modal-pytest-distributed:
 modal-versions:
 	modal run -m src.fused_mm_sampling.modal_lib.modal_versions
 
-CUTLASS_GATES := toolchain accumulator-layout thread-local-max warp-max cta-max cta-multi-column-max cta-boundary-max evt-candidates stage2 greedy-provider greedy-performance greedy-profile greedy-ncu ordinary-gemm ordinary-gemm-tuning winning-schedule-layout winning-schedule-evt stateless-philox
+CUTLASS_GATES := toolchain accumulator-layout thread-local-max warp-max cta-max cta-multi-column-max cta-boundary-max evt-candidates stage2 greedy-provider greedy-performance greedy-profile greedy-ncu ordinary-gemm ordinary-gemm-tuning winning-schedule-layout winning-schedule-evt stateless-philox gumbel-provider gumbel-ncu
 # PHASE and RUN select the Gate 2c sub-run of the ordinary-gemm-tuning gate.
 PHASE := discover
 RUN := 1
@@ -53,6 +53,8 @@ CUTLASS_MODULE_ordinary-gemm-tuning := ordinary_gemm_tuning
 CUTLASS_MODULE_winning-schedule-layout := winning_schedule_layout
 CUTLASS_MODULE_winning-schedule-evt := winning_schedule_evt
 CUTLASS_MODULE_stateless-philox := stateless_philox
+CUTLASS_MODULE_gumbel-provider := gumbel_provider
+CUTLASS_MODULE_gumbel-ncu := gumbel_ncu
 CUTLASS_RESULT_toolchain := 00-toolchain
 CUTLASS_RESULT_accumulator-layout := 01-accumulator-layout
 CUTLASS_RESULT_thread-local-max := 02-thread-local-max
@@ -71,6 +73,8 @@ CUTLASS_RESULT_ordinary-gemm-tuning := 14-ordinary-gemm-tuning
 CUTLASS_RESULT_winning-schedule-layout := 15-winning-schedule-layout
 CUTLASS_RESULT_winning-schedule-evt := 16-winning-schedule-evt
 CUTLASS_RESULT_stateless-philox := 17-stateless-philox
+CUTLASS_RESULT_gumbel-provider := 18-gumbel-provider
+CUTLASS_RESULT_gumbel-ncu := 18-gumbel-provider
 CUTLASS_LOG_toolchain := smoke.txt
 CUTLASS_LOG_ordinary-gemm-tuning := gate-2c-$(PHASE)-run$(RUN)-log.txt
 

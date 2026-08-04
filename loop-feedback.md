@@ -22,5 +22,8 @@ Continuously monitor the full development loop, including environment and image 
 Treat avoidable latency, cache invalidation, duplicate work, unreliable orchestration, and poor observability as implementation problems to diagnose and fix when they appear, rather than passive waiting costs.
 Record enough timing and cache evidence to distinguish necessary one-time setup from recurring friction, and keep the workflow fast for subsequent iterations.
 
+### Speed up Experimentation Speed
+If the experiments on Modal are running slowly, think about how they could be accelerated: Perhaps only a subset of the experiments yields most of the information. Perhaps the container image is failing the cache layers correctly, perhaps the pytorch / triton / vllm cache is not being hit, triggering unnecessary recomputation. Could some experiments be run in parallel rather than sequentially? This introduces a tradeoff, since an experiment might make the others unnecessary, but it speeds up experiemntation in wall-time. Regularly check what takes most time during experimentation, and introduce optimizations to speed them up and abstractions to simplify them.
+
 ## Explain Results Top-Down
 After each step, explain its results in a top-down narrative before diving into evidence: start with the bigger picture (what question the step answered and why it mattered), then what was done, what happened, and why it matters for the next step. Use plain language; introduce jargon only after the plain statement. The detailed tables, packets, and coverage audits sit below that narrative as supporting evidence, not as a substitute for it. A reader should be able to understand the outcome and its implication for the project from the summary alone.

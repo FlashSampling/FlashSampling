@@ -8,6 +8,15 @@
 #define FMMS_CUTLASS_DISABLE_D
 #include "evt_candidates.cu"
 
+#if defined(FMMS_GUMBEL)
+#define FMMS_GUMBEL_PARAMETERS                                               \
+  , torch::Tensor temperature, uint64_t seed, int original_n, int sample_base
+#define FMMS_GUMBEL_ARGUMENTS , temperature, seed, original_n, sample_base
+#else
+#define FMMS_GUMBEL_PARAMETERS
+#define FMMS_GUMBEL_ARGUMENTS
+#endif
+
 #if defined(FMMS_ARCH_SM100)
 namespace fmms_cutlass_winning {
 void launch_128x64x128_c2(
@@ -16,23 +25,23 @@ void launch_128x64x128_c2(
     torch::Tensor candidates,
     torch::Tensor output,
     int gemm_n,
-    int rounded_n);
+    int rounded_n FMMS_GUMBEL_PARAMETERS);
 void launch_256x128x128_c2(
     torch::Tensor weights, torch::Tensor padded_hidden_states,
     torch::Tensor candidates, torch::Tensor output, int gemm_n,
-    int rounded_n);
+    int rounded_n FMMS_GUMBEL_PARAMETERS);
 void launch_256x128x64_c2(
     torch::Tensor weights, torch::Tensor padded_hidden_states,
     torch::Tensor candidates, torch::Tensor output, int gemm_n,
-    int rounded_n);
+    int rounded_n FMMS_GUMBEL_PARAMETERS);
 void launch_256x128x64_c4(
     torch::Tensor weights, torch::Tensor padded_hidden_states,
     torch::Tensor candidates, torch::Tensor output, int gemm_n,
-    int rounded_n);
+    int rounded_n FMMS_GUMBEL_PARAMETERS);
 void launch_256x256x64_c2(
     torch::Tensor weights, torch::Tensor padded_hidden_states,
     torch::Tensor candidates, torch::Tensor output, int gemm_n,
-    int rounded_n);
+    int rounded_n FMMS_GUMBEL_PARAMETERS);
 }
 #endif
 
@@ -302,7 +311,7 @@ void launch_greedy_gemm(
     torch::Tensor padded_hidden_states,
     torch::Tensor candidates,
     int gemm_n,
-    int rounded_n) {
+    int rounded_n FMMS_GUMBEL_PARAMETERS) {
   int m = int(weights.size(0));
   int k = int(weights.size(1));
   int m_tiles = (m + kTileM - 1) / kTileM;
@@ -329,7 +338,11 @@ void launch_greedy_gemm(
       reinterpret_cast<PackedCandidate*>(candidates.data_ptr<uint8_t>());
   PackedCandidate identity = pack_candidate(-INFINITY, INT_MAX);
   typename CandidateEVT::Arguments evt_arguments{
+#if defined(FMMS_GUMBEL)
+      {seed, temperature.data_ptr<float>(), original_n, sample_base},
+#else
       {},
+#endif
       {{}, {candidate_ptr, identity, {}}},
       {}};
   cutlass::KernelHardwareInfo hardware_info =
@@ -389,7 +402,9 @@ void launch_greedy_stage2(
   TORCH_CHECK(cudaGetLastError() == cudaSuccess, "CUTLASS Stage 2 launch failed");
 }
 
-torch::Tensor greedy(torch::Tensor weights, torch::Tensor hidden_states) {
+torch::Tensor greedy(
+    torch::Tensor weights, torch::Tensor hidden_states
+    FMMS_GUMBEL_PARAMETERS) {
   TORCH_CHECK(weights.is_cuda() && hidden_states.is_cuda(), "inputs must be CUDA tensors");
   TORCH_CHECK(weights.scalar_type() == torch::kBFloat16, "weights must be bfloat16");
   TORCH_CHECK(hidden_states.scalar_type() == torch::kBFloat16, "hidden_states must be bfloat16");
@@ -405,6 +420,12 @@ torch::Tensor greedy(torch::Tensor weights, torch::Tensor hidden_states) {
   int m = int(weights.size(0));
   int n = int(hidden_states.size(0));
   int k = int(weights.size(1));
+#if defined(FMMS_GUMBEL)
+  TORCH_CHECK(
+      temperature.is_cuda() && temperature.scalar_type() == torch::kFloat32 &&
+          temperature.numel() == 1,
+      "temperature must be a CUDA float32 scalar");
+#endif
   int gemm_n = ((n + 3) / 4) * 4;
 #if defined(FMMS_ARCH_SM100)
   if (n <= 256) {
@@ -424,16 +445,20 @@ torch::Tensor greedy(torch::Tensor weights, torch::Tensor hidden_states) {
     auto output = torch::empty({n, 1}, weights.options().dtype(torch::kInt64));
     if (n <= 64) {
       fmms_cutlass_winning::launch_128x64x128_c2(
-          weights, padded_hidden_states, candidates, output, gemm_n, rounded_n);
+          weights, padded_hidden_states, candidates, output, gemm_n, rounded_n
+          FMMS_GUMBEL_ARGUMENTS);
     } else if (k <= 4096) {
       fmms_cutlass_winning::launch_256x128x64_c4(
-          weights, padded_hidden_states, candidates, output, gemm_n, rounded_n);
+          weights, padded_hidden_states, candidates, output, gemm_n, rounded_n
+          FMMS_GUMBEL_ARGUMENTS);
     } else if (n > 128) {
       fmms_cutlass_winning::launch_256x128x64_c2(
-          weights, padded_hidden_states, candidates, output, gemm_n, rounded_n);
+          weights, padded_hidden_states, candidates, output, gemm_n, rounded_n
+          FMMS_GUMBEL_ARGUMENTS);
     } else {
       fmms_cutlass_winning::launch_256x128x128_c2(
-          weights, padded_hidden_states, candidates, output, gemm_n, rounded_n);
+          weights, padded_hidden_states, candidates, output, gemm_n, rounded_n
+          FMMS_GUMBEL_ARGUMENTS);
     }
     return output;
   }
@@ -449,7 +474,8 @@ torch::Tensor greedy(torch::Tensor weights, torch::Tensor hidden_states) {
   auto output = torch::empty({n, 1}, weights.options().dtype(torch::kInt64));
 
   launch_greedy_gemm(
-      weights, padded_hidden_states, candidates, gemm_n, rounded_n);
+      weights, padded_hidden_states, candidates, gemm_n, rounded_n
+      FMMS_GUMBEL_ARGUMENTS);
   launch_greedy_stage2(candidates, output, m_tiles, rounded_n, n);
   return output;
 }
@@ -734,6 +760,11 @@ pybind11::dict kernel_attributes() {
 }  // namespace fmms_cutlass_greedy
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
+#if defined(FMMS_GUMBEL)
+  module.def(
+      "sample", &fmms_cutlass_greedy::greedy,
+      "CUTLASS BF16 TP1 Gumbel-Max FMMS");
+#else
   module.def("greedy", &fmms_cutlass_greedy::greedy, "CUTLASS BF16 TP1 greedy FMMS");
   module.def(
       "make_greedy_buffers",
@@ -775,4 +806,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
       "kernel_attributes",
       &fmms_cutlass_greedy::kernel_attributes,
       "Static kernel resources and theoretical active blocks per SM");
+#endif
 }
+
+#undef FMMS_GUMBEL_PARAMETERS
+#undef FMMS_GUMBEL_ARGUMENTS

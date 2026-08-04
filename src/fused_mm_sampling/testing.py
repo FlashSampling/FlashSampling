@@ -211,6 +211,7 @@ def assert_sampling_distribution_large_vocab(
     num_samples: int = 1_000_000,
     samples_per_call: int = 10_000,
     hidden_size: int = 16,
+    provider: str = "fused-triton",
 ) -> None:
     """Verify FMMS sampling against random-Gaussian logits at realistic vocabulary size."""
 
@@ -236,7 +237,7 @@ def assert_sampling_distribution_large_vocab(
         hidden_size=hidden_size,
     )
     assert_sampling_distribution(
-        provider="fused-triton",
+        provider=provider,
         vocab_size=vocab_size,
         n_hidden_states=1,
         num_samples=num_samples,

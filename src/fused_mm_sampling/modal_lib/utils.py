@@ -139,12 +139,14 @@ def set_volume_caches():
     """Point cache env vars to the Modal volume and enable Triton autotune logging.
 
     XDG_CACHE_HOME: used by flashinfer, torch.compile, etc.
+    TORCH_EXTENSIONS_DIR: shared JIT extension builds, including CUTLASS providers.
     TRITON_CACHE_DIR: used by Triton for compiled kernels and autotune results.
     Triton ignores XDG_CACHE_HOME and reads TRITON_CACHE_DIR (or TRITON_HOME) instead.
     TRITON_PRINT_AUTOTUNING: surfaces autotune progress so silent waits
     (cold cache, hangs) are debuggable from the run log.
     """
     os.environ["XDG_CACHE_HOME"] = f"{volume_path}/cache"
+    os.environ["TORCH_EXTENSIONS_DIR"] = f"{volume_path}/cache/torch_extensions"
     os.environ["TRITON_CACHE_DIR"] = f"{volume_path}/cache/triton"
     os.environ["TRITON_PRINT_AUTOTUNING"] = "1"
 

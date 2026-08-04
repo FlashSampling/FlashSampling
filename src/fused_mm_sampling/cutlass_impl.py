@@ -1,5 +1,6 @@
-"""CUTLASS BF16 TP1 greedy FMMS provider."""
+"""CUTLASS BF16 TP1 greedy and Gumbel-Max FMMS providers."""
 
+import hashlib
 import os
 from pathlib import Path
 
@@ -10,6 +11,7 @@ from .tp_info import TP1, TPInfo
 
 _CSRC_DIR = Path(__file__).resolve().parent / "csrc" / "cutlass"
 _module = None
+_sampling_module = None
 
 
 def fused_mm_sample_cutlass_greedy(
@@ -27,6 +29,42 @@ def fused_mm_sample_cutlass_greedy(
         raise ValueError("The CUTLASS greedy provider returns exactly one sample")
     del temperature
     return _get_module().greedy(weights, hidden_states)
+
+
+def fused_mm_sample_cutlass(
+    weights: torch.Tensor,
+    hidden_states: torch.Tensor,
+    num_samples: int,
+    temperature: torch.Tensor,
+    seed: int,
+    tp: TPInfo = TP1,
+    **_kwargs,
+) -> torch.Tensor:
+    """Sample with the Gate 4 B200 CUTLASS Gumbel-Max provider."""
+    if tp.size != 1:
+        raise NotImplementedError("The CUTLASS sampling provider supports TP1 only")
+    if torch.cuda.get_device_capability(weights.device) != (10, 0):
+        raise NotImplementedError("The Gate 4 CUTLASS sampling provider requires B200")
+    if num_samples < 1:
+        raise ValueError("The CUTLASS sampling provider requires at least one sample")
+    n_hidden_states = hidden_states.size(0)
+    if n_hidden_states > 256:
+        raise ValueError("The Gate 4 CUTLASS sampling provider supports H <= 256")
+    samples_per_chunk = 256 // n_hidden_states
+    chunks = []
+    for sample_base in range(0, num_samples, samples_per_chunk):
+        chunk_samples = min(samples_per_chunk, num_samples - sample_base)
+        repeated_hidden_states = hidden_states.repeat(chunk_samples, 1)
+        flat_samples = _get_sampling_module().sample(
+            weights,
+            repeated_hidden_states,
+            temperature,
+            seed,
+            n_hidden_states,
+            sample_base,
+        )[:, 0]
+        chunks.append(flat_samples.reshape(chunk_samples, n_hidden_states).T)
+    return torch.cat(chunks, dim=1)
 
 
 def cutlass_plain_gemm(
@@ -155,7 +193,7 @@ def _get_module():
         if architecture not in {"90", "100"}:
             raise RuntimeError("The CUTLASS greedy provider supports SM90 and SM100 only")
         _module = load(
-            name=f"fmms_cutlass_greedy_sm{architecture}",
+            name=_extension_name(f"fmms_cutlass_greedy_sm{architecture}"),
             sources=[
                 str(_CSRC_DIR / "greedy_provider.cu"),
                 str(_CSRC_DIR / "winning_schedule_provider.cu"),
@@ -171,3 +209,43 @@ def _get_module():
             verbose=os.environ.get("FMMS_CUTLASS_VERBOSE", "") == "1",
         )
     return _module
+
+
+def _get_sampling_module():
+    global _sampling_module
+    if _sampling_module is None:
+        cutlass_root = Path(os.environ.get("CUTLASS_ROOT", "/opt/cutlass"))
+        include_dirs = [
+            str(cutlass_root / "include"),
+            str(cutlass_root / "tools" / "util" / "include"),
+            str(_CSRC_DIR),
+        ]
+        if torch.cuda.get_device_capability() != (10, 0):
+            raise RuntimeError("The Gate 4 CUTLASS sampling provider requires SM100")
+        _sampling_module = load(
+            name=_extension_name("fmms_cutlass_sampling_sm100"),
+            sources=[
+                str(_CSRC_DIR / "greedy_provider.cu"),
+                str(_CSRC_DIR / "winning_schedule_provider.cu"),
+            ],
+            extra_include_paths=include_dirs,
+            extra_cuda_cflags=[
+                "-O3",
+                "-lineinfo",
+                "--expt-relaxed-constexpr",
+                "-arch=sm_100a",
+                "-DFMMS_ARCH_SM100",
+                "-DFMMS_GUMBEL",
+            ],
+            verbose=os.environ.get("FMMS_CUTLASS_VERBOSE", "") == "1",
+        )
+    return _sampling_module
+
+
+def _extension_name(prefix: str) -> str:
+    digest = hashlib.sha256()
+    for path in sorted(_CSRC_DIR.iterdir()):
+        if path.suffix in {".cu", ".cuh", ".patch"}:
+            digest.update(path.name.encode())
+            digest.update(path.read_bytes())
+    return f"{prefix}_{digest.hexdigest()[:12]}"
