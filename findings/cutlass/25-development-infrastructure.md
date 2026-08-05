@@ -228,6 +228,34 @@ The extension linked and loaded successfully, but this build has not yet passed 
 Possible failures include losing required forward compatibility, accidentally omitting the B200 cubin, runtime incompatibility, or a code-generation difference that changes kernel performance.
 Generated evidence belongs under `benchmarking/modal-results/cutlass/compile-cache-study/sass-only/` locally and `cutlass-compile-study/sass-only/20260805T091045Z-compile-study-compile-study-sass-only-902de41c/` on the shared Volume.
 
+### Step 5: make experiment-only kernels positive opt-ins
+
+Compile Time Advisor showed that the sampling extension instantiated 23 ordinary-GEMM tuning variants even though its Gumbel-only Python module did not export those entry points.
+It also compiled a fifth winning schedule that no production dispatch could reach.
+The production-compatible `pruned` study is the historical comparison label.
+Its implementation now leaves experiment-only ordinary-GEMM symbols disabled unless the caller explicitly enables them, while retaining the normal `-arch=sm_100a` target and its embedded PTX.
+
+Validation command: `make modal-cutlass-compile-study CUTLASS_COMPILE_STUDY=pruned`, followed by `make modal-cutlass GATE=gumbel-experiment CUTLASS_VARIANT=warpgroup-fastmath-smem CUTLASS_DEV_LABEL=compile-pruning-timing`.
+Expected result: a loadable extension, lower cold compile time, exact-winner agreement at H=128 and H=256, and timing consistent with the retained kernel implementation.
+Actual result: the cold build completed in 93.23 seconds, 54.63 seconds or 36.95% below the 147.86-second baseline.
+The focused and full experiment checks passed both exact-winner cases.
+The six interleaved timing cells remained consistent with the established candidate range, from 0.96x to 1.89x Triton.
+Production greedy and sampling extensions now exclude tuning code by default.
+Ordinary-GEMM APIs opt into the same tuning code through a separate extension with `FMMS_ENABLE_GEMM_TUNING` and a distinct fingerprint.
+This positive inclusion model prevents a new production loader from accidentally compiling tuning variants because it forgot a pruning flag.
+The single-writer experiment build now requests the same 16-CPU allocation as the controlled compile studies instead of relying on Modal's default CPU request.
+The durable compile packet is `cutlass-compile-study/pruned/20260805T093011Z-compile-study-compile-study-pruned-06492acc/` on the shared Volume.
+The local correctness and timing artifacts are under `benchmarking/modal-results/cutlass/experiments/warpgroup-fastmath-smem/`.
+The positive-opt-in implementation was validated again with the same compile-study command.
+That independent cold build completed in 126.36 seconds and passed both focused exact-winner cases.
+This rerun validates loading and correctness, but it is not used as a replacement speed comparison because its object timings differed materially from the earlier controlled packet.
+Its durable packet is `cutlass-compile-study/pruned/20260805T110748Z-compile-study-compile-study-pruned-9bbb6b92/`, and its local summary is under `benchmarking/modal-results/cutlass/compile-cache-study/pruned/`.
+
+A follow-up split the four retained winning schedules into separate CUDA translation units.
+It passed focused correctness but took 96.07 seconds, 3.05% longer than the pruned monolith, because concurrent NVCC processes inflated individual object times to 87.98 through 95.08 seconds.
+Reject the split and keep the monolithic winning-schedule translation unit.
+The rejected implementation was removed, while its packet remains at `cutlass-compile-study/pruned-split-tu/20260805T105508Z-compile-study-compile-study-pruned-split-tu-78da0192/`.
+
 ### Later decisions
 
 Refactor the Python binding, stable Stage 2 code, and candidate CUTLASS instantiations into narrower translation units only if the traces or cache misses identify a reusable boundary.

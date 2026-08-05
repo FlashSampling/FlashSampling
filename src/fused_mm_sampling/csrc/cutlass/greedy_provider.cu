@@ -38,10 +38,6 @@ void launch_256x128x64_c4(
     torch::Tensor weights, torch::Tensor padded_hidden_states,
     torch::Tensor candidates, torch::Tensor output, int gemm_n,
     int rounded_n FMMS_GUMBEL_PARAMETERS);
-void launch_256x256x64_c2(
-    torch::Tensor weights, torch::Tensor padded_hidden_states,
-    torch::Tensor candidates, torch::Tensor output, int gemm_n,
-    int rounded_n FMMS_GUMBEL_PARAMETERS);
 }
 #endif
 
@@ -50,6 +46,7 @@ namespace fmms_cutlass_greedy {
 using namespace cute;
 using namespace fmms_evt_candidates;
 
+#if defined(FMMS_ENABLE_GEMM_TUNING)
 using PlainElementC = void;
 using PlainElementD = cutlass::bfloat16_t;
 constexpr int PlainAlignmentD = 8;
@@ -275,6 +272,7 @@ torch::Tensor small_n_gemv(
   launch_small_n_gemv(weights, hidden_states, output);
   return output;
 }
+#endif
 
 __global__ void stage2_indices_kernel(
     PackedCandidate const* candidates,
@@ -499,6 +497,7 @@ pybind11::tuple make_greedy_buffers(
       padded_hidden_states, candidates, output, gemm_n, rounded_n, m_tiles);
 }
 
+#if defined(FMMS_ENABLE_GEMM_TUNING)
 template <class Variant>
 void launch_plain_gemm_variant_impl(
     torch::Tensor weights,
@@ -712,6 +711,7 @@ torch::Tensor plain_gemm(torch::Tensor weights, torch::Tensor hidden_states) {
   launch_plain_gemm(weights, padded_hidden_states, output);
   return output.narrow(1, 0, n);
 }
+#endif
 
 pybind11::dict kernel_attributes() {
   cudaFuncAttributes gemm_attributes;
@@ -778,6 +778,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
       "launch_greedy_stage2",
       &fmms_cutlass_greedy::launch_greedy_stage2,
       "Launch only the preallocated greedy Stage 2 reduction");
+#if defined(FMMS_ENABLE_GEMM_TUNING)
   module.def(
       "plain_gemm",
       &fmms_cutlass_greedy::plain_gemm,
@@ -802,6 +803,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, module) {
       "launch_small_n_gemv",
       &fmms_cutlass_greedy::launch_small_n_gemv,
       "Launch preallocated BF16 H=1 through H=8 specialization");
+#endif
   module.def(
       "kernel_attributes",
       &fmms_cutlass_greedy::kernel_attributes,

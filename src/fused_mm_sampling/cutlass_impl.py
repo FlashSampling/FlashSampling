@@ -15,6 +15,7 @@ from .tp_info import TP1, TPInfo
 
 _CSRC_DIR = Path(__file__).resolve().parent / "csrc" / "cutlass"
 _module = None
+_tuning_module = None
 _sampling_module = None
 _experimental_sampling_modules = {}
 
@@ -118,7 +119,7 @@ def cutlass_plain_gemm(
     weights: torch.Tensor, hidden_states: torch.Tensor
 ) -> torch.Tensor:
     """Return a BF16 `[V, H]` output from the matching plain CUTLASS GEMM."""
-    return _get_module().plain_gemm(weights, hidden_states)
+    return _get_tuning_module().plain_gemm(weights, hidden_states)
 
 
 def cutlass_winning_plain_gemm(
@@ -155,7 +156,7 @@ def cutlass_make_plain_gemm_buffers(
     weights: torch.Tensor, hidden_states: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor, int]:
     """Allocate the padded input and BF16 output for ordinary GEMM timing."""
-    return _get_module().make_plain_gemm_buffers(weights, hidden_states)
+    return _get_tuning_module().make_plain_gemm_buffers(weights, hidden_states)
 
 
 def cutlass_launch_plain_gemm(
@@ -164,7 +165,7 @@ def cutlass_launch_plain_gemm(
     output: torch.Tensor,
 ) -> None:
     """Launch ordinary CUTLASS GEMM into a preallocated BF16 output."""
-    _get_module().launch_plain_gemm(weights, padded_hidden_states, output)
+    _get_tuning_module().launch_plain_gemm(weights, padded_hidden_states, output)
 
 
 def cutlass_launch_plain_gemm_variant(
@@ -174,7 +175,7 @@ def cutlass_launch_plain_gemm_variant(
     output: torch.Tensor,
 ) -> None:
     """Launch one named ordinary-GEMM tuning variant."""
-    _get_module().launch_plain_gemm_variant(
+    _get_tuning_module().launch_plain_gemm_variant(
         variant, weights, padded_hidden_states, output
     )
 
@@ -185,7 +186,7 @@ def cutlass_launch_small_n_gemv(
     output: torch.Tensor,
 ) -> None:
     """Launch the preallocated BF16 H=1 or H=2 specialization."""
-    _get_module().launch_small_n_gemv(weights, hidden_states, output)
+    _get_tuning_module().launch_small_n_gemv(weights, hidden_states, output)
 
 
 def cutlass_greedy_kernel_attributes() -> dict[str, int]:
@@ -247,6 +248,28 @@ def _get_module():
     return _module
 
 
+def _get_tuning_module():
+    global _tuning_module
+    if _tuning_module is None:
+        major, minor = torch.cuda.get_device_capability()
+        architecture = f"{major}{minor}"
+        if architecture not in {"90", "100"}:
+            raise RuntimeError("CUTLASS GEMM tuning supports SM90 and SM100 only")
+        _tuning_module = _load_cutlass_extension(
+            prefix=f"fmms_cutlass_gemm_tuning_sm{architecture}",
+            architecture=architecture,
+            cuda_flags=(
+                "-O3",
+                "-lineinfo",
+                "--expt-relaxed-constexpr",
+                f"-arch=sm_{architecture}a",
+                f"-DFMMS_ARCH_SM{architecture}",
+                "-DFMMS_ENABLE_GEMM_TUNING",
+            ),
+        )
+    return _tuning_module
+
+
 def _get_sampling_module():
     global _sampling_module
     if _sampling_module is None:
@@ -260,7 +283,8 @@ def _get_experimental_sampling_module(variant: str):
     experiment = get_cutlass_sampling_experiment(variant)
     if variant not in _experimental_sampling_modules:
         _experimental_sampling_modules[variant] = _load_sampling_extension(
-            experiment.extension_prefix, experiment.cuda_flags
+            experiment.extension_prefix,
+            experiment.cuda_flags,
         )
     return _experimental_sampling_modules[variant]
 
@@ -270,6 +294,7 @@ def _load_sampling_extension(
     extra_cuda_flags: tuple[str, ...],
     *,
     architecture_flags: tuple[str, ...] = ("-arch=sm_100a",),
+    include_gemm_tuning: bool = False,
 ):
     if torch.cuda.get_device_capability() != (10, 0):
         raise RuntimeError("The Gate 4 CUTLASS sampling provider requires SM100")
@@ -283,6 +308,11 @@ def _load_sampling_extension(
             *architecture_flags,
             "-DFMMS_ARCH_SM100",
             "-DFMMS_GUMBEL",
+            *(
+                ("-DFMMS_ENABLE_GEMM_TUNING",)
+                if include_gemm_tuning
+                else ()
+            ),
             *extra_cuda_flags,
         ),
     )

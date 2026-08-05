@@ -13,11 +13,18 @@ class CutlassCompileStudy:
     build_root_suffix: str | None = None
     ccache_probe: str | None = None
     architecture_flags: tuple[str, ...] = ("-arch=sm_100a",)
+    include_gemm_tuning: bool = False
 
 
 CUTLASS_COMPILE_STUDIES = {
     "baseline": CutlassCompileStudy(
         extension_suffix="compile_study_baseline_v3",
+        cuda_flags=("--time=-",),
+        cpu_cores=16,
+        include_gemm_tuning=True,
+    ),
+    "pruned": CutlassCompileStudy(
+        extension_suffix="compile_study_pruned_v1",
         cuda_flags=("--time=-",),
         cpu_cores=16,
     ),
@@ -33,6 +40,15 @@ CUTLASS_COMPILE_STUDIES = {
     ),
     "sass-only": CutlassCompileStudy(
         extension_suffix="compile_study_sass_only_v1",
+        cuda_flags=("--time=-",),
+        cpu_cores=16,
+        include_gemm_tuning=True,
+        architecture_flags=(
+            "--generate-code=arch=compute_100a,code=sm_100a",
+        ),
+    ),
+    "sass-pruned": CutlassCompileStudy(
+        extension_suffix="compile_study_sass_pruned_v1",
         cuda_flags=("--time=-",),
         cpu_cores=16,
         architecture_flags=(

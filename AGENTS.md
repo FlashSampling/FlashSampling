@@ -35,6 +35,7 @@ Load only the task-specific documents linked below instead of reading every hist
 | Brev setup | [docs/brev-environment.md](docs/brev-environment.md) |
 | Historical or empirical context | [findings/README.md](findings/README.md) |
 | CUTLASS work | [findings/cutlass/README.md](findings/cutlass/README.md) and [findings/cutlass/current-handoff.md](findings/cutlass/current-handoff.md) |
+| CUTLASS source or template changes | [docs/cutlass-compilation.md](docs/cutlass-compilation.md) |
 | CUTLASS experiment execution | [docs/modal-benchmarking.md#cutlass-experiment-development-driver](docs/modal-benchmarking.md#cutlass-experiment-development-driver) |
 | CUTLASS development infrastructure | [findings/cutlass/25-development-infrastructure.md](findings/cutlass/25-development-infrastructure.md) |
 

@@ -71,18 +71,6 @@
 #undef FMMS_USE_WARPGROUP_REDUCTION
 #endif
 
-#define FMMS_TILE_M 256
-#define FMMS_TILE_N 256
-#define FMMS_TILE_K 64
-#define FMMS_CLUSTER_M 2
-#define fmms_evt_candidates fmms_winning_256x256x64_c2
-#include "evt_candidates.cu"
-#undef fmms_evt_candidates
-#undef FMMS_TILE_M
-#undef FMMS_TILE_N
-#undef FMMS_TILE_K
-#undef FMMS_CLUSTER_M
-
 namespace fmms_cutlass_winning {
 
 using namespace cute;
@@ -247,8 +235,6 @@ FMMS_DEFINE_WINNING_LAUNCH(launch_256x128x64_c2,
                            fmms_winning_256x128x64_c2, "256x128x64-c2")
 FMMS_DEFINE_WINNING_LAUNCH(launch_256x128x64_c4,
                            fmms_winning_256x128x64_c4, "256x128x64-c4")
-FMMS_DEFINE_WINNING_LAUNCH(launch_256x256x64_c2,
-                           fmms_winning_256x256x64_c2, "256x256x64-c2")
 
 #undef FMMS_GUMBEL_FUNCTION_PARAMETERS
 #undef FMMS_GUMBEL_CALL_ARGUMENTS

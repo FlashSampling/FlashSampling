@@ -15,7 +15,13 @@ app = make_app()
 image = add_cutlass_greedy_provider(make_cutlass_provider_image())
 
 
-@app.function(gpu="B200", image=image, volumes=make_volumes(), timeout=60 * 60)
+@app.function(
+    gpu="B200",
+    cpu=16,
+    image=image,
+    volumes=make_volumes(),
+    timeout=60 * 60,
+)
 def build_sm100(variant: str) -> dict:
     from fused_mm_sampling import cutlass_impl
 

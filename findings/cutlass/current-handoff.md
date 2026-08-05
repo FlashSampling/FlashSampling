@@ -32,6 +32,9 @@ Raw `.ncu-rep` files are required evidence and are retained on the shared Volume
 The local NCU summaries record their exact paths.
 See [the CUTLASS experiment development driver](../../docs/modal-benchmarking.md#cutlass-experiment-development-driver) for direct debugging gates, workflow records, artifact locations, and report-download commands.
 Use [the CUTLASS compile-time study driver](../../docs/modal-benchmarking.md#cutlass-compile-time-study-driver) for compiler baseline, split-compilation, and Compile Time Advisor work.
+Production greedy and sampling extensions omit ordinary-GEMM tuning kernels by default, while ordinary-GEMM APIs opt into a separate tuning extension with `FMMS_ENABLE_GEMM_TUNING`.
+The controlled sampling build fell from 147.86 seconds to 93.23 seconds while retaining embedded PTX.
+Read [the CUTLASS compilation design guide](../../docs/cutlass-compilation.md) before changing CUTLASS sources, includes, template variants, or extension boundaries.
 
 ## Current state
 

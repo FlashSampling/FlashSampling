@@ -153,12 +153,16 @@ def record_sm100(study_name: str, run_id: str) -> dict:
             prefix,
             flags,
             architecture_flags=study.architecture_flags,
+            include_gemm_tuning=study.include_gemm_tuning,
         )
     except RuntimeError as error:
         if not study.device_trace:
             raise
         extension_error = f"{type(error).__name__}: {error}"
     extension_load_seconds = time.perf_counter() - extension_load_start
+    correctness = None
+    if module is not None:
+        correctness = _run_focused_correctness(module, cutlass_impl)
     if module is not None:
         build_dir = Path(module.__file__).parent
     else:
@@ -214,12 +218,14 @@ def record_sm100(study_name: str, run_id: str) -> dict:
         "cpu_affinity_count": len(os.sched_getaffinity(0)),
         "cuda_flags": list(flags),
         "architecture_flags": list(study.architecture_flags),
+        "include_gemm_tuning": study.include_gemm_tuning,
         "extension_prefix": prefix,
         "binary_path": str(module.__file__) if module is not None else None,
         "build_dir": str(build_dir),
         "extension_load_seconds": extension_load_seconds,
         "extension_load_status": "success" if module is not None else "trace_only",
         "extension_error": extension_error,
+        "focused_correctness": correctness,
         "ninja_build_steps": _read_ninja_log(build_dir / ".ninja_log"),
         "instrumentation": "NVCC phase CSV on retained process output via --time=-",
         "ctadvisor_status": advisor_status,
@@ -274,6 +280,26 @@ def _tool_versions() -> dict[str, str]:
         )
         versions[name] = (completed.stdout + completed.stderr).strip()
     return versions
+
+
+def _run_focused_correctness(module, cutlass_impl) -> list[dict]:
+    import torch
+
+    from .gumbel_experiment import _run_reference_cases
+
+    def candidate(**kwargs):
+        return cutlass_impl._fused_mm_sample_cutlass_with_module(
+            module,
+            kwargs["weights"],
+            kwargs["hidden_states"],
+            kwargs["num_samples"],
+            kwargs["temperature"],
+            kwargs["seed"],
+            cutlass_impl.TP1,
+        )
+
+    with timed_dev_stage("focused_correctness", workflow="compile_study"):
+        return _run_reference_cases(candidate, torch)
 
 
 def _enable_nvcc_trace_wrapper(trace_dir: Path, real_cuda_root: Path) -> None:

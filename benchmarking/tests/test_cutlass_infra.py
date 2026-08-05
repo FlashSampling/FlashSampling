@@ -149,9 +149,11 @@ def test_sampling_experiment_registry_rejects_unknown_variant():
 def test_compile_studies_change_only_the_intended_compiler_setting():
     assert tuple(CUTLASS_COMPILE_STUDIES) == (
         "baseline",
+        "pruned",
         "split4",
         "split8",
         "sass-only",
+        "sass-pruned",
         "advisor",
         "ccache-cold",
         "ccache-exact",
@@ -159,10 +161,16 @@ def test_compile_studies_change_only_the_intended_compiler_setting():
         "ccache-feature-flag",
     )
     baseline = get_cutlass_compile_study("baseline")
+    pruned = get_cutlass_compile_study("pruned")
     split4 = get_cutlass_compile_study("split4")
     split8 = get_cutlass_compile_study("split8")
     sass_only = get_cutlass_compile_study("sass-only")
+    sass_pruned = get_cutlass_compile_study("sass-pruned")
     assert baseline.cuda_flags == ("--time=-",)
+    assert pruned.architecture_flags == baseline.architecture_flags
+    assert pruned.cuda_flags == baseline.cuda_flags
+    assert baseline.include_gemm_tuning
+    assert not pruned.include_gemm_tuning
     assert split4.cuda_flags == (*baseline.cuda_flags, "--split-compile=4")
     assert split8.cuda_flags == (*baseline.cuda_flags, "--split-compile=8")
     assert baseline.architecture_flags == ("-arch=sm_100a",)
@@ -170,6 +178,10 @@ def test_compile_studies_change_only_the_intended_compiler_setting():
     assert sass_only.architecture_flags == (
         "--generate-code=arch=compute_100a,code=sm_100a",
     )
+    assert sass_pruned.architecture_flags == sass_only.architecture_flags
+    assert sass_pruned.cuda_flags == baseline.cuda_flags
+    assert sass_only.include_gemm_tuning
+    assert not sass_pruned.include_gemm_tuning
     assert {study.cpu_cores for study in CUTLASS_COMPILE_STUDIES.values()} == {16}
     assert get_cutlass_compile_study("advisor").device_trace
     cold = get_cutlass_compile_study("ccache-cold")
@@ -190,6 +202,18 @@ def test_compile_studies_change_only_the_intended_compiler_setting():
 def test_compile_study_registry_rejects_unknown_name():
     with pytest.raises(ValueError, match="Unknown CUTLASS compile study"):
         get_cutlass_compile_study("split-unbounded")
+
+
+def test_gemm_tuning_is_positive_opt_in():
+    source = Path(
+        "src/fused_mm_sampling/csrc/cutlass/greedy_provider.cu"
+    ).read_text()
+    assert "FMMS_PRUNE_UNUSED_SAMPLING_CODE" not in source
+    assert source.count("#if defined(FMMS_ENABLE_GEMM_TUNING)") == 3
+    winning = Path(
+        "src/fused_mm_sampling/csrc/cutlass/winning_schedule_provider.cu"
+    ).read_text()
+    assert "launch_256x256x64_c2" not in winning
 
 
 def test_dev_events_are_opt_in_and_record_failures(monkeypatch, capsys):
