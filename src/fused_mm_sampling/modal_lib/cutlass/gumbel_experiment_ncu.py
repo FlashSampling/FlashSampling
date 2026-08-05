@@ -8,7 +8,10 @@ from pathlib import Path
 
 import pandas as pd
 
-from ...cutlass_experiments import get_cutlass_sampling_experiment
+from ...cutlass_experiments import (
+    CUTLASS_PROFILE_CONFIG_MENU,
+    get_cutlass_sampling_experiment,
+)
 from ...dev_metrics import emit_dev_event, timed_dev_stage
 from ..utils import (
     commit_shared_volume,
@@ -30,7 +33,6 @@ image = add_cutlass_greedy_provider(
     copy=False,
 )
 
-HIDDEN_STATES = (128, 256)
 MODEL_SHAPES = {4_096: 151_936, 8_192: 128_256}
 REQUIRED_METRICS = (
     "gpu__time_duration.sum",
@@ -58,12 +60,15 @@ OPTIONAL_METRICS = (
 
 
 @app.function(gpu="B200", image=image, volumes=make_volumes(), timeout=60 * 60)
-def record_sm100(hidden_size: int, variant: str, run_id: str) -> dict:
+def record_sm100(
+    hidden_size: int, n_hidden_states: int, variant: str, run_id: str
+) -> dict:
     reload_shared_volume()
     set_volume_caches()
     emit_dev_event(
         "remote_start",
         hidden_size=hidden_size,
+        n_hidden_states=n_hidden_states,
         run_id=run_id,
         variant=variant,
     )
@@ -86,31 +91,31 @@ def record_sm100(hidden_size: int, variant: str, run_id: str) -> dict:
         / variant
         / run_id
         / f"d{hidden_size}"
+        / f"h{n_hidden_states}"
     )
     report_dir.mkdir(parents=True, exist_ok=False)
     rows = []
     reports = []
     components = (variant, "triton")
-    for hidden_count in HIDDEN_STATES:
-        for component in components:
-            with timed_dev_stage(
-                "ncu_profile",
-                accounting=False,
+    for component in components:
+        with timed_dev_stage(
+            "ncu_profile",
+            accounting=False,
+            component=component,
+            hidden_size=hidden_size,
+            n_hidden_states=n_hidden_states,
+            variant=variant,
+        ):
+            profile_rows, report_path = _profile(
                 component=component,
+                vocab_size=vocab_size,
                 hidden_size=hidden_size,
-                n_hidden_states=hidden_count,
-                variant=variant,
-            ):
-                profile_rows, report_path = _profile(
-                    component=component,
-                    vocab_size=vocab_size,
-                    hidden_size=hidden_size,
-                    hidden_count=hidden_count,
-                    metrics=metrics,
-                    report_dir=report_dir,
-                )
-            rows.extend(profile_rows)
-            reports.append(str(report_path))
+                hidden_count=n_hidden_states,
+                metrics=metrics,
+                report_dir=report_dir,
+            )
+        rows.extend(profile_rows)
+        reports.append(str(report_path))
     with timed_dev_stage("volume_commit", hidden_size=hidden_size, variant=variant):
         commit_shared_volume()
     return {
@@ -199,18 +204,23 @@ def _profile(
 
 
 @app.local_entrypoint()
-def main(hidden_size: int, variant: str, output_dir: str) -> None:
-    if hidden_size not in MODEL_SHAPES:
-        raise ValueError(f"hidden_size must be one of {tuple(MODEL_SHAPES)}")
+def main(
+    hidden_size: int, n_hidden_states: int, variant: str, output_dir: str
+) -> None:
+    if (hidden_size, n_hidden_states) not in CUTLASS_PROFILE_CONFIG_MENU:
+        menu = ",".join(f"{d}:{h}" for d, h in CUTLASS_PROFILE_CONFIG_MENU)
+        raise ValueError(
+            f"Unknown profile config {hidden_size}:{n_hidden_states}; choose from {menu}"
+        )
     get_cutlass_sampling_experiment(variant)
     run_id = os.environ.get("FMMS_DEV_RUN_ID")
     if not run_id:
         raise RuntimeError("FMMS_DEV_RUN_ID is required for durable NCU artifacts")
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    result = record_sm100.remote(hidden_size, variant, run_id)
+    result = record_sm100.remote(hidden_size, n_hidden_states, variant, run_id)
     kernels = pd.DataFrame(result["rows"])
-    output = f"ncu-d{hidden_size}-kernels.csv"
+    output = f"ncu-d{hidden_size}-h{n_hidden_states}-kernels.csv"
     kernels.to_csv(output_dir / output, index=False)
     summary = {
         "gate": f"4-{variant}-ncu",
@@ -220,13 +230,13 @@ def main(hidden_size: int, variant: str, output_dir: str) -> None:
             "vocab_size": MODEL_SHAPES[hidden_size],
             "hidden_size": hidden_size,
         },
-        "hidden_states": list(HIDDEN_STATES),
+        "hidden_states": [n_hidden_states],
         "components": list(result["components"]),
         "metrics": result["metrics"],
         "output": output,
         "raw_reports": result["reports"],
         "run_id": run_id,
     }
-    (output_dir / f"ncu-d{hidden_size}-summary.json").write_text(
+    (output_dir / f"ncu-d{hidden_size}-h{n_hidden_states}-summary.json").write_text(
         json.dumps(summary, indent=2) + "\n"
     )

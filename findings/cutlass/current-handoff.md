@@ -10,7 +10,7 @@ Rebased commit: `06c69f8`.
 ## Required experiment driver
 
 Use specialized ownership, layout, compilation, and sanitizer gates while a candidate has not reached shared timing or profiling.
-Once a candidate is registered as `CUTLASS_VARIANT`, run its complete timing and NCU packet through:
+Once a candidate is registered as `CUTLASS_VARIANT`, run its timing packet through:
 
 ```bash
 make infra-sync
@@ -20,9 +20,14 @@ make modal-cutlass-experiment \
     CUTLASS_DEV_LABEL=<short-description>
 ```
 
-The driver builds or loads the selected extension through one cache writer, commits it, then launches timing and both NCU shapes in parallel against the published cache entry.
-Do not launch timing and NCU independently against a cold fingerprint because that can compile the same extension three times.
-A failed build prevents every consumer from launching, and any failed consumer makes the complete workflow fail.
+The driver builds or loads the selected extension through one cache writer, commits it, then runs timing against the published cache entry.
+Profiling is never implicit.
+Pass only the configurations needed for the current question, for example `CUTLASS_PROFILE_CONFIGS='[{"hidden_size":4096,"n_hidden_states":128}]'`.
+The available menu contains `hidden_size` values 4,096 and 8,192 crossed with `n_hidden_states` values 128 and 256.
+See the driver documentation for the complete JSON menu.
+Each selected configuration produces a candidate report and a matched Triton report after timing succeeds.
+Do not launch timing and NCU independently against a cold fingerprint because that can compile the same extension more than once.
+A failed build prevents timing and profiling from launching, and a failed timing packet prevents profiling from launching.
 Raw `.ncu-rep` files are required evidence and are retained on the shared Volume rather than deleted after CSV export.
 The local NCU summaries record their exact paths.
 See [the CUTLASS experiment development driver](../../docs/modal-benchmarking.md#cutlass-experiment-development-driver) for direct debugging gates, workflow records, artifact locations, and report-download commands.
@@ -137,7 +142,7 @@ Run any registered candidate by setting `CUTLASS_VARIANT`:
 
 ```bash
 make modal-cutlass GATE=gumbel-experiment CUTLASS_VARIANT=warpgroup-fastmath-smem
-make modal-cutlass GATE=gumbel-experiment-ncu CUTLASS_VARIANT=warpgroup-fastmath-smem CUTLASS_HIDDEN_SIZE=4096
+make modal-cutlass GATE=gumbel-experiment-ncu CUTLASS_VARIANT=warpgroup-fastmath-smem CUTLASS_HIDDEN_SIZE=4096 CUTLASS_N_HIDDEN_STATES=128
 ```
 
 The shared runner writes current candidate packets under `benchmarking/modal-results/cutlass/experiments/<variant>/`.

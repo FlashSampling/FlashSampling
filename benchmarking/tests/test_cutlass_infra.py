@@ -27,7 +27,12 @@ from benchmarking.cutlass_dev_run import (
     _redact_command,
     run_observed_command,
 )
-from benchmarking.cutlass_experiment_run import run_workflow, workflow_commands
+from benchmarking.cutlass_experiment_run import (
+    PROFILE_CONFIG_MENU,
+    parse_profile_configs,
+    run_workflow,
+    workflow_commands,
+)
 
 
 def test_precise_fingerprint_ignores_unrelated_files(tmp_path):
@@ -272,13 +277,58 @@ def test_child_environment_prefers_current_worktree(monkeypatch):
     assert environment["FMMS_DEV_METRICS"] == "1"
 
 
-def test_experiment_workflow_uses_one_build_barrier_and_three_consumers():
+def test_experiment_workflow_profiles_no_configs_by_default():
     commands = workflow_commands("warpgroup-fastmath", "packet")
-    assert tuple(commands) == ("build", "timing", "ncu-d4096", "ncu-d8192")
+    assert tuple(commands) == ("build", "timing")
     assert "GATE=gumbel-experiment-build" in commands["build"]
-    assert "CUTLASS_HIDDEN_SIZE=4096" in commands["ncu-d4096"]
-    assert "CUTLASS_HIDDEN_SIZE=8192" in commands["ncu-d8192"]
     assert all("CUTLASS_VARIANT=warpgroup-fastmath" in command for command in commands.values())
+
+
+def test_experiment_workflow_profiles_only_explicit_configs():
+    configs = ((4_096, 128), (8_192, 256))
+    commands = workflow_commands("warpgroup-fastmath", "packet", configs)
+    assert tuple(commands) == (
+        "build",
+        "timing",
+        "ncu-d4096-h128",
+        "ncu-d8192-h256",
+    )
+    assert "CUTLASS_N_HIDDEN_STATES=128" in commands["ncu-d4096-h128"]
+    assert "CUTLASS_N_HIDDEN_STATES=256" in commands["ncu-d8192-h256"]
+
+
+def test_profile_config_parser_exposes_bounded_menu():
+    assert parse_profile_configs("") == ()
+    value = json.dumps(
+        [
+            {"hidden_size": 4_096, "n_hidden_states": 128},
+            {"hidden_size": 8_192, "n_hidden_states": 256},
+            {"hidden_size": 4_096, "n_hidden_states": 128},
+        ]
+    )
+    assert parse_profile_configs(value) == (
+        (4_096, 128),
+        (8_192, 256),
+    )
+    assert len(PROFILE_CONFIG_MENU) == 4
+    with pytest.raises(ValueError, match="choose from"):
+        parse_profile_configs(
+            '[{"hidden_size":2048,"n_hidden_states":128}]'
+        )
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        '{"hidden_size":4096,"n_hidden_states":128}',
+        '[{"hidden_size":4096,"hidden_states":128}]',
+        '[{"hidden_size":"4096","n_hidden_states":128}]',
+        '[4096]',
+    ),
+)
+def test_profile_config_parser_rejects_ambiguous_inputs(value):
+    with pytest.raises(ValueError):
+        parse_profile_configs(value)
 
 
 def test_experiment_workflow_does_not_launch_consumers_after_build_failure(
@@ -290,7 +340,10 @@ def test_experiment_workflow_does_not_launch_consumers_after_build_failure(
     class Result:
         returncode = 7
 
-    monkeypatch.setattr("benchmarking.cutlass_experiment_run.subprocess.run", lambda *args, **kwargs: Result())
+    monkeypatch.setattr(
+        "benchmarking.cutlass_experiment_run.subprocess.run",
+        lambda *args, **kwargs: Result(),
+    )
     monkeypatch.setattr(
         "benchmarking.cutlass_experiment_run.subprocess.Popen",
         lambda *args, **kwargs: launches.append(args),
@@ -305,6 +358,29 @@ def test_experiment_workflow_does_not_launch_consumers_after_build_failure(
     record = json.loads(record_path.read_text())
     assert record["status"] == "failed"
     assert record["consumer_exit_codes"] == {}
+
+
+def test_experiment_workflow_does_not_profile_after_timing_failure(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    return_codes = iter((0, 9))
+    launches = []
+
+    class Result:
+        def __init__(self, returncode):
+            self.returncode = returncode
+
+    monkeypatch.setattr(
+        "benchmarking.cutlass_experiment_run.subprocess.run",
+        lambda *args, **kwargs: Result(next(return_codes)),
+    )
+    monkeypatch.setattr(
+        "benchmarking.cutlass_experiment_run.subprocess.Popen",
+        lambda *args, **kwargs: launches.append(args),
+    )
+    assert run_workflow("warpgroup-fastmath", "timing-failure", ((4_096, 128),)) == 9
+    assert launches == []
 
 
 def _source_tree(tmp_path: Path) -> Path:

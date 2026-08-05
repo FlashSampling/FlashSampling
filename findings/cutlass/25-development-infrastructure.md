@@ -50,7 +50,7 @@ The next implementation has three bounded steps.
    Expected result: the repository `.venv` contains the CPU-side infrastructure test dependencies and imports the project without selecting an ambient interpreter.
    Possible failures include an incompatible lockfile, a platform-specific dependency leaking into the infrastructure extra, or an unsupported `uv` version.
    The `.venv` is ignored and remains in the main development checkout rather than this infrastructure worktree.
-2. Add a single-writer experiment build gate and an orchestration command that waits for an explicit Volume commit before launching timing and the two NCU shapes in parallel.
+2. Add a single-writer experiment build gate and an orchestration command that waits for an explicit Volume commit before launching timing and any explicitly requested NCU configurations.
    Every consumer must reload the Volume before loading the extension.
    Validation commands: `make check-dev-env`, `.venv/bin/pytest benchmarking/tests/test_cutlass_infra.py -q`, and a controlled `make modal-cutlass-experiment CUTLASS_VARIANT=warpgroup-fastmath-smem CUTLASS_DEV_LABEL=build-fanout-validation` packet.
    Expected result: exactly one cache writer for the selected fingerprint, no consumer cache misses, distinct logs and result files, and a failed build that prevents all consumers from launching.
@@ -59,7 +59,7 @@ The next implementation has three bounded steps.
 3. Preserve each raw NCU report under a unique development run identifier and emit query, profile, export, commit, and extension-load-start events.
    Preserve the signed residual and record UTC wall time separately from observer-active time when remote events cannot be reconciled with the local interval.
    Validation commands: the local infrastructure suite above followed by the controlled Modal packet from Step 2.
-   Expected result: both NCU shapes retain four raw reports, summaries identify their Volume paths, progress is visible before a long child process finishes, and metrics never claim a negative residual.
+   Expected result: every requested NCU configuration retains its candidate and Triton raw reports, summaries identify their Volume paths, progress is visible before a long child process finishes, and metrics never claim a negative residual.
    Possible failures include Volume commit conflicts, missing run identifiers, open files preventing reload, raw reports exceeding practical packet size, or a profiler child that stalls before emitting progress.
    Raw profiler artifacts belong under the shared Volume's CUTLASS experiment artifact prefix and must not be committed.
 
@@ -71,7 +71,7 @@ The local environment contract is implemented with a locked `infra` extra and a 
 The real `.venv` is under the main development checkout, and the infrastructure worktree uses that environment without keeping a second copy.
 `make check-dev-env` passed with Python 3.12.4 and the repository-local Modal client.
 
-The local infrastructure suite passed all 23 tests.
+The local infrastructure suite passed all 31 tests.
 The suite covers precise fingerprints, registry validation, event recording, non-negative residual accounting, exact workflow command construction, and the rule that a failed build launches no consumers.
 Both the build-gate and complete-workflow Make dry runs resolved the expected modules, arguments, labels, and result paths.
 Python bytecode compilation and `git diff --check` also passed.
@@ -101,8 +101,8 @@ The metrics summary reports accounting failures and excludes inconsistent residu
 The post-fix audit reduced the legacy accounting failures from eight to three without changing any raw record.
 The two nested-timer failures remain invalid at -225.18 and -215.21 seconds, and the resumed shared-memory run remains invalid at -15.37 seconds.
 
-Each NCU job retained four raw `.ncu-rep` files, for eight reports in total.
-The shared Volume inventory confirmed candidate and Triton reports for H=128 and H=256 at both hidden sizes.
+The original validation requested the full four-configuration menu.
+It retained candidate and Triton reports for H=128 and H=256 at both hidden sizes, for eight raw `.ncu-rep` files in total.
 The local NCU summaries record the exact Volume paths and unique development run identifiers.
 
 The workflow record is `benchmarking/modal-results/cutlass/experiments/warpgroup-fastmath-smem/workflow-20260805T071813Z-build-fanout-validation-f98318ca.json`.
@@ -111,7 +111,32 @@ The raw reports are under `cutlass-profiler/experiments/warpgroup-fastmath-smem/
 These generated artifacts are ignored and must not be committed.
 
 This packet validates ordering, explicit commit and reload, parallel fan-out, progress events, summaries, and durable raw reports against a warm fingerprint.
-The next genuinely new experiment must validate the remaining cold-path expectation: one cold load in the build gate followed by no cache misses in any consumer.
+
+The cold-path validation used a unique experimental fingerprint and completed in 285.87 seconds.
+The build barrier was the only cache miss and spent 208.26 seconds compiling before a 2.64-second explicit Volume commit.
+Timing then loaded the published extension in 0.57 seconds, passed two focused correctness cases, and completed its timing stage in 3.36 seconds.
+Both profiler consumers loaded the same published extension without compiling.
+The D=4,096 and D=8,192 profiler processes completed in 46.65 and 60.73 seconds and retained all eight reports from the then-default full matrix.
+The workflow record is `benchmarking/modal-results/cutlass/experiments/infra-cold-probe-20260805/workflow-20260805T073212Z-cold-single-writer-validation-bf7ba1f8.json`.
+The structured records share the `20260805T073212Z-cold-single-writer-validation-bf7ba1f8` identifier under `benchmarking/modal-results/cutlass/dev-metrics/`.
+The raw reports remain under `cutlass-profiler/experiments/infra-cold-probe-20260805/` on the shared Volume.
+The temporary registry entry was removed after measurement, while its profiler artifacts were retained.
+
+The cold packet validates the single-writer cache handoff, but it also shows that profiling every menu item is unnecessary recurring work.
+The workflow now defaults to build and timing only.
+The client must explicitly pass a JSON list with named parameters, such as `CUTLASS_PROFILE_CONFIGS='[{"hidden_size":4096,"n_hidden_states":128}]'`, when NCU evidence is needed.
+The full menu crosses `hidden_size` values 4,096 and 8,192 with `n_hidden_states` values 128 and 256 and is never selected implicitly.
+Each selected configuration creates exactly two retained raw reports, one candidate and one matched Triton baseline.
+Timing must pass before the selected profiler jobs launch in parallel.
+
+The selective B200 validation requested only `hidden_size=4096` and `n_hidden_states=128` and completed successfully in 90.03 seconds.
+The build barrier loaded the warm extension in 0.72 seconds and committed it in 0.89 seconds.
+The timing consumer loaded it in 0.30 seconds, passed correctness in 0.74 seconds, and completed timing in 3.09 seconds.
+Only after timing passed, the selected profiler loaded the extension in 0.66 seconds and retained exactly two reports for the candidate and Triton.
+The workflow record is `benchmarking/modal-results/cutlass/experiments/warpgroup-fastmath-smem/workflow-20260805T074107Z-explicit-profile-validation-04ee57e8.json`.
+Its NCU summary is `benchmarking/modal-results/cutlass/experiments/warpgroup-fastmath-smem/ncu-d4096-h128-summary.json`.
+Possible failures were an implicit profile launch, a profile starting before timing completed, a stale cache mount, or a report path collision between configurations.
+None occurred in this packet.
 
 ## Phase 1: precise build caching and friction telemetry
 

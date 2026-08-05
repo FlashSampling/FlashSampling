@@ -30,6 +30,13 @@ CUTLASS_SAMPLING_EXPERIMENTS = {
     ),
 }
 
+CUTLASS_PROFILE_CONFIG_MENU = (
+    (4_096, 128),
+    (4_096, 256),
+    (8_192, 128),
+    (8_192, 256),
+)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser()

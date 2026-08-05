@@ -243,7 +243,7 @@ make check-dev-env
 The extra keeps local orchestration and analysis CPU-importable on macOS while Triton remains a Linux-only base dependency.
 `check-dev-env` fails with a bootstrap command when `.venv` is missing and verifies the Modal, pandas, pydantic-settings, pytest, and CUTLASS build imports.
 
-Run a complete CUTLASS sampling experiment with:
+Run the default CUTLASS sampling experiment with:
 
 ```bash
 make modal-cutlass-experiment \
@@ -251,16 +251,45 @@ make modal-cutlass-experiment \
     CUTLASS_DEV_LABEL=my-change
 ```
 
+The default driver builds and runs the interleaved timing and correctness packet without profiling.
+The client must explicitly select every NCU configuration it needs with `CUTLASS_PROFILE_CONFIGS`:
+
+```bash
+make modal-cutlass-experiment \
+    CUTLASS_VARIANT=warpgroup-fastmath-smem \
+    CUTLASS_DEV_LABEL=my-profile \
+    CUTLASS_PROFILE_CONFIGS='[{"hidden_size":4096,"n_hidden_states":128},{"hidden_size":8192,"n_hidden_states":256}]'
+```
+
+The available configuration menu is:
+
+```json
+[
+  {"hidden_size": 4096, "n_hidden_states": 128},
+  {"hidden_size": 4096, "n_hidden_states": 256},
+  {"hidden_size": 8192, "n_hidden_states": 128},
+  {"hidden_size": 8192, "n_hidden_states": 256}
+]
+```
+
+The full menu is a set of choices, not a default.
+Select only configurations needed to resolve the current question.
+Unknown, missing, misspelled, or non-integer fields fail locally before Modal starts.
+Each selected configuration creates two raw reports, one for the candidate and one for the matched Triton baseline.
+Selected NCU jobs run in parallel after timing succeeds.
+
 The driver first runs the `gumbel-experiment-build` gate as the only writer for the selected extension fingerprint.
 The build gate reloads the shared Volume, loads or compiles the extension, commits the Volume explicitly, and reports the published binary.
-The driver launches timing plus the D=4,096 and D=8,192 NCU jobs in parallel only after that build command succeeds.
+The driver runs timing after the build succeeds, then launches only the requested NCU jobs.
 Each consumer reloads the Volume before reading the extension cache.
-A failed build prevents all three consumers from launching, and any failed consumer makes the complete driver fail.
+A failed build prevents timing and profiling from launching.
+A failed timing packet prevents profiling from launching.
+Any failed requested profile makes the complete driver fail.
 
 The complete workflow record is `benchmarking/modal-results/cutlass/experiments/<variant>/workflow-<run-id>.json`.
 Timing, correctness, NCU CSV, decision, and per-command logs remain under the same variant directory.
 Structured development metrics remain under `benchmarking/modal-results/cutlass/dev-metrics/`.
-Raw NCU reports are committed to `cutlass-profiler/experiments/<variant>/<run-id>/d<hidden-size>/` on the shared `fused-mm-sample` Volume.
+Raw NCU reports are committed to `cutlass-profiler/experiments/<variant>/<run-id>/d<hidden-size>/h<n-hidden-states>/` on the shared `fused-mm-sample` Volume.
 Each NCU summary records the exact raw-report paths and development run identifier.
 Download a retained report directory with:
 
@@ -278,12 +307,11 @@ Use the component gates only when debugging the workflow itself:
 ```bash
 make modal-cutlass GATE=gumbel-experiment-build CUTLASS_VARIANT=warpgroup-fastmath-smem
 make modal-cutlass GATE=gumbel-experiment CUTLASS_VARIANT=warpgroup-fastmath-smem
-make modal-cutlass GATE=gumbel-experiment-ncu CUTLASS_VARIANT=warpgroup-fastmath-smem CUTLASS_HIDDEN_SIZE=4096
-make modal-cutlass GATE=gumbel-experiment-ncu CUTLASS_VARIANT=warpgroup-fastmath-smem CUTLASS_HIDDEN_SIZE=8192
+make modal-cutlass GATE=gumbel-experiment-ncu CUTLASS_VARIANT=warpgroup-fastmath-smem CUTLASS_HIDDEN_SIZE=4096 CUTLASS_N_HIDDEN_STATES=128
 ```
 
 Do not launch timing and NCU against a cold fingerprint independently.
-That pattern can compile the same translation units three times and can make consumers observe a stale Volume mount.
+That pattern can compile the same translation units more than once and can make consumers observe a stale Volume mount.
 
 The driver implementation is `benchmarking/cutlass_experiment_run.py`.
 The build gate is `src/fused_mm_sampling/modal_lib/cutlass/gumbel_experiment_build.py`.

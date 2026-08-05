@@ -98,11 +98,13 @@ CUTLASS_VARIANT_CHECK_gumbel-experiment-ncu := 1
 CUTLASS_LOG_toolchain := smoke.txt
 CUTLASS_LOG_ordinary-gemm-tuning := gate-2c-$(PHASE)-run$(RUN)-log.txt
 CUTLASS_HIDDEN_SIZE := 4096
+CUTLASS_N_HIDDEN_STATES := 128
+CUTLASS_PROFILE_CONFIGS :=
 CUTLASS_LOG_gumbel-experiment-build := build-log.txt
 CUTLASS_ARGS_gumbel-experiment-build := --variant $(CUTLASS_VARIANT)
 CUTLASS_ARGS_gumbel-experiment := --variant $(CUTLASS_VARIANT) --output-dir benchmarking/modal-results/cutlass/$(CUTLASS_EXPERIMENT_RESULT)
-CUTLASS_LOG_gumbel-experiment-ncu := ncu-d$(CUTLASS_HIDDEN_SIZE)-log.txt
-CUTLASS_ARGS_gumbel-experiment-ncu := --hidden-size $(CUTLASS_HIDDEN_SIZE) --variant $(CUTLASS_VARIANT) --output-dir benchmarking/modal-results/cutlass/$(CUTLASS_EXPERIMENT_RESULT)
+CUTLASS_LOG_gumbel-experiment-ncu := ncu-d$(CUTLASS_HIDDEN_SIZE)-h$(CUTLASS_N_HIDDEN_STATES)-log.txt
+CUTLASS_ARGS_gumbel-experiment-ncu := --hidden-size $(CUTLASS_HIDDEN_SIZE) --n-hidden-states $(CUTLASS_N_HIDDEN_STATES) --variant $(CUTLASS_VARIANT) --output-dir benchmarking/modal-results/cutlass/$(CUTLASS_EXPERIMENT_RESULT)
 
 modal-cutlass:
 	@test -n "$(GATE)" || \
@@ -122,9 +124,10 @@ modal-cutlass:
 		-- $(MODAL) run $(MODAL_RUN_ARGS) -m src.fused_mm_sampling.modal_lib.cutlass.$(CUTLASS_MODULE_$(GATE)) $(CUTLASS_ARGS_$(GATE)) $(MODAL_ARGS)
 
 modal-cutlass-experiment:
-	$(PYTHON) benchmarking/cutlass_experiment_run.py \
+	PYTHONPATH=src $(PYTHON) benchmarking/cutlass_experiment_run.py \
 		--variant "$(CUTLASS_VARIANT)" \
-		--label "$(CUTLASS_DEV_LABEL)"
+		--label "$(CUTLASS_DEV_LABEL)" \
+		--profile-configs '$(CUTLASS_PROFILE_CONFIGS)'
 
 cutlass-dev-metrics:
 	$(PYTHON) benchmarking/cutlass_dev_metrics.py
