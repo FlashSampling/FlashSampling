@@ -14,6 +14,105 @@ Standalone accumulator-layout and max-reduction harnesses are not production ext
 The gate runner records a human-readable log but no structured development-loop timings.
 It is therefore difficult to separate Modal startup, extension compilation, benchmark work, result writing, and failures across repeated runs.
 
+## 2026-08-05 workload assessment
+
+The retained development metrics now contain 59 runs: 45 successes, nine failures, and five interruptions.
+The 14 non-successful runs represent 23.7% of the observed attempts.
+Across successful cold runs, median wall time is 262.67 seconds and median extension-load time is 210.75 seconds.
+The extension load accounts for a median 77.60% of successful cold-run wall time.
+The focused correctness and timing stages normally take 0.94 and 3.20 seconds, respectively.
+A warm extension load takes a median 0.17 seconds.
+
+The records contain 44 cold loads for 22 extension fingerprints.
+Twenty-two cold loads therefore duplicated a build of the same semantic binary.
+Those duplicate loads consumed an estimated 4,541 seconds of aggregate compiler time.
+Parallel launch sometimes reduced wall time, but it duplicated work and GPU allocation cost.
+
+The evidence admits the durable-profiler-artifact phase.
+At assessment time, the shared NCU runner exported CSV from a temporary `.ncu-rep` and then deleted the raw report.
+Repeated profiling and several stalled NCU workers make the raw report and per-profile progress events necessary debugging evidence.
+
+The telemetry is sufficient for bottleneck ranking but not exact accounting for every historical run.
+Eight records have negative residual time because observed remote durations exceeded the local observer's wall interval or overlapped another timed stage.
+Future records must preserve this mismatch explicitly instead of reporting a negative residual.
+
+The local environment contract is also incomplete.
+`AGENTS.md` requires the repository `.venv`, but the main macOS checkout had no `.venv` or `.python-version` and the Makefile selected ambient `python3`.
+The first frozen sync exposed an unconditional Triton dependency with no macOS distribution.
+Infrastructure tooling needs a small CPU-importable dependency set that can be installed on macOS, while CUDA and Triton dependencies remain part of the Linux and Modal environment.
+
+## Active infrastructure tranche
+
+The next implementation has three bounded steps.
+
+1. Restore the local environment contract with a locked infrastructure extra, a repository `.venv` bootstrap target, a fail-fast environment check, and `.venv/bin/python` as the default project interpreter.
+   Validation command: `make infra-sync && make check-dev-env` from the main development checkout.
+   Expected result: the repository `.venv` contains the CPU-side infrastructure test dependencies and imports the project without selecting an ambient interpreter.
+   Possible failures include an incompatible lockfile, a platform-specific dependency leaking into the infrastructure extra, or an unsupported `uv` version.
+   The `.venv` is ignored and remains in the main development checkout rather than this infrastructure worktree.
+2. Add a single-writer experiment build gate and an orchestration command that waits for an explicit Volume commit before launching timing and the two NCU shapes in parallel.
+   Every consumer must reload the Volume before loading the extension.
+   Validation commands: `make check-dev-env`, `.venv/bin/pytest benchmarking/tests/test_cutlass_infra.py -q`, and a controlled `make modal-cutlass-experiment CUTLASS_VARIANT=warpgroup-fastmath-smem CUTLASS_DEV_LABEL=build-fanout-validation` packet.
+   Expected result: exactly one cache writer for the selected fingerprint, no consumer cache misses, distinct logs and result files, and a failed build that prevents all consumers from launching.
+   Possible failures include stale Volume mounts, an extension file still open during commit, concurrent consumers writing the same artifact, or orchestration that loses a child exit code.
+   Generated evidence belongs under `benchmarking/modal-results/cutlass/experiments/<variant>/` and `benchmarking/modal-results/cutlass/dev-metrics/` and must not be committed.
+3. Preserve each raw NCU report under a unique development run identifier and emit query, profile, export, commit, and extension-load-start events.
+   Preserve the signed residual and record UTC wall time separately from observer-active time when remote events cannot be reconciled with the local interval.
+   Validation commands: the local infrastructure suite above followed by the controlled Modal packet from Step 2.
+   Expected result: both NCU shapes retain four raw reports, summaries identify their Volume paths, progress is visible before a long child process finishes, and metrics never claim a negative residual.
+   Possible failures include Volume commit conflicts, missing run identifiers, open files preventing reload, raw reports exceeding practical packet size, or a profiler child that stalls before emitting progress.
+   Raw profiler artifacts belong under the shared Volume's CUTLASS experiment artifact prefix and must not be committed.
+
+Do not begin preprocessed-source fingerprints until this tranche has measured whether the single-writer barrier removes the dominant recurring delay.
+
+### Active tranche result
+
+The local environment contract is implemented with a locked `infra` extra and a Linux-only marker on Triton.
+The real `.venv` is under the main development checkout, and the infrastructure worktree uses that environment without keeping a second copy.
+`make check-dev-env` passed with Python 3.12.4 and the repository-local Modal client.
+
+The local infrastructure suite passed all 23 tests.
+The suite covers precise fingerprints, registry validation, event recording, non-negative residual accounting, exact workflow command construction, and the rule that a failed build launches no consumers.
+Both the build-gate and complete-workflow Make dry runs resolved the expected modules, arguments, labels, and result paths.
+Python bytecode compilation and `git diff --check` also passed.
+
+The controlled B200 command was:
+
+```text
+make modal-cutlass-experiment CUTLASS_VARIANT=warpgroup-fastmath-smem CUTLASS_DEV_LABEL=build-fanout-validation
+```
+
+The complete workflow passed in 63.86 seconds.
+The build barrier completed in 15.39 seconds, loaded the already-cached extension in 1.12 seconds, committed the Volume in 0.61 seconds, and exited before any consumer was launched.
+The timing consumer completed in 25.73 seconds and retained 240 repetitions across 12 provider cells.
+Both focused exact-winner cases passed.
+The D=4,096 and D=8,192 NCU consumers ran in parallel and completed in 46.85 and 48.22 seconds.
+All five consumer extension-load events were cache hits between 0.14 and 0.37 seconds.
+Every metrics record in the controlled packet reported consistent accounting.
+
+The historical negative residuals had two measured causes.
+Two failed runners timed extension loading both as an `extension_load` and inside an enclosing correctness stage, which double-counted 223.57 and 231.01 seconds.
+Six other records came from three launch batches where the local UTC interval exceeded the observer's `perf_counter()` interval by 27.42 to 108.25 seconds while remote work continued.
+The previous runner mislabeled observer-active time as wall time and compared it with remote durations that continued during the local suspension.
+The runner now records UTC wall time, observer-active time, and their signed difference separately.
+It preserves a signed unattributed residual and marks inconsistent records instead of clamping them.
+The summarizer reconstructs UTC wall time for legacy records from their retained start and end timestamps.
+The metrics summary reports accounting failures and excludes inconsistent residuals from its additive median.
+The post-fix audit reduced the legacy accounting failures from eight to three without changing any raw record.
+The two nested-timer failures remain invalid at -225.18 and -215.21 seconds, and the resumed shared-memory run remains invalid at -15.37 seconds.
+
+Each NCU job retained four raw `.ncu-rep` files, for eight reports in total.
+The shared Volume inventory confirmed candidate and Triton reports for H=128 and H=256 at both hidden sizes.
+The local NCU summaries record the exact Volume paths and unique development run identifiers.
+
+The workflow record is `benchmarking/modal-results/cutlass/experiments/warpgroup-fastmath-smem/workflow-20260805T071813Z-build-fanout-validation-f98318ca.json`.
+The structured records share the `20260805T071813Z-build-fanout-validation-f98318ca` workflow identifier under `benchmarking/modal-results/cutlass/dev-metrics/`.
+The raw reports are under `cutlass-profiler/experiments/warpgroup-fastmath-smem/` on the `fused-mm-sample` Volume.
+These generated artifacts are ignored and must not be committed.
+
+This packet validates ordering, explicit commit and reload, parallel fan-out, progress events, summaries, and durable raw reports against a warm fingerprint.
+The next genuinely new experiment must validate the remaining cold-path expectation: one cold load in the build gate followed by no cache misses in any consumer.
+
 ## Phase 1: precise build caching and friction telemetry
 
 Phase 1 is the only implementation authorized by this finding initially.

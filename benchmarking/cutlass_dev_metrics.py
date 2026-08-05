@@ -3,6 +3,7 @@
 
 import argparse
 import json
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -30,15 +31,7 @@ def load_metrics(metrics_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     records = [json.loads(path.read_text()) for path in sorted(metrics_dir.glob("*.json"))]
     if not records:
         raise RuntimeError(f"No CUTLASS development metrics found under {metrics_dir}")
-    runs = pd.DataFrame(
-        {key: value for key, value in record.items() if key not in {"events", "git", "command"}}
-        | {
-            "git_commit": record.get("git", {}).get("commit"),
-            "git_branch": record.get("git", {}).get("branch"),
-            "git_dirty": record.get("git", {}).get("dirty"),
-        }
-        for record in records
-    )
+    runs = pd.DataFrame(_normalize_run_record(record) for record in records)
     build_frames = []
     for record in records:
         frame = pd.DataFrame(
@@ -55,12 +48,53 @@ def load_metrics(metrics_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
     return runs, builds
 
 
+def _normalize_run_record(record: dict) -> dict:
+    """Recover UTC wall time for legacy records that stored observer-active time."""
+    values = {
+        key: value
+        for key, value in record.items()
+        if key not in {"events", "git", "command"}
+    } | {
+        "git_commit": record.get("git", {}).get("commit"),
+        "git_branch": record.get("git", {}).get("branch"),
+        "git_dirty": record.get("git", {}).get("dirty"),
+    }
+    if record.get("schema_version", 1) >= 2:
+        return values
+    started_at = record.get("started_at")
+    ended_at = record.get("ended_at")
+    if not started_at or not ended_at:
+        return values
+    observer_active_seconds = float(record["wall_seconds"])
+    wall_seconds = (
+        datetime.fromisoformat(ended_at) - datetime.fromisoformat(started_at)
+    ).total_seconds()
+    known_seconds = (
+        float(record.get("remote_start_seconds") or 0.0)
+        + float(record.get("build_seconds", 0.0))
+        + float(record.get("stage_seconds", 0.0))
+    )
+    unattributed_seconds = wall_seconds - known_seconds
+    return values | {
+        "wall_seconds": wall_seconds,
+        "observer_active_seconds": observer_active_seconds,
+        "observer_wall_minus_active_seconds": wall_seconds
+        - observer_active_seconds,
+        "unattributed_seconds": unattributed_seconds,
+        "accounting_consistent": unattributed_seconds >= -0.05,
+    }
+
+
 def summarize_metrics(
     runs: pd.DataFrame, builds: pd.DataFrame
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Build per-gate run and per-extension cache summaries."""
     run_groups = ["gate", "phase", "label"]
+    accounting_consistent = runs.get(
+        "accounting_consistent", runs["unattributed_seconds"].ge(-0.05)
+    ).fillna(runs["unattributed_seconds"].ge(-0.05))
     runs = runs.assign(
+        accounting_consistent=accounting_consistent,
         successful_wall_seconds=runs["wall_seconds"].where(
             runs["status"].eq("success")
         ),
@@ -68,7 +102,7 @@ def summarize_metrics(
             runs["build_seconds"].gt(0)
         ),
         successful_unattributed_seconds=runs["unattributed_seconds"].where(
-            runs["status"].eq("success")
+            runs["status"].eq("success") & accounting_consistent
         ),
     )
     run_summary = (
@@ -76,6 +110,10 @@ def summarize_metrics(
         .agg(
             runs=("run_id", "count"),
             failures=("status", lambda values: values.ne("success").sum()),
+            accounting_failures=(
+                "accounting_consistent",
+                lambda values: values.ne(True).sum(),
+            ),
             success_rate=("status", lambda values: values.eq("success").mean()),
             median_wall_seconds=("wall_seconds", "median"),
             p90_wall_seconds=("wall_seconds", lambda values: values.quantile(0.9)),

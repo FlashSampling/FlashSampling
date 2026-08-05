@@ -7,6 +7,26 @@ Checkpoint date: 2026-08-04.
 Branch: `cutlass-kernel`.
 Rebased commit: `06c69f8`.
 
+## Required experiment driver
+
+Use specialized ownership, layout, compilation, and sanitizer gates while a candidate has not reached shared timing or profiling.
+Once a candidate is registered as `CUTLASS_VARIANT`, run its complete timing and NCU packet through:
+
+```bash
+make infra-sync
+make check-dev-env
+make modal-cutlass-experiment \
+    CUTLASS_VARIANT=<variant> \
+    CUTLASS_DEV_LABEL=<short-description>
+```
+
+The driver builds or loads the selected extension through one cache writer, commits it, then launches timing and both NCU shapes in parallel against the published cache entry.
+Do not launch timing and NCU independently against a cold fingerprint because that can compile the same extension three times.
+A failed build prevents every consumer from launching, and any failed consumer makes the complete workflow fail.
+Raw `.ncu-rep` files are required evidence and are retained on the shared Volume rather than deleted after CSV export.
+The local NCU summaries record their exact paths.
+See [the CUTLASS experiment development driver](../../docs/modal-benchmarking.md#cutlass-experiment-development-driver) for direct debugging gates, workflow records, artifact locations, and report-download commands.
+
 ## Current state
 
 Gates 0 and 1 are complete, and the production B200 greedy provider from Gate 2 remains correct and performant.

@@ -17,12 +17,17 @@ from fused_mm_sampling.cutlass_experiments import (
 )
 from fused_mm_sampling.dev_metrics import EVENT_PREFIX, emit_dev_event, timed_dev_stage
 
-from benchmarking.cutlass_dev_metrics import load_metrics, summarize_metrics
+from benchmarking.cutlass_dev_metrics import (
+    _normalize_run_record,
+    load_metrics,
+    summarize_metrics,
+)
 from benchmarking.cutlass_dev_run import (
     _child_environment,
     _redact_command,
     run_observed_command,
 )
+from benchmarking.cutlass_experiment_run import run_workflow, workflow_commands
 
 
 def test_precise_fingerprint_ignores_unrelated_files(tmp_path):
@@ -142,6 +147,7 @@ def test_dev_events_are_opt_in_and_record_failures(monkeypatch, capsys):
     lines = capsys.readouterr().out.splitlines()
     events = [json.loads(line.removeprefix(EVENT_PREFIX)) for line in lines]
     assert [event["event"] for event in events] == ["stage_start", "stage_end"]
+    assert all(event["accounting"] for event in events)
     assert events[-1]["status"] == "error"
     assert events[-1]["error_type"] == "RuntimeError"
 
@@ -178,6 +184,14 @@ def test_observed_runner_streams_logs_and_records_metrics(tmp_path, monkeypatch)
     assert record["status"] == "success"
     assert record["phase"] == "smoke"
     assert record["build_seconds"] == pytest.approx(0.25)
+    assert record["observer_active_seconds"] >= 0
+    assert "observer_wall_minus_active_seconds" in record
+    assert record["unattributed_seconds"] == pytest.approx(
+        record["wall_seconds"]
+        - record["build_seconds"]
+        - (record["remote_start_seconds"] or 0)
+        - record["stage_seconds"]
+    )
     assert "hello" in log_path.read_text()
 
 
@@ -223,6 +237,24 @@ def test_metrics_summary_handles_runs_without_build_events(tmp_path):
     assert build_summary.iloc[0]["cache_state"] == "miss"
 
 
+def test_legacy_metrics_recover_wall_time_across_observer_suspension():
+    record = _run_record("legacy", "success", 5.0, []) | {
+        "schema_version": 1,
+        "started_at": "2026-08-05T00:00:00+00:00",
+        "ended_at": "2026-08-05T00:00:15+00:00",
+        "build_seconds": 10.0,
+        "stage_seconds": 0.0,
+        "remote_start_seconds": 1.0,
+        "unattributed_seconds": -6.0,
+    }
+    normalized = _normalize_run_record(record)
+    assert normalized["wall_seconds"] == 15.0
+    assert normalized["observer_active_seconds"] == 5.0
+    assert normalized["observer_wall_minus_active_seconds"] == 10.0
+    assert normalized["unattributed_seconds"] == 4.0
+    assert normalized["accounting_consistent"] is True
+
+
 def test_command_redaction():
     assert _redact_command(["command", "--token", "private", "--api-key=value", "visible"]) == [
         "command",
@@ -238,6 +270,41 @@ def test_child_environment_prefers_current_worktree(monkeypatch):
     environment = _child_environment("run")
     assert environment["PYTHONPATH"].split(os.pathsep)[0].endswith("/src")
     assert environment["FMMS_DEV_METRICS"] == "1"
+
+
+def test_experiment_workflow_uses_one_build_barrier_and_three_consumers():
+    commands = workflow_commands("warpgroup-fastmath", "packet")
+    assert tuple(commands) == ("build", "timing", "ncu-d4096", "ncu-d8192")
+    assert "GATE=gumbel-experiment-build" in commands["build"]
+    assert "CUTLASS_HIDDEN_SIZE=4096" in commands["ncu-d4096"]
+    assert "CUTLASS_HIDDEN_SIZE=8192" in commands["ncu-d8192"]
+    assert all("CUTLASS_VARIANT=warpgroup-fastmath" in command for command in commands.values())
+
+
+def test_experiment_workflow_does_not_launch_consumers_after_build_failure(
+    tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    launches = []
+
+    class Result:
+        returncode = 7
+
+    monkeypatch.setattr("benchmarking.cutlass_experiment_run.subprocess.run", lambda *args, **kwargs: Result())
+    monkeypatch.setattr(
+        "benchmarking.cutlass_experiment_run.subprocess.Popen",
+        lambda *args, **kwargs: launches.append(args),
+    )
+    assert run_workflow("warpgroup-fastmath", "failure") == 7
+    assert launches == []
+    record_path = next(
+        (tmp_path / "benchmarking/modal-results/cutlass/experiments/warpgroup-fastmath").glob(
+            "workflow-*.json"
+        )
+    )
+    record = json.loads(record_path.read_text())
+    assert record["status"] == "failed"
+    assert record["consumer_exit_codes"] == {}
 
 
 def _source_tree(tmp_path: Path) -> Path:

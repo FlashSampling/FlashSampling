@@ -129,10 +129,21 @@ def make_vllm_image() -> modal.Image:
 
 
 volume_path = "/vol-fused-mm-sample"
+fused_mm_sample_volume = modal.Volume.from_name("fused-mm-sample")
 
 
 def make_volumes():
-    return {volume_path: modal.Volume.from_name("fused-mm-sample")}
+    return {volume_path: fused_mm_sample_volume}
+
+
+def commit_shared_volume() -> None:
+    """Publish writes made through the mounted shared Modal Volume."""
+    fused_mm_sample_volume.commit()
+
+
+def reload_shared_volume() -> None:
+    """Refresh the mounted shared Modal Volume before reading cache entries."""
+    fused_mm_sample_volume.reload()
 
 
 def set_volume_caches():

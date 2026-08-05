@@ -229,3 +229,62 @@ make modal-cutlass GATE=dev-infra CUTLASS_DEV_LABEL=precise-cache
 Its generated packet belongs under `benchmarking/modal-results/cutlass/dev-infra-phase1/` and must not be committed.
 
 See `findings/modal-vllm-run-anomalies.md` for retained vLLM results and examples of correlated or anomalous sweeps.
+
+## CUTLASS experiment development driver
+
+Create the repository-local CPU-side infrastructure environment with:
+
+```bash
+make infra-sync
+make check-dev-env
+```
+
+`infra-sync` installs the locked `infra` extra into the repository `.venv`.
+The extra keeps local orchestration and analysis CPU-importable on macOS while Triton remains a Linux-only base dependency.
+`check-dev-env` fails with a bootstrap command when `.venv` is missing and verifies the Modal, pandas, pydantic-settings, pytest, and CUTLASS build imports.
+
+Run a complete CUTLASS sampling experiment with:
+
+```bash
+make modal-cutlass-experiment \
+    CUTLASS_VARIANT=warpgroup-fastmath-smem \
+    CUTLASS_DEV_LABEL=my-change
+```
+
+The driver first runs the `gumbel-experiment-build` gate as the only writer for the selected extension fingerprint.
+The build gate reloads the shared Volume, loads or compiles the extension, commits the Volume explicitly, and reports the published binary.
+The driver launches timing plus the D=4,096 and D=8,192 NCU jobs in parallel only after that build command succeeds.
+Each consumer reloads the Volume before reading the extension cache.
+A failed build prevents all three consumers from launching, and any failed consumer makes the complete driver fail.
+
+The complete workflow record is `benchmarking/modal-results/cutlass/experiments/<variant>/workflow-<run-id>.json`.
+Timing, correctness, NCU CSV, decision, and per-command logs remain under the same variant directory.
+Structured development metrics remain under `benchmarking/modal-results/cutlass/dev-metrics/`.
+Raw NCU reports are committed to `cutlass-profiler/experiments/<variant>/<run-id>/d<hidden-size>/` on the shared `fused-mm-sample` Volume.
+Each NCU summary records the exact raw-report paths and development run identifier.
+Download a retained report directory with:
+
+```bash
+modal volume get \
+    fused-mm-sample \
+    cutlass-profiler/experiments/<variant>/<run-id> \
+    benchmarking/modal-results/cutlass/experiments/<variant>/raw-ncu/<run-id>
+```
+
+Open the downloaded `.ncu-rep` files in Nsight Compute or re-export them with `ncu --import`.
+
+Use the component gates only when debugging the workflow itself:
+
+```bash
+make modal-cutlass GATE=gumbel-experiment-build CUTLASS_VARIANT=warpgroup-fastmath-smem
+make modal-cutlass GATE=gumbel-experiment CUTLASS_VARIANT=warpgroup-fastmath-smem
+make modal-cutlass GATE=gumbel-experiment-ncu CUTLASS_VARIANT=warpgroup-fastmath-smem CUTLASS_HIDDEN_SIZE=4096
+make modal-cutlass GATE=gumbel-experiment-ncu CUTLASS_VARIANT=warpgroup-fastmath-smem CUTLASS_HIDDEN_SIZE=8192
+```
+
+Do not launch timing and NCU against a cold fingerprint independently.
+That pattern can compile the same translation units three times and can make consumers observe a stale Volume mount.
+
+The driver implementation is `benchmarking/cutlass_experiment_run.py`.
+The build gate is `src/fused_mm_sampling/modal_lib/cutlass/gumbel_experiment_build.py`.
+The shared timing and NCU consumers are `gumbel_experiment.py` and `gumbel_experiment_ncu.py` in the same package.

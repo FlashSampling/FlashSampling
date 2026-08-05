@@ -316,6 +316,16 @@ def _load_cutlass_extension(
     )
     build_dir = build_root / name
     cache_hit = any(build_dir.glob("*.so"))
+    emit_dev_event(
+        "extension_load_start",
+        prefix=prefix,
+        extension_name=name,
+        fingerprint=fingerprint.digest,
+        dependencies=list(fingerprint.dependencies),
+        dependency_count=len(fingerprint.dependencies),
+        cache_hit=cache_hit,
+        build_dir=str(build_dir),
+    )
     start = time.perf_counter()
     status = "success"
     module = None

@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 EVENT_PREFIX = "FMMS_DEV_EVENT "
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 SENSITIVE_ARGUMENT_FRAGMENTS = ("token", "key", "secret", "password")
 
 
@@ -74,7 +74,8 @@ def run_observed_command(args, command: list[str]) -> int:
             exit_code = process.wait()
     finally:
         ended_at = datetime.now(timezone.utc)
-        wall_seconds = time.perf_counter() - start
+        observer_active_seconds = time.perf_counter() - start
+        wall_seconds = (ended_at - started_at).total_seconds()
         record = _build_record(
             args=args,
             command=command,
@@ -82,6 +83,7 @@ def run_observed_command(args, command: list[str]) -> int:
             started_at=started_at,
             ended_at=ended_at,
             wall_seconds=wall_seconds,
+            observer_active_seconds=observer_active_seconds,
             exit_code=exit_code,
             interrupted=interrupted,
             first_event_seconds=first_event_seconds,
@@ -117,6 +119,7 @@ def _build_record(
     started_at,
     ended_at,
     wall_seconds,
+    observer_active_seconds,
     exit_code,
     interrupted,
     first_event_seconds,
@@ -128,12 +131,15 @@ def _build_record(
     stage_events = [
         event
         for event in events
-        if event.get("event") == "stage_end" and "duration_seconds" in event
+        if event.get("event") == "stage_end"
+        and event.get("accounting", True)
+        and "duration_seconds" in event
     ]
     build_seconds = sum(float(event["duration_seconds"]) for event in build_events)
     stage_seconds = sum(float(event["duration_seconds"]) for event in stage_events)
     startup_seconds = remote_start_seconds or 0.0
     known_seconds = startup_seconds + build_seconds + stage_seconds
+    raw_unattributed_seconds = wall_seconds - known_seconds
     git = _git_metadata()
     result_dir = log_path.parent
     artifact_files = [path for path in result_dir.rglob("*") if path.is_file()]
@@ -147,11 +153,14 @@ def _build_record(
         "started_at": started_at.isoformat(),
         "ended_at": ended_at.isoformat(),
         "wall_seconds": wall_seconds,
+        "observer_active_seconds": observer_active_seconds,
+        "observer_wall_minus_active_seconds": wall_seconds - observer_active_seconds,
         "first_event_seconds": first_event_seconds,
         "remote_start_seconds": remote_start_seconds,
         "build_seconds": build_seconds,
         "stage_seconds": stage_seconds,
-        "unattributed_seconds": wall_seconds - known_seconds,
+        "unattributed_seconds": raw_unattributed_seconds,
+        "accounting_consistent": raw_unattributed_seconds >= -0.05,
         "exit_code": exit_code,
         "status": "interrupted" if interrupted else ("success" if exit_code == 0 else "failed"),
         "git": git,

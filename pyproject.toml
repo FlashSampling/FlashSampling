@@ -22,11 +22,17 @@ classifiers = [
 
 dependencies = [
     "torch>=2.0.0",
-    "triton>=2.0.0",
+    "triton>=2.0.0; platform_system == 'Linux'",
     "nvtx",
 ]
 
 [project.optional-dependencies]
+infra = [
+    "modal",
+    "pandas>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "pytest",
+]
 dev = [
     "pandas>=2.0.0",
     "pydantic-settings>=2.0.0",

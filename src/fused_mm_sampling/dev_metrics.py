@@ -25,16 +25,19 @@ def emit_dev_event(event: str, **fields) -> None:
 
 
 @contextmanager
-def timed_dev_stage(stage: str, **fields) -> Iterator[None]:
-    """Emit disjoint stage timing around a block when metrics are enabled."""
+def timed_dev_stage(
+    stage: str, *, accounting: bool = True, **fields
+) -> Iterator[None]:
+    """Emit stage timing and mark whether it is additive in wall accounting."""
     start = time.perf_counter()
-    emit_dev_event("stage_start", stage=stage, **fields)
+    emit_dev_event("stage_start", stage=stage, accounting=accounting, **fields)
     try:
         yield
     except BaseException as error:
         emit_dev_event(
             "stage_end",
             stage=stage,
+            accounting=accounting,
             status="error",
             duration_seconds=time.perf_counter() - start,
             error_type=type(error).__name__,
@@ -44,6 +47,7 @@ def timed_dev_stage(stage: str, **fields) -> Iterator[None]:
     emit_dev_event(
         "stage_end",
         stage=stage,
+        accounting=accounting,
         status="success",
         duration_seconds=time.perf_counter() - start,
         **fields,

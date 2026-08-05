@@ -1318,8 +1318,8 @@ dependencies = [
     { name = "torch", version = "2.9.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (sys_platform != 'emscripten' and sys_platform != 'win32')" },
     { name = "torch", version = "2.11.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and python_full_version < '3.14' and sys_platform == 'emscripten') or (python_full_version >= '3.11' and python_full_version < '3.14' and sys_platform == 'win32') or (python_full_version >= '3.14' and sys_platform == 'emscripten') or (python_full_version >= '3.14' and platform_system == 'Linux' and sys_platform == 'win32')" },
     { name = "torch", version = "2.13.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.14' and platform_system != 'Linux' and sys_platform == 'win32'" },
-    { name = "triton", version = "3.5.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or (sys_platform != 'emscripten' and sys_platform != 'win32')" },
-    { name = "triton", version = "3.6.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and sys_platform == 'emscripten') or (python_full_version >= '3.11' and sys_platform == 'win32')" },
+    { name = "triton", version = "3.5.1", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version < '3.11' and platform_system == 'Linux') or (platform_system == 'Linux' and sys_platform != 'emscripten' and sys_platform != 'win32')" },
+    { name = "triton", version = "3.6.0", source = { registry = "https://pypi.org/simple" }, marker = "(python_full_version >= '3.11' and platform_system == 'Linux' and sys_platform == 'emscripten') or (python_full_version >= '3.11' and platform_system == 'Linux' and sys_platform == 'win32')" },
 ]
 
 [package.optional-dependencies]
@@ -1344,6 +1344,13 @@ gen-inputs = [
     { name = "accelerate" },
     { name = "transformers" },
 ]
+infra = [
+    { name = "modal" },
+    { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11' or sys_platform == 'emscripten' or sys_platform == 'win32'" },
+    { name = "pandas", version = "3.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11' and sys_platform != 'emscripten' and sys_platform != 'win32'" },
+    { name = "pydantic-settings" },
+    { name = "pytest" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -1356,15 +1363,19 @@ requires-dist = [
     { name = "jupyter", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "matplotlib", marker = "extra == 'dev'" },
     { name = "modal", marker = "extra == 'dev'" },
+    { name = "modal", marker = "extra == 'infra'" },
     { name = "nvtx" },
     { name = "pandas", marker = "extra == 'dev'", specifier = ">=2.0.0" },
+    { name = "pandas", marker = "extra == 'infra'", specifier = ">=2.0.0" },
     { name = "pydantic-settings", marker = "extra == 'dev'", specifier = ">=2.0.0" },
+    { name = "pydantic-settings", marker = "extra == 'infra'", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'dev'" },
+    { name = "pytest", marker = "extra == 'infra'" },
     { name = "seaborn", marker = "extra == 'dev'" },
     { name = "torch", specifier = ">=2.0.0" },
     { name = "tqdm", marker = "extra == 'dev'" },
     { name = "transformers", marker = "extra == 'gen-inputs'" },
-    { name = "triton", specifier = ">=2.0.0" },
+    { name = "triton", marker = "platform_system == 'Linux'", specifier = ">=2.0.0" },
 ]
 
 [[package]]
@@ -5190,17 +5201,11 @@ version = "3.6.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
     "python_full_version >= '3.14' and platform_system == 'Linux' and sys_platform == 'win32'",
-    "python_full_version >= '3.14' and platform_system != 'Linux' and sys_platform == 'win32'",
     "python_full_version >= '3.14' and platform_system == 'Linux' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.14' and platform_system != 'Linux' and sys_platform == 'emscripten'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and platform_system == 'Linux' and sys_platform == 'win32'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and platform_system != 'Linux' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and platform_system == 'Linux' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and platform_system != 'Linux' and sys_platform == 'emscripten'",
     "python_full_version == '3.11.*' and platform_system == 'Linux' and sys_platform == 'win32'",
-    "python_full_version == '3.11.*' and platform_system != 'Linux' and sys_platform == 'win32'",
     "python_full_version == '3.11.*' and platform_system == 'Linux' and sys_platform == 'emscripten'",
-    "python_full_version == '3.11.*' and platform_system != 'Linux' and sys_platform == 'emscripten'",
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/44/ba/b1b04f4b291a3205d95ebd24465de0e5bf010a2df27a4e58a9b5f039d8f2/triton-3.6.0-cp310-cp310-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:6c723cfb12f6842a0ae94ac307dba7e7a44741d720a40cf0e270ed4a4e3be781", size = 175972180 },

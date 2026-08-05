@@ -2,15 +2,23 @@
 
 import io
 import json
+import os
 import subprocess
-import tempfile
 from pathlib import Path
 
 import pandas as pd
 
 from ...cutlass_experiments import get_cutlass_sampling_experiment
-from ...dev_metrics import emit_dev_event
-from ..utils import make_app, make_ncu_image, make_volumes, set_volume_caches
+from ...dev_metrics import emit_dev_event, timed_dev_stage
+from ..utils import (
+    commit_shared_volume,
+    make_app,
+    make_ncu_image,
+    make_volumes,
+    reload_shared_volume,
+    set_volume_caches,
+    volume_path,
+)
 from .utils import add_cutlass_greedy_provider, make_cutlass_provider_image
 
 app = make_app()
@@ -50,34 +58,67 @@ OPTIONAL_METRICS = (
 
 
 @app.function(gpu="B200", image=image, volumes=make_volumes(), timeout=60 * 60)
-def record_sm100(hidden_size: int, variant: str) -> dict:
+def record_sm100(hidden_size: int, variant: str, run_id: str) -> dict:
+    reload_shared_volume()
     set_volume_caches()
-    emit_dev_event("remote_start", hidden_size=hidden_size, variant=variant)
+    emit_dev_event(
+        "remote_start",
+        hidden_size=hidden_size,
+        run_id=run_id,
+        variant=variant,
+    )
     vocab_size = MODEL_SHAPES[hidden_size]
-    query = subprocess.run(
-        ["ncu", "--query-metrics", "--query-metrics-mode", "all"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
+    with timed_dev_stage("ncu_metric_query", hidden_size=hidden_size, variant=variant):
+        query = subprocess.run(
+            ["ncu", "--query-metrics", "--query-metrics-mode", "all"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
     metrics = [
         *REQUIRED_METRICS,
         *(metric for metric in OPTIONAL_METRICS if metric in query),
     ]
+    report_dir = (
+        Path(volume_path)
+        / "cutlass-profiler"
+        / "experiments"
+        / variant
+        / run_id
+        / f"d{hidden_size}"
+    )
+    report_dir.mkdir(parents=True, exist_ok=False)
     rows = []
+    reports = []
     components = (variant, "triton")
     for hidden_count in HIDDEN_STATES:
         for component in components:
-            rows.extend(
-                _profile(
-                    component,
-                    vocab_size,
-                    hidden_size,
-                    hidden_count,
-                    metrics,
+            with timed_dev_stage(
+                "ncu_profile",
+                accounting=False,
+                component=component,
+                hidden_size=hidden_size,
+                n_hidden_states=hidden_count,
+                variant=variant,
+            ):
+                profile_rows, report_path = _profile(
+                    component=component,
+                    vocab_size=vocab_size,
+                    hidden_size=hidden_size,
+                    hidden_count=hidden_count,
+                    metrics=metrics,
+                    report_dir=report_dir,
                 )
-            )
-    return {"rows": rows, "metrics": metrics, "components": components}
+            rows.extend(profile_rows)
+            reports.append(str(report_path))
+    with timed_dev_stage("volume_commit", hidden_size=hidden_size, variant=variant):
+        commit_shared_volume()
+    return {
+        "rows": rows,
+        "metrics": metrics,
+        "components": components,
+        "reports": reports,
+    }
 
 
 def _profile(
@@ -86,41 +127,55 @@ def _profile(
     hidden_size: int,
     hidden_count: int,
     metrics: list[str],
-) -> list[dict]:
+    report_dir: Path,
+) -> tuple[list[dict], Path]:
     kernel_pattern = (
         "regex:.*fused_mm_sample_triton_kernel.*"
         if component == "triton"
         else "regex:.*device_kernel.*"
     )
-    with tempfile.TemporaryDirectory() as directory:
-        report_base = Path(directory) / "report"
-        report_path = report_base.with_suffix(".ncu-rep")
-        subprocess.run(
-            [
-                "ncu",
-                "--metrics",
-                ",".join(metrics),
-                "--nvtx",
-                "--nvtx-include",
-                "profile/",
-                "--kernel-name",
-                kernel_pattern,
-                "-f",
-                "-o",
-                str(report_base),
-                "python",
-                "/opt/fmms/cutlass_gumbel_profile_target.py",
-                "--component",
-                component,
-                "--vocab-size",
-                str(vocab_size),
-                "--hidden-size",
-                str(hidden_size),
-                "--n-hidden-states",
-                str(hidden_count),
-            ],
-            check=True,
-        )
+    report_base = report_dir / f"h{hidden_count}-{component}"
+    report_path = report_base.with_suffix(".ncu-rep")
+    emit_dev_event(
+        "ncu_child_start",
+        component=component,
+        hidden_size=hidden_size,
+        n_hidden_states=hidden_count,
+        report_path=str(report_path),
+    )
+    subprocess.run(
+        [
+            "ncu",
+            "--metrics",
+            ",".join(metrics),
+            "--nvtx",
+            "--nvtx-include",
+            "profile/",
+            "--kernel-name",
+            kernel_pattern,
+            "-f",
+            "-o",
+            str(report_base),
+            "python",
+            "/opt/fmms/cutlass_gumbel_profile_target.py",
+            "--component",
+            component,
+            "--vocab-size",
+            str(vocab_size),
+            "--hidden-size",
+            str(hidden_size),
+            "--n-hidden-states",
+            str(hidden_count),
+        ],
+        check=True,
+    )
+    with timed_dev_stage(
+        "ncu_export",
+        accounting=False,
+        component=component,
+        hidden_size=hidden_size,
+        n_hidden_states=hidden_count,
+    ):
         exported = subprocess.run(
             ["ncu", "--import", str(report_path), "--csv", "--page", "raw"],
             check=True,
@@ -140,7 +195,7 @@ def _profile(
     frame["duration_unit"] = units["gpu__time_duration.sum"]
     frame["dram_read_unit"] = units["dram__bytes_read.sum"]
     frame["dram_write_unit"] = units["dram__bytes_write.sum"]
-    return frame.to_dict(orient="records")
+    return frame.to_dict(orient="records"), report_path
 
 
 @app.local_entrypoint()
@@ -148,9 +203,12 @@ def main(hidden_size: int, variant: str, output_dir: str) -> None:
     if hidden_size not in MODEL_SHAPES:
         raise ValueError(f"hidden_size must be one of {tuple(MODEL_SHAPES)}")
     get_cutlass_sampling_experiment(variant)
+    run_id = os.environ.get("FMMS_DEV_RUN_ID")
+    if not run_id:
+        raise RuntimeError("FMMS_DEV_RUN_ID is required for durable NCU artifacts")
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    result = record_sm100.remote(hidden_size, variant)
+    result = record_sm100.remote(hidden_size, variant, run_id)
     kernels = pd.DataFrame(result["rows"])
     output = f"ncu-d{hidden_size}-kernels.csv"
     kernels.to_csv(output_dir / output, index=False)
@@ -166,6 +224,8 @@ def main(hidden_size: int, variant: str, output_dir: str) -> None:
         "components": list(result["components"]),
         "metrics": result["metrics"],
         "output": output,
+        "raw_reports": result["reports"],
+        "run_id": run_id,
     }
     (output_dir / f"ncu-d{hidden_size}-summary.json").write_text(
         json.dumps(summary, indent=2) + "\n"

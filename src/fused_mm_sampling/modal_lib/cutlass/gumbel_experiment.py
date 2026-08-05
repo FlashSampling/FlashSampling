@@ -8,7 +8,12 @@ import pandas as pd
 
 from ...cutlass_experiments import get_cutlass_sampling_experiment
 from ...dev_metrics import emit_dev_event, timed_dev_stage
-from ..utils import make_app, make_volumes, set_volume_caches
+from ..utils import (
+    make_app,
+    make_volumes,
+    reload_shared_volume,
+    set_volume_caches,
+)
 from .utils import add_cutlass_greedy_provider, make_cutlass_provider_image
 
 app = make_app()
@@ -30,6 +35,7 @@ def record_sm100(variant: str) -> dict:
         get_cutlass_sampling_experiment,
     )
 
+    reload_shared_volume()
     set_volume_caches()
     get_cutlass_sampling_experiment(variant)
 
