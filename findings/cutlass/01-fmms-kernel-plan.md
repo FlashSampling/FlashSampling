@@ -1634,6 +1634,47 @@ Gate 4 has three ordered acceptance phases in one integration packet:
 3. Only after both pass, profile registers, local-memory traffic, latency, and
    SM/SFU pipe utilization against the identical greedy kernel.
 
+#### Required four-provider comparison packet
+
+The Gate 4 performance runner must also produce the comparison table used for
+the CUTLASS implementation status and handoff.
+It must be reproducible with one command:
+
+```text
+make modal-cutlass GATE=gumbel-four-way
+```
+
+The runner must measure these providers in one interleaved B200 process using
+the same weights, hidden states, warmup policy, cold-L2 preparation, CUDA-event
+timing protocol, and repetition count:
+
+1. Triton FlashSampling Gumbel-Max.
+2. cuBLAS plus argmax.
+3. CUTLASS greedy.
+4. CUTLASS FlashSampling Gumbel-Max.
+
+The packet must cover the six primary B200 shape pairs at H=64, H=128, and
+H=256 for `(V,D) = (151936,4096)` and `(128256,8192)`.
+The runner must write raw per-repetition timings to `timings.csv` and the
+human-readable median table to `latency-comparison.csv` under
+`benchmarking/modal-results/cutlass/<number>-gumbel-four-way/`.
+The summary CSV must contain one row per shape and provider, with V, D, H,
+provider name, repetition count, median latency, p10, p90, and an explicit
+pass or failure column.
+
+Expected result: all four providers produce valid outputs for every declared
+shape, all 24 provider-shape rows appear in the summary, and the summarized
+latencies agree with the raw repetitions within the declared rounding policy.
+Possible failures include provider-order bias, inconsistent input padding,
+different cache state, missing provider rows, RNG or correctness mismatches,
+CSV schema drift, or a Modal failure hidden by the log-writing pipeline.
+The gate must preserve complete stdout and stderr in `log.txt` and record the
+exact command, GPU, software versions, timing policy, and input dimensions in
+`summary.json`.
+Human verification must inspect the raw timing count, provider coverage,
+interleaving metadata, median calculation, and the generated CSV before using
+the table for a performance decision.
+
 **Exit:** correct sampling distribution on B200, no RNG-caused spill, and no
 more than 1.20x the identical greedy kernel in every declared timing cell.
 
