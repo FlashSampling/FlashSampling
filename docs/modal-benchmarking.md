@@ -316,3 +316,36 @@ That pattern can compile the same translation units more than once and can make 
 The driver implementation is `benchmarking/cutlass_experiment_run.py`.
 The build gate is `src/fused_mm_sampling/modal_lib/cutlass/gumbel_experiment_build.py`.
 The shared timing and NCU consumers are `gumbel_experiment.py` and `gumbel_experiment_ncu.py` in the same package.
+
+### CUTLASS compile-time study driver
+
+Use the build-only study driver when changing compilation infrastructure:
+
+```bash
+make modal-cutlass-compile-study CUTLASS_COMPILE_STUDY=baseline
+make modal-cutlass-compile-study CUTLASS_COMPILE_STUDY=split4
+make modal-cutlass-compile-study CUTLASS_COMPILE_STUDY=split8
+make modal-cutlass-compile-study CUTLASS_COMPILE_STUDY=sass-only
+make modal-cutlass-compile-study CUTLASS_COMPILE_STUDY=advisor
+make modal-cutlass-compile-study CUTLASS_COMPILE_STUDY=ccache-cold
+make modal-cutlass-compile-study CUTLASS_COMPILE_STUDY=ccache-exact
+make modal-cutlass-compile-study CUTLASS_COMPILE_STUDY=ccache-one-tu
+make modal-cutlass-compile-study CUTLASS_COMPILE_STUDY=ccache-feature-flag
+```
+
+The baseline, split4, and split8 studies use CUDA 13.0, distinct cold extension keys, the same registered `warpgroup-fastmath-smem` source snapshot, and a fixed 16-core request.
+The `sass-only` study replaces the `-arch=sm_100a` shorthand with an explicit `compute_100a` to `sm_100a` target.
+It is a development measurement lane because it omits embedded PTX and therefore gives up PTX forward compatibility.
+Do not use it for experiment evidence until focused correctness and interleaved performance validation pass.
+The four `ccache-*` studies measure a cold cache, an exact rebuild, a one-translation-unit header change, and a feature flag that preprocesses away from the unaffected translation unit.
+Their local logs retain successful NVCC phase output, and their summaries record Ninja object and link durations, compiler versions, flags, hashes, sizes, and shared-Volume artifact paths.
+The advisor study is diagnostic-only.
+CUDA 13.0.88 cannot complete a device trace for these large translation units, so the advisor lane uses matched CUDA 13.2 tools and stops after PTX generation.
+It intentionally does not create a loadable or benchmarkable extension.
+The summary marks this state as `trace_only`, and the Compile Time Advisor report covers templates, headers, device frontend work, NVVM work, and split-compilation opportunity.
+Use the CUDA 13.0 baseline phase CSV for host compilation and PTXAS timing.
+
+Local results are under `benchmarking/modal-results/cutlass/compile-cache-study/<study>/`.
+Durable build packets are under `cutlass-compile-study/<study>/<run-id>/` on the shared Volume.
+The advisor packet contains multi-gigabyte raw JSON traces.
+Do not delete or routinely download those traces; use the retained local `ctadvisor.txt` for normal analysis.

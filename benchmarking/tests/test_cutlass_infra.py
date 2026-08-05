@@ -11,6 +11,10 @@ from fused_mm_sampling.cutlass_build import (
     discover_local_dependencies,
     extension_fingerprint,
 )
+from fused_mm_sampling.cutlass_compile_studies import (
+    CUTLASS_COMPILE_STUDIES,
+    get_cutlass_compile_study,
+)
 from fused_mm_sampling.cutlass_experiments import (
     CUTLASS_SAMPLING_EXPERIMENTS,
     get_cutlass_sampling_experiment,
@@ -140,6 +144,52 @@ def test_sampling_experiment_registry_is_bounded_and_compositional():
 def test_sampling_experiment_registry_rejects_unknown_variant():
     with pytest.raises(ValueError, match="Unknown CUTLASS sampling experiment"):
         get_cutlass_sampling_experiment("rejected-one-off")
+
+
+def test_compile_studies_change_only_the_intended_compiler_setting():
+    assert tuple(CUTLASS_COMPILE_STUDIES) == (
+        "baseline",
+        "split4",
+        "split8",
+        "sass-only",
+        "advisor",
+        "ccache-cold",
+        "ccache-exact",
+        "ccache-one-tu",
+        "ccache-feature-flag",
+    )
+    baseline = get_cutlass_compile_study("baseline")
+    split4 = get_cutlass_compile_study("split4")
+    split8 = get_cutlass_compile_study("split8")
+    sass_only = get_cutlass_compile_study("sass-only")
+    assert baseline.cuda_flags == ("--time=-",)
+    assert split4.cuda_flags == (*baseline.cuda_flags, "--split-compile=4")
+    assert split8.cuda_flags == (*baseline.cuda_flags, "--split-compile=8")
+    assert baseline.architecture_flags == ("-arch=sm_100a",)
+    assert sass_only.cuda_flags == baseline.cuda_flags
+    assert sass_only.architecture_flags == (
+        "--generate-code=arch=compute_100a,code=sm_100a",
+    )
+    assert {study.cpu_cores for study in CUTLASS_COMPILE_STUDIES.values()} == {16}
+    assert get_cutlass_compile_study("advisor").device_trace
+    cold = get_cutlass_compile_study("ccache-cold")
+    exact = get_cutlass_compile_study("ccache-exact")
+    assert cold.cuda_flags == baseline.cuda_flags
+    assert exact.cuda_flags == baseline.cuda_flags
+    assert cold.extension_suffix == exact.extension_suffix
+    assert cold.build_root_suffix != exact.build_root_suffix
+    assert cold.use_ccache and exact.use_ccache
+    one_tu = get_cutlass_compile_study("ccache-one-tu")
+    feature_flag = get_cutlass_compile_study("ccache-feature-flag")
+    assert one_tu.extension_suffix == cold.extension_suffix
+    assert feature_flag.extension_suffix == cold.extension_suffix
+    assert one_tu.ccache_probe == "greedy-header"
+    assert feature_flag.ccache_probe == "feature-flag"
+
+
+def test_compile_study_registry_rejects_unknown_name():
+    with pytest.raises(ValueError, match="Unknown CUTLASS compile study"):
+        get_cutlass_compile_study("split-unbounded")
 
 
 def test_dev_events_are_opt_in_and_record_failures(monkeypatch, capsys):

@@ -265,7 +265,12 @@ def _get_experimental_sampling_module(variant: str):
     return _experimental_sampling_modules[variant]
 
 
-def _load_sampling_extension(prefix: str, extra_cuda_flags: tuple[str, ...]):
+def _load_sampling_extension(
+    prefix: str,
+    extra_cuda_flags: tuple[str, ...],
+    *,
+    architecture_flags: tuple[str, ...] = ("-arch=sm_100a",),
+):
     if torch.cuda.get_device_capability() != (10, 0):
         raise RuntimeError("The Gate 4 CUTLASS sampling provider requires SM100")
     return _load_cutlass_extension(
@@ -275,7 +280,7 @@ def _load_sampling_extension(prefix: str, extra_cuda_flags: tuple[str, ...]):
             "-O3",
             "-lineinfo",
             "--expt-relaxed-constexpr",
-            "-arch=sm_100a",
+            *architecture_flags,
             "-DFMMS_ARCH_SM100",
             "-DFMMS_GUMBEL",
             *extra_cuda_flags,

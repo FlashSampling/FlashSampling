@@ -31,6 +31,7 @@ A failed build prevents timing and profiling from launching, and a failed timing
 Raw `.ncu-rep` files are required evidence and are retained on the shared Volume rather than deleted after CSV export.
 The local NCU summaries record their exact paths.
 See [the CUTLASS experiment development driver](../../docs/modal-benchmarking.md#cutlass-experiment-development-driver) for direct debugging gates, workflow records, artifact locations, and report-download commands.
+Use [the CUTLASS compile-time study driver](../../docs/modal-benchmarking.md#cutlass-compile-time-study-driver) for compiler baseline, split-compilation, and Compile Time Advisor work.
 
 ## Current state
 

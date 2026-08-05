@@ -138,6 +138,106 @@ Its NCU summary is `benchmarking/modal-results/cutlass/experiments/warpgroup-fas
 Possible failures were an implicit profile launch, a profile starting before timing completed, a stale cache mount, or a report path collision between configurations.
 None occurred in this packet.
 
+## Next infrastructure tranche: reduce unavoidable recompilation
+
+The single-writer barrier removed duplicate builds for one semantic extension, but a genuinely new fingerprint still spent 208.26 seconds compiling.
+The focused correctness and timing work after that build took 4.22 seconds.
+Recompilation is therefore the dominant remaining development-loop cost.
+
+Do not replace the conservative extension fingerprint with a custom preprocessed-source fingerprint yet.
+First test established CUDA compiler instrumentation, intra-translation-unit parallelism, and an object cache in isolation.
+Keep the source snapshot, CUTLASS variant, architecture, optimization level, and validation packet fixed while changing one infrastructure variable at a time.
+Give every build configuration a distinct extension key and artifact directory.
+
+### Step 1: compile-time baseline
+
+Add a build-only compile-study driver for the registered `warpgroup-fastmath-smem` variant.
+Pass `--time=-` to both CUDA translation units and retain the phase CSV in the process log, `.ninja_log`, `build.ninja`, compiler output, object sizes, and shared-library size.
+Record the requested and observed CPU resources, CUDA and NVCC versions, compile flags, cache state, translation-unit timings, link timing when available, and total extension-load time.
+
+Validation command: `make modal-cutlass-compile-study CUTLASS_COMPILE_STUDY=baseline`.
+Expected result: one guaranteed-cold extension build with phase rows for both CUDA translation units and a durable build packet.
+Actual result: the first preflight found that `ctadvisor` was absent from the PyTorch CUDA development image, so the study image now installs the CUDA 13.0 advisor package.
+The first traced cold build then spent 197.25 seconds before both PTXAS invocations rejected their independently named, incomplete JSON streams with `Parsed trace file not in expected format`.
+Both failed trace files and the full local process log were preserved.
+The comparison harness now uses `--time=-`, which NVIDIA documents as phase CSV output, because the failure is inside the CUDA 13.0 `sm_100a` device-trace path rather than a Ninja filename collision.
+The final cold baseline completed in 147.86 seconds.
+Ninja recorded 147.58 seconds for `greedy_provider.cu`, 116.22 seconds for `winning_schedule_provider.cu`, and 0.25 seconds for linking, with both CUDA translation units starting concurrently.
+Compile Time Advisor runs as a separate trace-only diagnostic and is not allowed to alter the optimization comparison.
+Possible failures include interleaved phase rows from concurrent compiler processes, incomplete process output, or generated artifacts that are not committed to the shared Volume.
+Generated evidence belongs under `benchmarking/modal-results/cutlass/compile-cache-study/baseline/` locally and `cutlass-compile-study/baseline/` on the shared Volume.
+
+### Step 2: NVCC split compilation
+
+Repeat the baseline with exactly one additional compiler setting at a time, first `--split-compile=4` and then `--split-compile=8`.
+Request a fixed CPU allocation for every comparison so scheduler-dependent CPU availability does not confound the result.
+Do not test `--split-compile=0` until fixed limits show useful scaling because Ninja can run both CUDA translation units concurrently and an unlimited setting can oversubscribe the container.
+Do not use `--split-compile-extended` because NVIDIA documents that it can affect runtime performance and requires device link-time optimization.
+
+Validation commands: `make modal-cutlass-compile-study CUTLASS_COMPILE_STUDY=split4` and `make modal-cutlass-compile-study CUTLASS_COMPILE_STUDY=split8`.
+Expected result: successful cold builds whose phase packets show whether device optimization parallelizes and whether four or eight threads reduce wall time without increasing failures or memory pressure.
+Actual result: `--split-compile=4` took 204.94 seconds, which is 38.60% slower than the 147.86-second baseline.
+`--split-compile=8` took 219.74 seconds, which is 48.61% slower than baseline.
+The dominant `greedy_provider.cu` object increased from 147.58 seconds to 203.74 seconds and 218.82 seconds respectively.
+Reject both settings for this workflow and retain the default compiler behavior.
+The CUDA 13.2 trace-only advisor packet explains the result: only 2.59 seconds of optimization work is parallelizable, while device frontend work consumes 121.65 seconds of 152.23 gross traced seconds.
+The advisor attributes 69.23 seconds across 26 `cutlass::device_kernel` instantiations and reports 58,651 to 85,290 recursive template instantiations in the most expensive examples.
+The most expensive project include is `evt_candidates.cu` at 6.80 seconds across the two translation units, followed by the broad `torch/extension.h` include chain at 6.49 seconds.
+CUDA 13.0.88 could not produce complete traces for these large sources, and a CUDA 13.2 full-object trace later failed in PTXAS for the larger source.
+The working advisor lane therefore stops after PTX generation, marks the extension load as `trace_only`, and combines its frontend report with the CUDA 13.0 phase CSV for host compilation and PTXAS timing.
+Its two retained raw JSON traces are 7.29 GB and 2.73 GB and must not be deleted.
+Possible failures include oversubscription between Ninja and NVCC, memory exhaustion, no parallelizable optimizer region, or a compiler defect exposed by split compilation.
+Compare extension-load wall time, per-translation-unit trace duration, CPU utilization when available, binary resource usage, focused exact-winner correctness, and interleaved timing against the baseline.
+Generated evidence belongs under sibling `split4/` and `split8/` directories in the local and shared compile-study roots.
+
+### Step 3: persistent object cache
+
+The default compiler behavior won the split-compilation comparison.
+Add `ccache` in front of its CUDA 13.0 NVCC invocation and use a dedicated rebuildable cache location rather than the experiment-artifact tree.
+Verify the compiler wrapper used by the pinned PyTorch 2.11 extension builder instead of assuming behavior from a newer PyTorch implementation.
+Configure stable paths or `CCACHE_BASEDIR` only after inspecting the actual command lines.
+Preserve `ccache --show-stats` before and after every build.
+
+Measure four cases in order: an empty-cache build, an exact rebuild in a fresh extension directory, a source change confined to one translation unit, and a feature-flag change that preprocesses away in one translation unit.
+Keep the extension-level fingerprint conservative even if the object cache gets a hit.
+The object cache may reuse an object only when its own compiler-derived key proves compatibility.
+
+Validation command: `make modal-cutlass-compile-study CUTLASS_COMPILE_STUDY=ccache-<case>` for each allowlisted case.
+Expected result: the empty-cache build matches the selected split-compilation baseline, the exact rebuild obtains two object hits, and adjacent changes recompile only objects whose effective compiler inputs changed.
+Actual result: the empty-cache build took 224.57 seconds and recorded two misses.
+An exact rebuild in a fresh extension directory took 1.59 seconds and added two direct hits with no misses.
+A controlled header change confined to `greedy_provider.cu` took 211.38 seconds, with a 0.96-second direct hit for `winning_schedule_provider.cu` and one new miss for the affected object.
+A controlled global feature flag that preprocesses away from `winning_schedule_provider.cu` took 141.32 seconds, with a 2.37-second preprocessed hit for the unaffected object and one new miss for `greedy_provider.cu`.
+The cache therefore gives large exact and unaffected-object savings, but it does not reduce a cold frontend and the empty-cache overhead needs a same-host control before enabling it globally.
+Possible failures include the pinned PyTorch builder bypassing the wrapper, absolute paths preventing hits, network filesystem overhead exceeding saved compilation time, excessive cache inode growth, or unsafe cache reuse caused by overly loose configuration.
+Validate every reused binary with focused correctness and compare performance from a normally optimized build before accepting it as experiment evidence.
+Generated statistics and build artifacts belong under `benchmarking/modal-results/cutlass/compile-cache-study/ccache-<case>/`, while cache entries belong in a dedicated disposable cache Volume.
+
+### Step 4: remove redundant architecture frontend work
+
+The CUDA 13.0 phase CSV shows that the `-arch=sm_100a` shorthand runs device frontend work for both `compute_100` and `compute_100a`.
+Measure an explicit `--generate-code=arch=compute_100a,code=sm_100a` target that emits the B200 architecture-specific cubin without embedding either PTX target.
+Keep this as a separately keyed study until focused correctness and interleaved performance agree with the normal build.
+
+Validation command: `make modal-cutlass-compile-study CUTLASS_COMPILE_STUDY=sass-only`.
+Expected result: one `compute_100a` `cicc` row per CUDA translation unit, no `compute_100` row, a loadable extension, and lower cold extension-load time.
+Actual result: the cold build completed in 122.33 seconds, 25.54 seconds or 17.27% below the 147.86-second baseline.
+Ninja recorded 121.94 seconds for `greedy_provider.cu`, 106.32 seconds for `winning_schedule_provider.cu`, and 0.32 seconds for linking.
+The phase CSV contains exactly one `compute_100a` device frontend and one `sm_100a` PTXAS invocation per translation unit.
+The extension linked and loaded successfully, but this build has not yet passed focused kernel correctness or interleaved performance validation.
+Possible failures include losing required forward compatibility, accidentally omitting the B200 cubin, runtime incompatibility, or a code-generation difference that changes kernel performance.
+Generated evidence belongs under `benchmarking/modal-results/cutlass/compile-cache-study/sass-only/` locally and `cutlass-compile-study/sass-only/20260805T091045Z-compile-study-compile-study-sass-only-902de41c/` on the shared Volume.
+
+### Later decisions
+
+Refactor the Python binding, stable Stage 2 code, and candidate CUTLASS instantiations into narrower translation units only if the traces or cache misses identify a reusable boundary.
+Test `--Ofast-compile=min` only as a separately keyed development lane after cache and split compilation are measured.
+Never use a fast-compile binary for a performance decision, and require a normal `-O3` rebuild before promotion.
+Treat a CuTe DSL implementation as a kernel-development project rather than an infrastructure optimization because it changes the implementation and integration surface.
+
+Choose the next action from the measured result of each step.
+Stop adding complexity if a technique does not materially reduce cold or adjacent-change wall time.
+
 ## Phase 1: precise build caching and friction telemetry
 
 Phase 1 is the only implementation authorized by this finding initially.

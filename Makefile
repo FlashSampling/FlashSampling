@@ -29,7 +29,7 @@ modal-pytest-distributed:
 modal-versions:
 	modal run -m src.fused_mm_sampling.modal_lib.modal_versions
 
-CUTLASS_GATES := toolchain accumulator-layout thread-local-max warp-max cta-max cta-multi-column-max cta-boundary-max evt-candidates stage2 greedy-provider greedy-performance greedy-profile greedy-ncu ordinary-gemm ordinary-gemm-tuning winning-schedule-layout winning-schedule-evt stateless-philox gumbel-provider gumbel-ncu dev-infra gumbel-sass triton-liveness gumbel-experiment-build gumbel-experiment gumbel-experiment-ncu
+CUTLASS_GATES := toolchain accumulator-layout thread-local-max warp-max cta-max cta-multi-column-max cta-boundary-max evt-candidates stage2 greedy-provider greedy-performance greedy-profile greedy-ncu ordinary-gemm ordinary-gemm-tuning winning-schedule-layout winning-schedule-evt stateless-philox gumbel-provider gumbel-ncu dev-infra gumbel-sass triton-liveness gumbel-experiment-build gumbel-experiment gumbel-experiment-ncu compile-study
 # PHASE and RUN select the Gate 2c sub-run of the ordinary-gemm-tuning gate.
 PHASE := discover
 RUN := 1
@@ -64,6 +64,7 @@ CUTLASS_MODULE_triton-liveness := triton_liveness
 CUTLASS_MODULE_gumbel-experiment-build := gumbel_experiment_build
 CUTLASS_MODULE_gumbel-experiment := gumbel_experiment
 CUTLASS_MODULE_gumbel-experiment-ncu := gumbel_experiment_ncu
+CUTLASS_MODULE_compile-study := compile_study
 CUTLASS_RESULT_toolchain := 00-toolchain
 CUTLASS_RESULT_accumulator-layout := 01-accumulator-layout
 CUTLASS_RESULT_thread-local-max := 02-thread-local-max
@@ -92,6 +93,8 @@ CUTLASS_EXPERIMENT_RESULT := experiments/$(CUTLASS_VARIANT)
 CUTLASS_RESULT_gumbel-experiment-build := $(CUTLASS_EXPERIMENT_RESULT)
 CUTLASS_RESULT_gumbel-experiment := $(CUTLASS_EXPERIMENT_RESULT)
 CUTLASS_RESULT_gumbel-experiment-ncu := $(CUTLASS_EXPERIMENT_RESULT)
+CUTLASS_COMPILE_STUDY := baseline
+CUTLASS_RESULT_compile-study := compile-cache-study/$(CUTLASS_COMPILE_STUDY)
 CUTLASS_VARIANT_CHECK_gumbel-experiment-build := 1
 CUTLASS_VARIANT_CHECK_gumbel-experiment := 1
 CUTLASS_VARIANT_CHECK_gumbel-experiment-ncu := 1
@@ -105,6 +108,7 @@ CUTLASS_ARGS_gumbel-experiment-build := --variant $(CUTLASS_VARIANT)
 CUTLASS_ARGS_gumbel-experiment := --variant $(CUTLASS_VARIANT) --output-dir benchmarking/modal-results/cutlass/$(CUTLASS_EXPERIMENT_RESULT)
 CUTLASS_LOG_gumbel-experiment-ncu := ncu-d$(CUTLASS_HIDDEN_SIZE)-h$(CUTLASS_N_HIDDEN_STATES)-log.txt
 CUTLASS_ARGS_gumbel-experiment-ncu := --hidden-size $(CUTLASS_HIDDEN_SIZE) --n-hidden-states $(CUTLASS_N_HIDDEN_STATES) --variant $(CUTLASS_VARIANT) --output-dir benchmarking/modal-results/cutlass/$(CUTLASS_EXPERIMENT_RESULT)
+CUTLASS_ARGS_compile-study := --study $(CUTLASS_COMPILE_STUDY) --output-dir benchmarking/modal-results/cutlass/$(CUTLASS_RESULT_compile-study)
 
 modal-cutlass:
 	@test -n "$(GATE)" || \
@@ -128,6 +132,12 @@ modal-cutlass-experiment:
 		--variant "$(CUTLASS_VARIANT)" \
 		--label "$(CUTLASS_DEV_LABEL)" \
 		--profile-configs '$(CUTLASS_PROFILE_CONFIGS)'
+
+modal-cutlass-compile-study:
+	$(MAKE) modal-cutlass \
+		GATE=compile-study \
+		CUTLASS_COMPILE_STUDY="$(CUTLASS_COMPILE_STUDY)" \
+		CUTLASS_DEV_LABEL="compile-study-$(CUTLASS_COMPILE_STUDY)"
 
 cutlass-dev-metrics:
 	$(PYTHON) benchmarking/cutlass_dev_metrics.py
