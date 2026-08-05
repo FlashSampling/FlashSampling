@@ -48,7 +48,7 @@ def fused_mm_sample_cutlass(
 ) -> torch.Tensor:
     """Sample with the Gate 4 B200 CUTLASS Gumbel-Max provider."""
     return _fused_mm_sample_cutlass_with_module(
-        _get_sampling_module(),
+        _get_sampling_module(hidden_states.size(0)),
         weights,
         hidden_states,
         num_samples,
@@ -270,13 +270,31 @@ def _get_tuning_module():
     return _tuning_module
 
 
-def _get_sampling_module():
+def _get_sampling_module(n_hidden_states: int = 128):
     global _sampling_module
     if _sampling_module is None:
-        _sampling_module = _load_sampling_extension(
-            "fmms_cutlass_sampling_sm100", ()
+        _sampling_module = {}
+    if n_hidden_states <= 64:
+        variant = "warpgroup"
+    else:
+        variant = {
+            128: "warpgroup-4wg-partitioned",
+            256: "warpgroup-4wg-partitioned",
+        }.get(n_hidden_states)
+    module_key = variant or "generic"
+    if module_key not in _sampling_module:
+        if variant is None:
+            extension_prefix = "fmms_cutlass_sampling_sm100"
+            cuda_flags = ()
+        else:
+            experiment = get_cutlass_sampling_experiment(variant)
+            extension_prefix = experiment.extension_prefix
+            cuda_flags = experiment.cuda_flags
+        _sampling_module[module_key] = _load_sampling_extension(
+            extension_prefix,
+            cuda_flags,
         )
-    return _sampling_module
+    return _sampling_module[module_key]
 
 
 def _get_experimental_sampling_module(variant: str):
@@ -343,6 +361,7 @@ def _load_cutlass_extension(
         supplemental_inputs=(
             _CSRC_DIR / "sm100-void-d.patch",
             _CSRC_DIR / "sm90-row-reduction-uint64.patch",
+            _CSRC_DIR / "sm100-two-epilogue-warpgroups.patch",
         ),
     )
     name, fingerprint = extension_name(spec)

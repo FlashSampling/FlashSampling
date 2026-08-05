@@ -133,6 +133,11 @@ def make_cutlass_provider_image(
         _repo_root
         / "src/fused_mm_sampling/csrc/cutlass/sm90-row-reduction-uint64.patch"
     )
+    multi_warpgroup_patch = (
+        _repo_root
+        / "src/fused_mm_sampling/csrc/cutlass/"
+        "sm100-two-epilogue-warpgroups.patch"
+    )
     return (
         (base_image or make_image())
         .apt_install("git", "ninja-build")
@@ -146,12 +151,19 @@ def make_cutlass_provider_image(
             remote_path="/opt/fmms/sm90-row-reduction-uint64.patch",
             copy=True,
         )
+        .add_local_file(
+            str(multi_warpgroup_patch),
+            remote_path="/opt/fmms/sm100-two-epilogue-warpgroups.patch",
+            copy=True,
+        )
         .run_commands(
             f"git clone https://github.com/NVIDIA/cutlass.git {CUTLASS_ROOT}",
             f"cd {CUTLASS_ROOT} && git checkout --detach {CUTLASS_SHA}",
             f'test "$(cd {CUTLASS_ROOT} && git rev-parse HEAD)" = "{CUTLASS_SHA}"',
             f"cd {CUTLASS_ROOT} && patch -p1 < /opt/fmms/sm100-void-d.patch",
             f"cd {CUTLASS_ROOT} && git apply /opt/fmms/sm90-row-reduction-uint64.patch",
+            f"cd {CUTLASS_ROOT} && "
+            "git apply /opt/fmms/sm100-two-epilogue-warpgroups.patch",
             "pip install --break-system-packages pytest",
         )
         # Keep run metadata in a trailing layer so instrumentation changes do
@@ -365,6 +377,78 @@ def add_cutlass_winning_schedule_layout(image: modal.Image) -> modal.Image:
         remote_path=source,
         copy=True,
     ).run_commands(*commands)
+
+
+def add_cutlass_multi_warpgroup_layout(image: modal.Image) -> modal.Image:
+    """Add the multi-warpgroup accumulator-ownership gate."""
+    csrc_root = _repo_root / "src/fused_mm_sampling/csrc/cutlass"
+    source = "/opt/fmms/accumulator_layout.cu"
+    patch = "/opt/fmms/sm100-two-epilogue-warpgroups.patch"
+    include_flags = (
+        f"-I{CUTLASS_ROOT}/include -I{CUTLASS_ROOT}/tools/util/include"
+    )
+    return (
+        image.add_local_file(
+            str(csrc_root / "accumulator_layout.cu"),
+            remote_path=source,
+            copy=True,
+        )
+        .add_local_file(
+            str(csrc_root / "sm100-two-epilogue-warpgroups.patch"),
+            remote_path=patch,
+            copy=True,
+        )
+        .run_commands(
+            f"cd {CUTLASS_ROOT} && git apply {patch}",
+            "nvcc -std=c++17 -O2 --expt-relaxed-constexpr -arch=sm_100a "
+            "-DFMMS_ARCH_SM100 -DFMMS_SM100_2SM "
+            "-DFMMS_VALIDATE_OWNER_COUNTS "
+            "-DFMMS_FOUR_EPILOGUE_WARPGROUPS "
+            "-DFMMS_TWO_EPILOGUE_WARPGROUPS_STRIPED "
+            "-DFMMS_PARTITIONED_TMEM_LOAD "
+            "-DFMMS_DIAGNOSE_PARTITIONED_TMEM_LOAD "
+            "-DFMMS_TILE_M=256 -DFMMS_TILE_N=128 -DFMMS_TILE_K=64 "
+            "-DFMMS_CLUSTER_M=2 "
+            f"{include_flags} {source} "
+            "-o /opt/fmms/cutlass_multi_warpgroup_layout"
+        )
+    )
+
+
+def add_cutlass_multi_warpgroup_pipeline(image: modal.Image) -> modal.Image:
+    """Add the multi-warpgroup pipeline-correctness gate."""
+    csrc_root = _repo_root / "src/fused_mm_sampling/csrc/cutlass"
+    source = "/opt/fmms/accumulator_layout.cu"
+    patch = "/opt/fmms/sm100-two-epilogue-warpgroups.patch"
+    include_flags = (
+        f"-I{CUTLASS_ROOT}/include -I{CUTLASS_ROOT}/tools/util/include"
+    )
+    return (
+        image.add_local_file(
+            str(csrc_root / "accumulator_layout.cu"),
+            remote_path=source,
+            copy=True,
+        )
+        .add_local_file(
+            str(csrc_root / "sm100-two-epilogue-warpgroups.patch"),
+            remote_path=patch,
+            copy=True,
+        )
+        .run_commands(
+            f"cd {CUTLASS_ROOT} && git apply {patch}",
+            "nvcc -std=c++17 -O2 --expt-relaxed-constexpr -arch=sm_100a "
+            "-DFMMS_ARCH_SM100 -DFMMS_SM100_2SM "
+            "-DFMMS_VALIDATE_PIPELINE "
+            "-DFMMS_FIVE_EPILOGUE_WARPGROUPS "
+            "-DFMMS_TWO_EPILOGUE_WARPGROUPS_STRIPED "
+            "-DFMMS_TILE_M=256 -DFMMS_TILE_N=128 -DFMMS_TILE_K=64 "
+            "-DFMMS_CLUSTER_M=2 "
+            "-DFMMS_PROBLEM_M=1024 -DFMMS_PROBLEM_N=256 "
+            "-DFMMS_PROBLEM_K=256 "
+            f"{include_flags} {source} "
+            "-o /opt/fmms/cutlass_multi_warpgroup_pipeline"
+        )
+    )
 
 
 def add_cutlass_winning_schedule_evt(image: modal.Image) -> modal.Image:

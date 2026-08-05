@@ -24,9 +24,105 @@ CUTLASS_SAMPLING_EXPERIMENTS = {
         "fmms_cutlass_sampling_warpgroup_fastmath_smem_sm100",
         (*_FAST_MATH, "-DFMMS_WARPGROUP_SMEM_STAGE"),
     ),
+    "warpgroup-fastmath-smem-2wg-striped": CutlassSamplingExperiment(
+        "fmms_cutlass_sampling_warpgroup_fastmath_smem_2wg_striped_sm100",
+        (
+            *_FAST_MATH,
+            "-DFMMS_WARPGROUP_SMEM_STAGE",
+            "-DFMMS_TWO_EPILOGUE_WARPGROUPS",
+            "-DFMMS_TWO_EPILOGUE_WARPGROUPS_STRIPED",
+        ),
+    ),
+    "warpgroup-fastmath-smem-4wg-striped": CutlassSamplingExperiment(
+        "fmms_cutlass_sampling_warpgroup_fastmath_smem_4wg_striped_sm100",
+        (
+            *_FAST_MATH,
+            "-DFMMS_WARPGROUP_SMEM_STAGE",
+            "-DFMMS_FOUR_EPILOGUE_WARPGROUPS",
+            "-DFMMS_TWO_EPILOGUE_WARPGROUPS_STRIPED",
+        ),
+    ),
+    "warpgroup-fastmath-smem-2wg-partitioned": CutlassSamplingExperiment(
+        "fmms_cutlass_sampling_warpgroup_fastmath_smem_2wg_partitioned_sm100",
+        (
+            *_FAST_MATH,
+            "-DFMMS_WARPGROUP_SMEM_STAGE",
+            "-DFMMS_TWO_EPILOGUE_WARPGROUPS",
+            "-DFMMS_TWO_EPILOGUE_WARPGROUPS_STRIPED",
+            "-DFMMS_PARTITIONED_TMEM_LOAD",
+        ),
+    ),
+    "warpgroup-fastmath-smem-4wg-partitioned": CutlassSamplingExperiment(
+        "fmms_cutlass_sampling_warpgroup_fastmath_smem_4wg_partitioned_sm100",
+        (
+            *_FAST_MATH,
+            "-DFMMS_WARPGROUP_SMEM_STAGE",
+            "-DFMMS_FOUR_EPILOGUE_WARPGROUPS",
+            "-DFMMS_TWO_EPILOGUE_WARPGROUPS_STRIPED",
+            "-DFMMS_PARTITIONED_TMEM_LOAD",
+        ),
+    ),
+    "warpgroup-fastmath-2wg-partitioned": CutlassSamplingExperiment(
+        "fmms_cutlass_sampling_warpgroup_fastmath_2wg_partitioned_sm100",
+        (
+            *_FAST_MATH,
+            "-DFMMS_TWO_EPILOGUE_WARPGROUPS",
+            "-DFMMS_TWO_EPILOGUE_WARPGROUPS_STRIPED",
+            "-DFMMS_PARTITIONED_TMEM_LOAD",
+        ),
+    ),
+    "warpgroup-fastmath-4wg-partitioned": CutlassSamplingExperiment(
+        "fmms_cutlass_sampling_warpgroup_fastmath_4wg_partitioned_sm100",
+        (
+            *_FAST_MATH,
+            "-DFMMS_FOUR_EPILOGUE_WARPGROUPS",
+            "-DFMMS_TWO_EPILOGUE_WARPGROUPS_STRIPED",
+            "-DFMMS_PARTITIONED_TMEM_LOAD",
+        ),
+    ),
+    "warpgroup-2wg-partitioned": CutlassSamplingExperiment(
+        "fmms_cutlass_sampling_warpgroup_2wg_partitioned_sm100",
+        (
+            *_INLINE,
+            "-DFMMS_TWO_EPILOGUE_WARPGROUPS",
+            "-DFMMS_TWO_EPILOGUE_WARPGROUPS_STRIPED",
+            "-DFMMS_PARTITIONED_TMEM_LOAD",
+        ),
+    ),
+    "warpgroup-4wg-partitioned": CutlassSamplingExperiment(
+        "fmms_cutlass_sampling_warpgroup_4wg_partitioned_sm100",
+        (
+            *_INLINE,
+            "-DFMMS_FOUR_EPILOGUE_WARPGROUPS",
+            "-DFMMS_TWO_EPILOGUE_WARPGROUPS_STRIPED",
+            "-DFMMS_PARTITIONED_TMEM_LOAD",
+        ),
+    ),
+    "warpgroup-fastmath-smem-fragment4": CutlassSamplingExperiment(
+        "fmms_cutlass_sampling_warpgroup_fastmath_smem_fragment4_sm100",
+        (
+            *_FAST_MATH,
+            "-DFMMS_WARPGROUP_SMEM_STAGE",
+            "-DFMMS_FRAGMENT_SIZE_4",
+        ),
+    ),
+    "warpgroup-fastmath-smem-fragment8": CutlassSamplingExperiment(
+        "fmms_cutlass_sampling_warpgroup_fastmath_smem_fragment8_sm100",
+        (
+            *_FAST_MATH,
+            "-DFMMS_WARPGROUP_SMEM_STAGE",
+            "-DFMMS_FOUR_EPILOGUE_WARPGROUPS",
+            "-DFMMS_TWO_EPILOGUE_WARPGROUPS_STRIPED",
+            "-DFMMS_FRAGMENT_SIZE_8",
+        ),
+    ),
     "warpgroup-fastmath": CutlassSamplingExperiment(
         "fmms_cutlass_sampling_warpgroup_fastmath_sm100",
         _FAST_MATH,
+    ),
+    "warpgroup": CutlassSamplingExperiment(
+        "fmms_cutlass_sampling_warpgroup_sm100",
+        _INLINE,
     ),
 }
 

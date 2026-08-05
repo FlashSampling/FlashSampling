@@ -29,7 +29,7 @@ modal-pytest-distributed:
 modal-versions:
 	modal run -m src.fused_mm_sampling.modal_lib.modal_versions
 
-CUTLASS_GATES := toolchain accumulator-layout thread-local-max warp-max cta-max cta-multi-column-max cta-boundary-max evt-candidates stage2 greedy-provider greedy-performance greedy-profile greedy-ncu ordinary-gemm ordinary-gemm-tuning winning-schedule-layout winning-schedule-evt stateless-philox gumbel-provider gumbel-ncu dev-infra gumbel-sass triton-liveness gumbel-experiment-build gumbel-experiment gumbel-experiment-ncu compile-study
+CUTLASS_GATES := toolchain accumulator-layout thread-local-max warp-max cta-max cta-multi-column-max cta-boundary-max evt-candidates stage2 greedy-provider greedy-performance greedy-profile greedy-ncu ordinary-gemm ordinary-gemm-tuning winning-schedule-layout winning-schedule-evt stateless-philox gumbel-provider gumbel-ncu dev-infra gumbel-sass triton-liveness gumbel-experiment-build gumbel-experiment gumbel-experiment-ncu compile-study multi-warpgroup-layout multi-warpgroup-pipeline
 # PHASE and RUN select the Gate 2c sub-run of the ordinary-gemm-tuning gate.
 PHASE := discover
 RUN := 1
@@ -65,6 +65,8 @@ CUTLASS_MODULE_gumbel-experiment-build := gumbel_experiment_build
 CUTLASS_MODULE_gumbel-experiment := gumbel_experiment
 CUTLASS_MODULE_gumbel-experiment-ncu := gumbel_experiment_ncu
 CUTLASS_MODULE_compile-study := compile_study
+CUTLASS_MODULE_multi-warpgroup-layout := multi_warpgroup_layout
+CUTLASS_MODULE_multi-warpgroup-pipeline := multi_warpgroup_pipeline
 CUTLASS_RESULT_toolchain := 00-toolchain
 CUTLASS_RESULT_accumulator-layout := 01-accumulator-layout
 CUTLASS_RESULT_thread-local-max := 02-thread-local-max
@@ -96,6 +98,8 @@ CUTLASS_RESULT_gumbel-experiment-ncu := $(CUTLASS_EXPERIMENT_RESULT)
 CUTLASS_COMPILE_STUDY := baseline
 CUTLASS_RESULT_compile-study := compile-cache-study/$(CUTLASS_COMPILE_STUDY)
 CUTLASS_VARIANT_CHECK_gumbel-experiment-build := 1
+CUTLASS_RESULT_multi-warpgroup-layout := 27-multi-warpgroup-layout
+CUTLASS_RESULT_multi-warpgroup-pipeline := 28-multi-warpgroup-pipeline
 CUTLASS_VARIANT_CHECK_gumbel-experiment := 1
 CUTLASS_VARIANT_CHECK_gumbel-experiment-ncu := 1
 CUTLASS_LOG_toolchain := smoke.txt

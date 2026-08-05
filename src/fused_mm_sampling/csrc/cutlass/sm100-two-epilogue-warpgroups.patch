@@ -1,0 +1,185 @@
+diff --git a/include/cutlass/epilogue/collective/sm100_epilogue_tma_warpspecialized.hpp b/include/cutlass/epilogue/collective/sm100_epilogue_tma_warpspecialized.hpp
+index 66f274ae..2c9e45a6 100644
+--- a/include/cutlass/epilogue/collective/sm100_epilogue_tma_warpspecialized.hpp
++++ b/include/cutlass/epilogue/collective/sm100_epilogue_tma_warpspecialized.hpp
+@@ -124,7 +124,15 @@ public:
+   using GmemTiledCopyC = CopyOpG2S;
+   using GmemTiledCopyD = CopyOpS2G;
+ 
++#if defined(FMMS_FIVE_EPILOGUE_WARPGROUPS)
++  constexpr static int ThreadCount = 640;
++#elif defined(FMMS_FOUR_EPILOGUE_WARPGROUPS)
++  constexpr static int ThreadCount = 512;
++#elif defined(FMMS_TWO_EPILOGUE_WARPGROUPS)
++  constexpr static int ThreadCount = 256;
++#else
+   constexpr static int ThreadCount = 128;
++#endif
+ 
+   static_assert(!is_layout<EpilogueTile>::value && is_tuple<EpilogueTile>::value, "EpilogueTile must be a cute::Tile or cute::Shape");
+   static_assert(rank(EpilogueTile{}) == 2, "EpilogueTile must be rank-2: [EPI_TILE_M, EPI_TILE_N]");
+@@ -601,7 +609,13 @@ public:
+     auto [M, N, K, L] = problem_shape_mnkl;
+     auto [m_coord, n_coord, k_coord, l_coord] = cta_coord_mnkl;
+-    int thread_idx = threadIdx.x % ThreadCount;
+-    int warp_idx = thread_idx / NumThreadsPerWarp;
++#if defined(FMMS_TWO_EPILOGUE_WARPGROUPS) || defined(FMMS_FOUR_EPILOGUE_WARPGROUPS) || defined(FMMS_FIVE_EPILOGUE_WARPGROUPS)
++    int epilogue_thread_idx = (int(threadIdx.x) - 128) % ThreadCount;
++    int epilogue_warpgroup_idx = epilogue_thread_idx / 128;
++    int thread_idx = epilogue_thread_idx % 128;
++#else
++    int thread_idx = threadIdx.x % ThreadCount;
++#endif
++    int warp_idx = thread_idx / NumThreadsPerWarp;
+     [[maybe_unused]] int lane_idx = thread_idx % NumThreadsPerWarp;
+ 
+     // The tma tensor D under im2col mode only has two modes (M, N) which
+@@ -737,7 +751,11 @@ public:
+     static_assert(not (ReuseTmem && AccumulatorPipeline::Stages != 1), "Tmem reuse requires 1 accumulator stage");
+ 
+     // Predication for TMA store (one warp issues TMA store)
+-    bool issue_tma_store = warp_idx == 0;
++#if defined(FMMS_TWO_EPILOGUE_WARPGROUPS) || defined(FMMS_FOUR_EPILOGUE_WARPGROUPS) || defined(FMMS_FIVE_EPILOGUE_WARPGROUPS)
++    bool issue_tma_store = warp_idx == 0 && epilogue_warpgroup_idx == 0;
++#else
++    bool issue_tma_store = warp_idx == 0;
++#endif
+ 
+     // In the reuse smem configuration we have StagesC smem buffers and at most StagesD committed TMA stores in flight.
+     // The TMA store pipeline producer acquire returns when at most StagesD-1 committed stores are in-flight, so we can
+@@ -835,6 +853,14 @@ public:
+             do_acc_release = iter_m == size<2>(gD_epi)-1 && iter_n == 0;
+           }
+ 
++#if defined(FMMS_TWO_EPILOGUE_WARPGROUPS_STRIPED)
++          bool owns_epi_subtile = true;
++#elif defined(FMMS_TWO_EPILOGUE_WARPGROUPS)
++          bool owns_epi_subtile = epilogue_warpgroup_idx == epi_n % 2;
++#else
++          bool owns_epi_subtile = true;
++#endif
++
+           cst_callbacks.begin_loop(epi_m, epi_n);
+ 
+           if (is_producer_load_needed) {
+@@ -875,24 +901,115 @@ public:
+             int subpart_idx = (tTR_tAcc_mn.data().dp_ / 32) % 4;
+             issue_tmem_load = warp_idx == subpart_idx;
+           }
+-          bool issue_smem_store = issue_tmem_load;
++#if defined(FMMS_TWO_EPILOGUE_WARPGROUPS_STRIPED)
++          bool issue_smem_store = issue_tmem_load && epilogue_warpgroup_idx == 0;
++#else
++          bool issue_smem_store = issue_tmem_load && owns_epi_subtile;
++#endif
+ 
+           // Copy accumulator tile from tmem to register
+-          if (issue_tmem_load) {
++          if (issue_tmem_load && owns_epi_subtile) {
++#if defined(FMMS_DIAGNOSE_PARTITIONED_TMEM_LOAD)
++            auto reference = make_tensor_like(tTR_rAcc);
++            copy(tiled_t2r, tTR_tAcc_mn, reference);
++#endif
++#if defined(FMMS_PARTITIONED_TMEM_LOAD)
++#if defined(FMMS_FOUR_EPILOGUE_WARPGROUPS)
++            if constexpr (
++                cute::is_same_v<CopyOpT2R, SM100_TMEM_LOAD_32dp32b16x>) {
++              auto tAcc = coalesce(tTR_tAcc_mn);
++              auto rAcc = coalesce(tTR_rAcc);
++              int fragment = 4 * epilogue_warpgroup_idx;
++              uint32_t address = raw_pointer_cast(tAcc.data() + fragment);
++              SM100_TMEM_LOAD_32dp32b4x::copy(
++                  address,
++                  reinterpret_cast<uint32_t&>(rAcc(0)),
++                  reinterpret_cast<uint32_t&>(rAcc(1)),
++                  reinterpret_cast<uint32_t&>(rAcc(2)),
++                  reinterpret_cast<uint32_t&>(rAcc(3)));
++            }
++#elif defined(FMMS_TWO_EPILOGUE_WARPGROUPS)
++            if constexpr (
++                cute::is_same_v<CopyOpT2R, SM100_TMEM_LOAD_32dp32b16x>) {
++              auto tAcc = coalesce(tTR_tAcc_mn);
++              auto rAcc = coalesce(tTR_rAcc);
++              int fragment = 8 * epilogue_warpgroup_idx;
++              uint32_t address = raw_pointer_cast(tAcc.data() + fragment);
++              SM100_TMEM_LOAD_32dp32b8x::copy(
++                  address,
++                  reinterpret_cast<uint32_t&>(rAcc(0)),
++                  reinterpret_cast<uint32_t&>(rAcc(1)),
++                  reinterpret_cast<uint32_t&>(rAcc(2)),
++                  reinterpret_cast<uint32_t&>(rAcc(3)),
++                  reinterpret_cast<uint32_t&>(rAcc(4)),
++                  reinterpret_cast<uint32_t&>(rAcc(5)),
++                  reinterpret_cast<uint32_t&>(rAcc(6)),
++                  reinterpret_cast<uint32_t&>(rAcc(7)));
++            }
++#else
++#error "Partitioned TMEM loads require two or four epilogue warpgroups"
++#endif
++            else {
++              copy(tiled_t2r, tTR_tAcc_mn, tTR_rAcc);
++            }
++#if defined(FMMS_DIAGNOSE_PARTITIONED_TMEM_LOAD)
++            auto actual = coalesce(tTR_rAcc);
++            auto expected = coalesce(reference);
++#if defined(FMMS_FOUR_EPILOGUE_WARPGROUPS)
++            constexpr int WarpgroupCount = 4;
++            constexpr int FragmentStride = 1;
++#else
++            constexpr int WarpgroupCount = 2;
++            constexpr int FragmentStride = 1;
++#endif
++#if defined(FMMS_FOUR_EPILOGUE_WARPGROUPS)
++            int fragment_begin = 4 * epilogue_warpgroup_idx;
++            int fragment_end = fragment_begin + 4;
++#else
++            int fragment_begin = 8 * epilogue_warpgroup_idx;
++            int fragment_end = fragment_begin + 8;
++#endif
++            for (int fragment = fragment_begin;
++                 fragment < fragment_end;
++                 fragment += FragmentStride) {
++              int local_fragment = fragment - fragment_begin;
++              uint32_t actual_bits =
++                  reinterpret_cast<uint32_t&>(actual(local_fragment));
++              uint32_t expected_bits =
++                  reinterpret_cast<uint32_t&>(expected(fragment));
++              if (actual_bits != expected_bits) {
++                printf(
++                    "group=%d lane=%d fragment=%d actual=%08x expected=%08x\\n",
++                    epilogue_warpgroup_idx,
++                    lane_idx,
++                    fragment,
++                    actual_bits,
++                    expected_bits);
++                asm volatile("trap;");
++              }
++            }
++#if defined(FMMS_DIAGNOSE_PARTITIONED_USE_REFERENCE)
++            copy(tiled_t2r, tTR_tAcc_mn, tTR_rAcc);
++#endif
++#endif
++#else
+             copy(tiled_t2r, tTR_tAcc_mn, tTR_rAcc);
++#endif
+           }
+ 
+           // After the last tmem load, signal that tmem buffer is consumed and empty
+           if (do_acc_release) {
+             cutlass::arch::fence_view_async_tmem_load();
+             acc_pipeline.consumer_release(acc_pipe_consumer_state);
+             ++acc_pipe_consumer_state;
+           }
+ 
+           // Vectorized fragment loop with visitor callback entry point
+-          CUTLASS_PRAGMA_UNROLL
+-          for (int epi_v = 0; epi_v < size(tTR_rD_frg); ++epi_v) {
+-            tTR_rD_frg(epi_v) = cst_callbacks.visit(tTR_rAcc_frg(epi_v), epi_v, epi_m, epi_n);
++          if (owns_epi_subtile) {
++            CUTLASS_PRAGMA_UNROLL
++            for (int epi_v = 0; epi_v < size(tTR_rD_frg); ++epi_v) {
++              tTR_rD_frg(epi_v) = cst_callbacks.visit(tTR_rAcc_frg(epi_v), epi_v, epi_m, epi_n);
++            }
+           }
+ 
+           // The latest we can delay the TMA store is right before the smem store of the next iteration

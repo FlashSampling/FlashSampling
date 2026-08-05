@@ -266,6 +266,13 @@ Treat a CuTe DSL implementation as a kernel-development project rather than an i
 Choose the next action from the measured result of each step.
 Stop adding complexity if a technique does not materially reduce cold or adjacent-change wall time.
 
+The subsequent multi-warpgroup experiments validate the cold single-writer expectation but expose a separate consumer-load problem.
+Each new fingerprint compiled exactly once in the build gate, committed successfully, and reported cache hits in every timing and NCU consumer.
+The first candidate load in concurrent NCU workers nevertheless took 140.77 to 337.05 seconds for several workflows, while the next load in the same worker took 0.10 to 0.21 seconds.
+The delay therefore remains inside a reported cache-hit extension load and is not duplicate compiler work.
+The workflows also rebuilt identical Modal image layers concurrently for the two NCU consumers.
+Future infrastructure work should distinguish shared-extension lock waiting, dynamic loader time, and image-build fan-out before making another cache claim.
+
 ## Phase 1: precise build caching and friction telemetry
 
 Phase 1 is the only implementation authorized by this finding initially.

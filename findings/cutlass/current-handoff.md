@@ -3,9 +3,9 @@
 Read the directory policy and the consolidated Gate 4 recovery finding before continuing the CUTLASS implementation.
 This file tracks the mutable handoff and should be updated when the active gate, blocker, or production dispatch changes.
 
-Checkpoint date: 2026-08-04.
+Checkpoint date: 2026-08-05.
 Branch: `cutlass-kernel`.
-Rebased commit: `06c69f8`.
+HEAD commit: `8195478`.
 
 ## Required experiment driver
 
@@ -39,31 +39,28 @@ Read [the CUTLASS compilation design guide](../../docs/cutlass-compilation.md) b
 ## Current state
 
 Gates 0 and 1 are complete, and the production B200 greedy provider from Gate 2 remains correct and performant.
-The original Gate 4 Gumbel-Max provider passed deterministic and distribution checks, but its high-H performance remains a no-go.
-The register-liveness investigation has now produced custom experimental paths that remove the generic EVT's persistent row state and global atomics.
-None of those paths has been promoted into the production `fused-cutlass` provider.
+The working-tree Gate 4 provider now uses immediate per-fragment reduction, direct per-CTA candidate stores, and a shape-dispatched epilogue.
+H<=64 uses the accurate single-warpgroup kernel.
+H=128 and H=256 use four physical consumer warpgroups with contiguous four-value TMEM loads and no accumulator shared-memory staging.
+All other H values retain the generic provider because they have not received matched schedule validation.
 
-The best completed timing candidate is `warpgroup-fastmath`.
-It uses the rolled immediate reduction, direct per-CTA candidate stores, `__logf`, and `__fdividef`.
-It matches Triton at H=64 and reaches 1.11x and 1.21x Triton at D=8,192 for H=128 and H=256, but it remains 1.73x and 1.89x Triton at D=4,096.
-It still executes the dynamic local-memory path associated with rolled `accumulators[i]` access.
+The partial-load path is correct.
+The epilogue normalizes physical consumer threads with `(threadIdx.x - 128) % ThreadCount`, which accounts for the four producer warps.
+Each four-group consumer writes its raw x4 TMEM load into fixed registers 0 through 3.
+The callback uses a runtime global fragment base only for output indexing and accesses accumulator registers with compile-time-unrolled local indices.
+This removes the local-memory materialization caused by `rAcc(runtime_group * count + i)`.
 
-The best completed spill-free candidate is `warpgroup-fastlog-smem`.
-It stages each constant-index accumulator fragment through shared memory, allocates 55 to 59 registers in the matched profiles, and reports zero dynamic local loads and stores.
-It remains 1.22x and 1.32x Triton at D=8,192 and 1.89x and 2.11x Triton at D=4,096 for H=128 and H=256.
-This proves that the CUTLASS spill can be removed, but also proves that spill removal alone does not recover Triton's latency hiding.
+The selected accurate dispatch passes all nine deterministic production cases and the 10-million-sample large-vocabulary distribution gate.
+The distribution result is p=0.903758 with reduced chi-squared 0.994756.
+The corresponding `__logf` and `__fdividef` production probe failed at p=0.000415 and is rejected.
 
-The latest `warpgroup-fastmath-smem` candidate combines that zero-local-memory path with fast division.
-It reports zero dynamic local loads and stores, allocates 54 to 58 registers, and measures 1.12x and 1.20x Triton at D=8,192 and 1.63x and 1.85x at D=4,096 for H=128 and H=256.
-Fast division removes 4.47% to 4.73% of executed instructions relative to the spill-free fast-log control, but issue activity remains 18.52% to 20.69%.
-The result leaves the stock epilogue schedule, rather than arithmetic instruction count or register spilling, as the next bounded target.
+The accurate candidates measure 1.12x Triton at D=4,096 and H=64, 1.04x at H=128, and 1.05x at H=256 in the focused interleaved packets.
+They measure 0.99x, 0.89x, and 0.78x Triton at D=8,192 for the same H values.
+The legacy pointwise 1.20x-greedy production gate still fails because accurate Gumbel generation reaches 1.81x greedy at D=4,096 and H=256.
+Gate 4 therefore remains a performance no-go under that declared threshold even though the loading and scheduling defect is fixed.
+Gate 5 remains blocked by the Gate 4 feasibility decision.
 
-The four-output Philox candidate is rejected.
-It passed its focused exact-winner check under the new four-stream mapping, but measured 1.79x and 2.06x Triton at D=8,192 and 2.95x and 3.08x Triton at D=4,096 for H=128 and H=256.
-It reports zero dynamic local loads and stores, allocates 74 registers at D=4,096 and 86 registers at D=8,192, and reaches only 7.32% to 11.42% issue activity.
-
-Gate 4 therefore remains experimental and Gate 5 remains blocked.
-The current production provider must not be described as containing the custom immediate-reduction, fast-math, or Philox4 paths.
+See the multi-warpgroup epilogue finding for the ownership correction, raw partial loads, fixed-register change, no-staging result, numerical rejection, production validation, and profiler evidence.
 
 ## What the profiling established
 
@@ -75,11 +72,14 @@ The generic CUTLASS row-reduction callback retains 128 packed value/index candid
 
 The custom immediate reduction removes that persistent row state.
 Its direct-store form emits one candidate per physical CTA and output column into a unique slot, uses no global atomics in the GEMM callback, and retains the existing Stage 2 merge.
-The remaining rolled fragment access produces exactly one warp-level local load per output element.
+The selected four-group path partitions the 16-value TMEM fragment into four contiguous x4 loads.
+Fixed local register destinations and fixed local callback indices eliminate dynamic local traffic at D=4,096.
+Removing the redundant accumulator shared-memory stage raises D=4,096 and H=256 issue activity to 52.82% for the fast-log diagnostic and 56.66% for the accurate kernel.
 
-Constant-index shared-memory staging removes all measured local traffic, but the stock SM100 TMA epilogue still supplies only 128 consumer threads.
-Together with four infrastructure warps, the complete CUTLASS kernel launches 256 threads, or eight warps, compared with Triton's 384 threads, or twelve warps.
-The zero-local CUTLASS profiles show materially lower issue activity than Triton, so the remaining gap is associated with insufficient latency hiding in this epilogue schedule rather than an unavoidable CUTLASS GEMM limitation.
+At D=4,096 and H=256, the accurate kernel reports 72 registers, zero local traffic, and 266.78 million instructions.
+Its 527.200-microsecond NCU duration versus Triton's 459.520 microseconds isolates the remaining gap to accurate Gumbel arithmetic.
+At D=8,192 and H=256, accurate libdevice arithmetic produces 1,026,048 local loads and 384,768 local stores, but the kernel still measures 525.792 microseconds versus Triton's 639.424 microseconds.
+An accurate no-inline probe retained the same local traffic, increased instructions to 259.52 million, and slowed the kernel to 584.096 microseconds, so function outlining is rejected.
 
 See the consolidated Gate 4 performance-recovery finding for the full causal chain and matched counters.
 
@@ -89,49 +89,34 @@ The table reports CUTLASS latency divided by the interleaved Triton latency on B
 
 | Candidate | D | H=64 | H=128 | H=256 | Local-memory result |
 | --- | ---: | ---: | ---: | ---: | --- |
-| `warpgroup-fastmath-smem` | 8,192 | 0.99x | 1.12x | 1.20x | Zero dynamic local loads and stores |
-| `warpgroup-fastmath-smem` | 4,096 | 1.03x | 1.63x | 1.85x | Zero dynamic local loads and stores |
-| `warpgroup-fastmath` | 8,192 | 0.99x | 1.11x | 1.21x | Dynamic local loads and stores remain |
-| `warpgroup-fastmath` | 4,096 | 0.98x | 1.73x | 1.89x | Dynamic local loads and stores remain |
-| `warpgroup-fastlog-smem` | 8,192 | 1.02x | 1.22x | 1.32x | Zero dynamic local loads and stores |
-| `warpgroup-fastlog-smem` | 4,096 | 1.07x | 1.89x | 2.11x | Zero dynamic local loads and stores |
-| `warpgroup-n64` | 8,192 | 0.99x | 1.15x | 1.26x | Dynamic local loads and stores remain |
-| `warpgroup-n64` | 4,096 | 1.02x | 1.76x | 2.02x | Dynamic local loads and stores remain |
-| `warpgroup-philox4` | 8,192 | 0.99x | 1.79x | 2.06x | Zero dynamic local loads and stores |
-| `warpgroup-philox4` | 4,096 | 0.99x | 2.95x | 3.08x | Zero dynamic local loads and stores |
+| Accurate selected dispatch | 8,192 | 0.99x | 0.89x | 0.78x | D=8,192 accurate path still has libdevice local traffic |
+| Accurate selected dispatch | 4,096 | 1.12x | 1.04x | 1.05x | Zero dynamic local loads and stores in the profiled H=256 cell |
+| Fast-log selected-shape diagnostic | 8,192 | 0.93x to 0.99x | 0.87x to 0.94x | 0.75x to 0.78x | Rejected by distribution gate |
+| Fast-log selected-shape diagnostic | 4,096 | 0.99x to 1.09x | 0.86x to 0.98x | 0.89x to 0.93x | Rejected by distribution gate |
 
 Each completed candidate passed its focused exact-winner check.
-These checks are narrower than the full production Gate 4 deterministic and distribution suites.
+The accurate selected dispatch also passed the full production deterministic and distribution suites.
 
 ## Production integration state
 
-`src/fused_mm_sampling/cutlass_impl.py::_get_sampling_module()` still builds the earlier generic Gate 4 implementation.
+`src/fused_mm_sampling/cutlass_impl.py::_get_sampling_module()` now selects `warpgroup` for H<=64 and `warpgroup-4wg-partitioned` for H=128 and H=256.
+It selects the generic module for unmeasured intermediate H values.
 The experimental surface is consolidated into one CPU-importable compile-time registry, one generic sampling API, one timing runner, and one NCU runner.
-The root `Makefile` exposes one timing gate and one NCU gate parameterized by `CUTLASS_VARIANT`.
-Only `warpgroup-fastmath`, `warpgroup-fastlog-smem`, and their combined `warpgroup-fastmath-smem` candidate remain registered.
-The rejected one-off APIs, loaders, Modal wrappers, Make targets, C++ branches, and findings were removed after their evidence was consolidated.
+The root `Makefile` exposes timing, build, and NCU gates parameterized by `CUTLASS_VARIANT`.
+The registry retains staged, partitioned, accurate, and fast-log controls needed to reproduce the loading and numerical decisions.
 The specialized production SASS audit and Triton compiler-dump runners remain separate because their artifact protocols differ from candidate timing and NCU.
 
-The complete Gate 4 production matrix, the large-vocabulary 10-million-sample distribution test, and the production performance gate have not been rerun with any custom candidate.
-
-The consolidated runners passed their initial B200 validation on both retained controls and then ran the combined candidate without adding another runner or Make gate.
-Each variant compiled from the shared runner, passed both focused exact-winner cases, and completed all six interleaved timing cells in its own result directory.
-The local infrastructure suite passed all 21 tests, and registry validation rejected an unknown variant before any Modal allocation.
-This validates the consolidated experiment plumbing without promoting either candidate into production.
+The final accurate production dispatch passed all nine deterministic cases and the 10-million-sample distribution test.
+The production performance packet completed all 18 provider-shape pairs but failed the predeclared 1.20x-greedy threshold with a worst ratio of 1.81x.
+The local infrastructure suite passes all 34 tests.
 
 ## Next steps
 
-1. Start the custom SM100 epilogue-schedule work with an ownership-layout gate for more consumer warpgroups.
-   The combined fast-math spill-free result shows that further arithmetic changes inside the same four consumer warps are unlikely to close the D=4,096 gap.
-2. Add a pipeline and barrier correctness gate before integrating the Gumbel callback into that schedule.
-   Do not change the stock `ThreadCount=128` constant without independently validating ownership and synchronization.
-3. Run the resulting candidate two or three times with CUTLASS and Triton interleaved in the same remote function.
-   Require cross-run agreement before applying the pointwise 1.20x performance gate.
-4. Promote one selected dispatch into `_get_sampling_module()` only after it passes the timing gate.
-   Do not leave production behavior dependent on an experimental Make target.
-5. Rerun the full deterministic, distribution, B200 correctness, and performance suites after promotion.
-   Fast logarithm or fast division requires the 10-million-sample large-vocabulary distribution check, not only exact winner checks against a matching reference.
-6. Begin Gate 5 only after Gate 4 is promoted or the project explicitly changes scope to a greedy-only CUTLASS provider.
+1. Keep accurate `logf` and division in the production dispatch unless a replacement passes the same 10-million-sample gate.
+2. Target accurate Gumbel instruction cost at D=4,096 and H=256, where the selected kernel has zero local traffic and issue activity already exceeds Triton's.
+3. Target the accurate D=8,192 libdevice spill path, which executes 1,026,048 local loads and 384,768 local stores at H=256.
+4. Reconfirm any arithmetic change with deterministic, distribution, interleaved timing, and matched NCU evidence.
+5. Begin Gate 5 only after Gate 4 passes the declared greedy-performance threshold or the project explicitly changes that criterion.
 
 ## Commands and evidence
 
@@ -145,8 +130,8 @@ make modal-cutlass GATE=gumbel-ncu
 Run any registered candidate by setting `CUTLASS_VARIANT`:
 
 ```bash
-make modal-cutlass GATE=gumbel-experiment CUTLASS_VARIANT=warpgroup-fastmath-smem
-make modal-cutlass GATE=gumbel-experiment-ncu CUTLASS_VARIANT=warpgroup-fastmath-smem CUTLASS_HIDDEN_SIZE=4096 CUTLASS_N_HIDDEN_STATES=128
+make modal-cutlass GATE=gumbel-experiment CUTLASS_VARIANT=warpgroup-4wg-partitioned
+make modal-cutlass GATE=gumbel-experiment-ncu CUTLASS_VARIANT=warpgroup-4wg-partitioned CUTLASS_HIDDEN_SIZE=4096 CUTLASS_N_HIDDEN_STATES=256
 ```
 
 The shared runner writes current candidate packets under `benchmarking/modal-results/cutlass/experiments/<variant>/`.
@@ -158,14 +143,23 @@ See the consolidated Gate 4 performance-recovery finding for the experimental se
 
 ## Repository checkpoint
 
-The working tree contains staged and unstaged CUTLASS implementation, experiment-runner, Makefile, and findings changes.
-No checkpoint commit has been created.
-`stash@{0}` is the rebase autostash and is intentionally retained.
-Do not pop or drop it without first auditing its overlap with the current working tree.
+The working tree contains the uncommitted multi-warpgroup ownership and pipeline gates, partial-TMEM-load CUTLASS patch, registered schedule variants, production shape dispatch, infrastructure test update, Makefile routing, the consolidated finding, and this handoff update.
+`ws.code-workspace` contains an unrelated user change and must remain untouched.
+No checkpoint commit has been created for this gate.
+`stash@{0}` and `stash@{1}` are named pre-update safety stashes and are intentionally retained.
+Do not pop or drop either stash without first auditing its overlap with the current working tree.
 
 ## Production dispatch
 
 The B200 greedy provider emits one packed candidate per physical CTA and uses a cooperative Stage 2 merge.
+
+The working-tree Gumbel provider uses accurate logarithm and division.
+
+- H<=64 uses the single-warpgroup immediate-reduction module.
+- H=128 and H=256 use four epilogue warpgroups with contiguous x4 TMEM loads and no accumulator shared-memory staging.
+- Other H values use the generic module until they receive matched validation.
+
+The greedy schedule remains:
 
 - H<=64 uses `128x64x128` with cluster `(2,1,1)`.
 - H=128 uses K64 with cluster `(4,1,1)` at D=4,096 and K128 with cluster `(2,1,1)` at D=8,192.
@@ -200,7 +194,7 @@ Stop stale interrupted Modal apps before relaunching to avoid duplicate builds, 
 
 CUTLASS PyTorch JIT extensions must mount the shared `fused-mm-sample` volume and call `set_volume_caches()`.
 This places `TORCH_EXTENSIONS_DIR` on the shared cache so workers reuse multi-minute SM90 and SM100 builds.
-The extension fingerprint follows recursive quoted local includes and also hashes compiler flags, architecture, both applied patches, the pinned CUTLASS revision, and Python, Torch, and CUDA ABI identities.
+The extension fingerprint follows recursive quoted local includes and also hashes compiler flags, architecture, all applied patches, the pinned CUTLASS revision, and Python, Torch, and CUDA ABI identities.
 Standalone correctness harnesses are excluded so their edits do not invalidate production extensions.
 Keep architecture and feature variants under distinct prefixes, and do not launch concurrent first builds of the same content-keyed extension.
 Use `make cutlass-dev-metrics` to summarize end-to-end gate duration, startup, extension load time, cache state, failures, and residual time.

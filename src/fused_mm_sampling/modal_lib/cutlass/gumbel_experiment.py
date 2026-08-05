@@ -26,7 +26,7 @@ REPETITIONS = 20
 
 
 @app.function(gpu="B200", image=image, volumes=make_volumes(), timeout=60 * 60)
-def record_sm100(variant: str) -> dict:
+def record_sm100(variant: str, comparison_variant: str = "") -> dict:
     import torch
 
     from fused_mm_sampling import cutlass_impl
@@ -44,16 +44,45 @@ def record_sm100(variant: str) -> dict:
             **kwargs, variant=variant
         )
 
-    emit_dev_event("remote_start", variant=variant)
+    comparison = None
+    if comparison_variant:
+        get_cutlass_sampling_experiment(comparison_variant)
+
+        def comparison(**kwargs):
+            return cutlass_impl.fused_mm_sample_cutlass_experimental(
+                **kwargs, variant=comparison_variant
+            )
+
+    emit_dev_event(
+        "remote_start",
+        variant=variant,
+        comparison_variant=comparison_variant,
+    )
     cutlass_impl._get_experimental_sampling_module(variant)
+    if comparison_variant:
+        cutlass_impl._get_experimental_sampling_module(comparison_variant)
     with timed_dev_stage("correctness", variant=variant):
         correctness = _run_reference_cases(candidate, torch)
     with timed_dev_stage("timing", variant=variant):
-        rows = _run_timings(candidate, get_sampler, torch, variant)
+        rows = _run_timings(
+            candidate,
+            comparison,
+            get_sampler,
+            torch,
+            variant,
+            comparison_variant,
+        )
     return {"correctness": correctness, "timings": rows}
 
 
-def _run_timings(candidate, get_sampler, torch, variant: str) -> list[dict]:
+def _run_timings(
+    candidate,
+    comparison,
+    get_sampler,
+    torch,
+    variant: str,
+    comparison_variant: str,
+) -> list[dict]:
     torch.manual_seed(0)
     temperature = torch.tensor(1.0, device="cuda")
     cache = torch.empty(256 * 1024 * 1024 // 4, dtype=torch.int, device="cuda")
@@ -78,6 +107,8 @@ def _run_timings(candidate, get_sampler, torch, variant: str) -> list[dict]:
                 variant: lambda: candidate(**common),
                 "triton": lambda: triton_sampler.sample(**common),
             }
+            if comparison is not None:
+                providers[comparison_variant] = lambda: comparison(**common)
             for _ in range(5):
                 for function in providers.values():
                     function()
@@ -152,7 +183,18 @@ def _run_reference_cases(candidate, torch) -> list[dict]:
             }
         )
         if not passed:
-            raise RuntimeError(f"CUTLASS experiment reference mismatch at H={hidden_count}")
+            mismatches = [
+                (hidden, expected_index, actual_index)
+                for hidden, (expected_index, actual_index) in enumerate(
+                    zip(expected, actual, strict=True)
+                )
+                if expected_index != actual_index
+            ]
+            raise RuntimeError(
+                "CUTLASS experiment reference mismatch "
+                f"at H={hidden_count}: {len(mismatches)} mismatches, "
+                f"all={mismatches}"
+            )
     return rows
 
 
@@ -180,11 +222,17 @@ def _philox(seed: int, sample: int, hidden: int, vocab: int) -> tuple[int, ...]:
 
 
 @app.local_entrypoint()
-def main(variant: str, output_dir: str) -> None:
+def main(
+    variant: str,
+    output_dir: str,
+    comparison_variant: str = "",
+) -> None:
     get_cutlass_sampling_experiment(variant)
+    if comparison_variant:
+        get_cutlass_sampling_experiment(comparison_variant)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    result = record_sm100.remote(variant)
+    result = record_sm100.remote(variant, comparison_variant)
     correctness = pd.DataFrame(result["correctness"])
     correctness.to_csv(output_dir / "correctness.csv", index=False)
     timings = pd.DataFrame(result["timings"])

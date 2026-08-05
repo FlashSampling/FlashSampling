@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <iostream>
+#include <string>
 #include <vector>
 
 #include <cuda_bf16.h>
@@ -34,6 +35,20 @@ constexpr int kM = FMMS_TILE_M;
 constexpr int kN = FMMS_TILE_N;
 constexpr int kK = FMMS_TILE_K;
 
+#ifndef FMMS_PROBLEM_M
+#define FMMS_PROBLEM_M FMMS_TILE_M
+#endif
+#ifndef FMMS_PROBLEM_N
+#define FMMS_PROBLEM_N FMMS_TILE_N
+#endif
+#ifndef FMMS_PROBLEM_K
+#define FMMS_PROBLEM_K FMMS_TILE_K
+#endif
+
+constexpr int kProblemM = FMMS_PROBLEM_M;
+constexpr int kProblemN = FMMS_PROBLEM_N;
+constexpr int kProblemK = FMMS_PROBLEM_K;
+
 void check_cuda(cudaError_t status, char const* operation) {
   if (status != cudaSuccess) {
     std::cerr << operation << " failed: " << cudaGetErrorString(status) << '\n';
@@ -50,13 +65,17 @@ void check_cutlass(cutlass::Status status, char const* operation) {
 
 struct FragmentOwnershipEncoder {
   struct SharedStorage {};
-  struct Arguments {};
-  struct Params {};
+  struct Arguments {
+    uint32_t* owner_counts = nullptr;
+  };
+  struct Params {
+    uint32_t* owner_counts;
+  };
 
   template <class ProblemShape>
   static constexpr Params to_underlying_arguments(
-      ProblemShape const&, Arguments const&, void*) {
-    return {};
+      ProblemShape const&, Arguments const& arguments, void*) {
+    return {arguments.owner_counts};
   }
 
   template <class ProblemShape>
@@ -87,7 +106,7 @@ struct FragmentOwnershipEncoder {
     return false;
   }
 
-  CUTLASS_HOST_DEVICE FragmentOwnershipEncoder() : params() {}
+  CUTLASS_HOST_DEVICE FragmentOwnershipEncoder() : params{nullptr} {}
 
   CUTLASS_HOST_DEVICE FragmentOwnershipEncoder(
       Params const& params_,
@@ -104,12 +123,14 @@ struct FragmentOwnershipEncoder {
 
   struct ConsumerStoreCallbacks
       : cutlass::epilogue::fusion::EmptyConsumerStoreCallbacks {
+    uint32_t* owner_counts;
+
     template <
         typename ElementAccumulator,
         typename ElementInput,
         int FragmentSize>
     CUTLASS_DEVICE cutlass::Array<float, FragmentSize> visit(
-        cutlass::Array<ElementAccumulator, FragmentSize> const&,
+        cutlass::Array<ElementAccumulator, FragmentSize> const& accumulators,
         int epi_v,
         int epi_m,
         int epi_n,
@@ -117,15 +138,58 @@ struct FragmentOwnershipEncoder {
       cutlass::Array<float, FragmentSize> output;
       CUTLASS_PRAGMA_UNROLL
       for (int fragment = 0; fragment < FragmentSize; ++fragment) {
+#if defined(FMMS_VALIDATE_PIPELINE)
+        output[fragment] = float(accumulators[fragment]);
+#else
+#if defined(FMMS_VALIDATE_OWNER_COUNTS)
+        static_assert(kM == 256 && kN == 128);
+        int consumer_thread = int(threadIdx.x) - 128;
+        int consumer_warpgroup = consumer_thread / 128;
+        consumer_thread %= 128;
+        int m = consumer_thread % 128 + 128 * block_rank_in_cluster();
+        int n = FragmentSize * epi_n + fragment;
+#if defined(FMMS_FIVE_EPILOGUE_WARPGROUPS)
+        if (fragment % 5 == consumer_warpgroup) {
+          atomicAdd(owner_counts + m * kN + n, 1u);
+          atomicOr(
+              owner_counts + m * kN + n,
+              1u << (8 + consumer_warpgroup));
+        }
+#elif defined(FMMS_FOUR_EPILOGUE_WARPGROUPS)
+        if (fragment % 4 == consumer_warpgroup) {
+          atomicAdd(owner_counts + m * kN + n, 1u);
+          atomicOr(
+              owner_counts + m * kN + n,
+              1u << (8 + consumer_warpgroup));
+        }
+#elif defined(FMMS_TWO_EPILOGUE_WARPGROUPS_STRIPED)
+        if (fragment % 2 == consumer_warpgroup) {
+          atomicAdd(owner_counts + m * kN + n, 1u);
+          atomicOr(
+              owner_counts + m * kN + n,
+              1u << (8 + consumer_warpgroup));
+        }
+#else
+        atomicAdd(owner_counts + m * kN + n, 1u);
+        atomicOr(
+            owner_counts + m * kN + n,
+            1u << (8 + consumer_warpgroup));
+#endif
+#endif
         // The complete record remains below 2^24 and is therefore exactly
         // representable in the diagnostic FP32 output.
         uint32_t code = uint32_t(threadIdx.x)
+#if defined(FMMS_VALIDATE_OWNER_COUNTS)
+            | (uint32_t(fragment) << 9)
+#else
             | (uint32_t(fragment) << 8)
+#endif
             | (uint32_t(epi_v) << 13)
             | (uint32_t(epi_m) << 15)
             | (uint32_t(epi_n) << 18)
             | (uint32_t(block_rank_in_cluster() & 0x3) << 22);
         output[fragment] = float(code);
+#endif
       }
       return output;
     }
@@ -134,7 +198,7 @@ struct FragmentOwnershipEncoder {
   template <bool ReferenceSrc, class... Args>
   CUTLASS_DEVICE auto get_consumer_store_callbacks(
       cutlass::epilogue::fusion::detail::ConsumerStoreArgs<Args...> const&) {
-    return ConsumerStoreCallbacks{};
+    return ConsumerStoreCallbacks{{}, params.owner_counts};
   }
 };
 
@@ -228,43 +292,112 @@ using GemmKernel = cutlass::gemm::kernel::GemmUniversal<
     CollectiveEpilogue>;
 using Gemm = cutlass::gemm::device::GemmUniversalAdapter<GemmKernel>;
 
-void run_diagnostic() {
+void run_diagnostic(int iterations) {
   ElementA* matrix_a;
   ElementB* matrix_b;
   ElementD* matrix_d;
+#if defined(FMMS_VALIDATE_OWNER_COUNTS)
+  uint32_t* owner_counts;
+#endif
   check_cuda(
-      cudaMalloc(&matrix_a, kM * kK * sizeof(ElementA)),
+      cudaMalloc(&matrix_a, kProblemM * kProblemK * sizeof(ElementA)),
       "cudaMalloc(matrix_a)");
   check_cuda(
-      cudaMalloc(&matrix_b, kK * kN * sizeof(ElementB)),
+      cudaMalloc(&matrix_b, kProblemK * kProblemN * sizeof(ElementB)),
       "cudaMalloc(matrix_b)");
   check_cuda(
-      cudaMalloc(&matrix_d, kM * kN * sizeof(ElementD)),
+      cudaMalloc(&matrix_d, kProblemM * kProblemN * sizeof(ElementD)),
       "cudaMalloc(matrix_d)");
-  check_cuda(cudaMemset(matrix_a, 0, kM * kK * sizeof(ElementA)), "zero A");
-  check_cuda(cudaMemset(matrix_b, 0, kK * kN * sizeof(ElementB)), "zero B");
-  check_cuda(cudaMemset(matrix_d, 0xff, kM * kN * sizeof(ElementD)), "fill D");
+#if defined(FMMS_VALIDATE_OWNER_COUNTS)
+  check_cuda(
+      cudaMalloc(&owner_counts, kProblemM * kProblemN * sizeof(uint32_t)),
+      "cudaMalloc(owner_counts)");
+#endif
+#if defined(FMMS_VALIDATE_PIPELINE)
+  std::vector<ElementA> host_a(kProblemM * kProblemK, ElementA(1.0f));
+  std::vector<ElementB> host_b(kProblemK * kProblemN, ElementB(1.0f));
+#elif defined(FMMS_DIAGNOSE_PARTITIONED_TMEM_LOAD)
+  std::vector<ElementA> host_a(kProblemM * kProblemK);
+  std::vector<ElementB> host_b(kProblemK * kProblemN);
+  for (int m = 0; m < kProblemM; ++m) {
+    for (int k = 0; k < kProblemK; ++k) {
+      host_a[m * kProblemK + k] = ElementA(1 + m % 7);
+    }
+  }
+  for (int k = 0; k < kProblemK; ++k) {
+    for (int n = 0; n < kProblemN; ++n) {
+      host_b[k * kProblemN + n] = ElementB(1 + n % 11);
+    }
+  }
+#endif
+#if defined(FMMS_VALIDATE_PIPELINE) || \
+    defined(FMMS_DIAGNOSE_PARTITIONED_TMEM_LOAD)
+  check_cuda(
+      cudaMemcpy(
+          matrix_a,
+          host_a.data(),
+          host_a.size() * sizeof(ElementA),
+          cudaMemcpyHostToDevice),
+      "initialize A");
+  check_cuda(
+      cudaMemcpy(
+          matrix_b,
+          host_b.data(),
+          host_b.size() * sizeof(ElementB),
+          cudaMemcpyHostToDevice),
+      "initialize B");
+#else
+  check_cuda(
+      cudaMemset(matrix_a, 0, kProblemM * kProblemK * sizeof(ElementA)),
+      "zero A");
+  check_cuda(
+      cudaMemset(matrix_b, 0, kProblemK * kProblemN * sizeof(ElementB)),
+      "zero B");
+#endif
+  check_cuda(
+      cudaMemset(matrix_d, 0xff, kProblemM * kProblemN * sizeof(ElementD)),
+      "fill D");
+#if defined(FMMS_VALIDATE_OWNER_COUNTS)
+  check_cuda(
+      cudaMemset(
+          owner_counts,
+          0,
+          kProblemM * kProblemN * sizeof(uint32_t)),
+      "zero owner counts");
+#endif
 
   using StrideA = typename GemmKernel::StrideA;
   using StrideB = typename GemmKernel::StrideB;
   using StrideC = typename GemmKernel::StrideC;
   using StrideD = typename GemmKernel::StrideD;
   StrideA stride_a =
-      cutlass::make_cute_packed_stride(StrideA{}, make_shape(kM, kK, 1));
+      cutlass::make_cute_packed_stride(
+          StrideA{}, make_shape(kProblemM, kProblemK, 1));
   StrideB stride_b =
-      cutlass::make_cute_packed_stride(StrideB{}, make_shape(kN, kK, 1));
+      cutlass::make_cute_packed_stride(
+          StrideB{}, make_shape(kProblemN, kProblemK, 1));
   StrideC stride_c =
-      cutlass::make_cute_packed_stride(StrideC{}, make_shape(kM, kN, 1));
+      cutlass::make_cute_packed_stride(
+          StrideC{}, make_shape(kProblemM, kProblemN, 1));
   StrideD stride_d =
-      cutlass::make_cute_packed_stride(StrideD{}, make_shape(kM, kN, 1));
+      cutlass::make_cute_packed_stride(
+          StrideD{}, make_shape(kProblemM, kProblemN, 1));
 
   cutlass::KernelHardwareInfo hardware_info =
       cutlass::KernelHardwareInfo::make_kernel_hardware_info<GemmKernel>(0);
+  typename DiagnosticEVT::Arguments evt_arguments{
+      {},
+#if defined(FMMS_VALIDATE_OWNER_COUNTS)
+      {owner_counts}
+#else
+      {}
+#endif
+  };
   typename Gemm::Arguments arguments{
       cutlass::gemm::GemmUniversalMode::kGemm,
-      {kM, kN, kK, 1},
+      {kProblemM, kProblemN, kProblemK, 1},
       {matrix_a, stride_a, matrix_b, stride_b},
-      {{}, nullptr, stride_c, matrix_d, stride_d},
+      {evt_arguments, nullptr, stride_c, matrix_d, stride_d},
       hardware_info};
 
   Gemm gemm;
@@ -275,10 +408,12 @@ void run_diagnostic() {
   }
   check_cutlass(gemm.can_implement(arguments), "can_implement");
   check_cutlass(gemm.initialize(arguments, workspace), "initialize");
-  check_cutlass(gemm.run(), "run");
+  for (int iteration = 0; iteration < iterations; ++iteration) {
+    check_cutlass(gemm.run(), "run");
+  }
   check_cuda(cudaDeviceSynchronize(), "synchronize");
 
-  std::vector<ElementD> output(kM * kN);
+  std::vector<ElementD> output(kProblemM * kProblemN);
   check_cuda(
       cudaMemcpy(
           output.data(),
@@ -286,25 +421,67 @@ void run_diagnostic() {
           output.size() * sizeof(ElementD),
           cudaMemcpyDeviceToHost),
       "copy output");
+#if defined(FMMS_VALIDATE_OWNER_COUNTS)
+  std::vector<uint32_t> host_owner_counts(kProblemM * kProblemN);
+  check_cuda(
+      cudaMemcpy(
+          host_owner_counts.data(),
+          owner_counts,
+          host_owner_counts.size() * sizeof(uint32_t),
+          cudaMemcpyDeviceToHost),
+      "copy owner counts");
+#endif
 
-  std::cout << "m,n,thread,fragment,epi_v,epi_m,epi_n,cta\n";
-  for (int m = 0; m < kM; ++m) {
-    for (int n = 0; n < kN; ++n) {
-      uint32_t code = uint32_t(output[m * kN + n]);
+#if defined(FMMS_VALIDATE_PIPELINE)
+  for (ElementD value : output) {
+    if (value != ElementD(kProblemK)) {
+      std::cerr << "Unexpected output: " << value
+                << ", expected " << kProblemK << '\n';
+      std::exit(EXIT_FAILURE);
+    }
+  }
+  std::cout << "{\"passed\":true,\"iterations\":" << iterations
+            << ",\"m\":" << kProblemM
+            << ",\"n\":" << kProblemN
+            << ",\"k\":" << kProblemK
+            << ",\"coordinates\":" << output.size() << "}\n";
+#else
+  std::cout << "m,n,thread,fragment,epi_v,epi_m,epi_n,cta";
+#if defined(FMMS_VALIDATE_OWNER_COUNTS)
+  std::cout << ",owner_count,owner_group_mask";
+#endif
+  std::cout << '\n';
+  for (int m = 0; m < kProblemM; ++m) {
+    for (int n = 0; n < kProblemN; ++n) {
+      uint32_t code = uint32_t(output[m * kProblemN + n]);
+#if defined(FMMS_VALIDATE_OWNER_COUNTS)
+      uint32_t thread = code & 0x1ff;
+      uint32_t fragment = (code >> 9) & 0xf;
+#else
       uint32_t thread = code & 0xff;
       uint32_t fragment = (code >> 8) & 0x1f;
+#endif
       uint32_t epi_v = (code >> 13) & 0x3;
       uint32_t epi_m = (code >> 15) & 0x7;
       uint32_t epi_n = (code >> 18) & 0xf;
       uint32_t cta = (code >> 22) & 0x3;
       std::cout << m << ',' << n << ',' << thread << ',' << fragment << ','
-                << epi_v << ',' << epi_m << ',' << epi_n << ',' << cta << '\n';
+                << epi_v << ',' << epi_m << ',' << epi_n << ',' << cta;
+#if defined(FMMS_VALIDATE_OWNER_COUNTS)
+      uint32_t owner_word = host_owner_counts[m * kProblemN + n];
+      std::cout << ',' << (owner_word & 0xff) << ',' << (owner_word >> 8);
+#endif
+      std::cout << '\n';
     }
   }
+#endif
 
   if (workspace != nullptr) {
     check_cuda(cudaFree(workspace), "cudaFree(workspace)");
   }
+#if defined(FMMS_VALIDATE_OWNER_COUNTS)
+  check_cuda(cudaFree(owner_counts), "cudaFree(owner_counts)");
+#endif
   check_cuda(cudaFree(matrix_d), "cudaFree(matrix_d)");
   check_cuda(cudaFree(matrix_b), "cudaFree(matrix_b)");
   check_cuda(cudaFree(matrix_a), "cudaFree(matrix_a)");
@@ -312,7 +489,8 @@ void run_diagnostic() {
 
 }  // namespace fmms_layout
 
-int main() {
-  fmms_layout::run_diagnostic();
+int main(int argc, char** argv) {
+  int iterations = argc == 2 ? std::stoi(argv[1]) : 1;
+  fmms_layout::run_diagnostic(iterations);
   return 0;
 }

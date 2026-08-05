@@ -115,17 +115,46 @@ def test_production_dependency_audit():
         "stateless_philox.cuh",
         "winning_schedule_provider.cu",
     )
-    assert len(broad_source_fingerprint(root).dependencies) == 14
+    assert len(broad_source_fingerprint(root).dependencies) == 15
 
 
 def test_sampling_experiment_registry_is_bounded_and_compositional():
     assert tuple(CUTLASS_SAMPLING_EXPERIMENTS) == (
         "warpgroup-fastlog-smem",
         "warpgroup-fastmath-smem",
+        "warpgroup-fastmath-smem-2wg-striped",
+        "warpgroup-fastmath-smem-4wg-striped",
+        "warpgroup-fastmath-smem-2wg-partitioned",
+        "warpgroup-fastmath-smem-4wg-partitioned",
+        "warpgroup-fastmath-2wg-partitioned",
+        "warpgroup-fastmath-4wg-partitioned",
+        "warpgroup-2wg-partitioned",
+        "warpgroup-4wg-partitioned",
+        "warpgroup-fastmath-smem-fragment4",
+        "warpgroup-fastmath-smem-fragment8",
         "warpgroup-fastmath",
+        "warpgroup",
     )
     spill_free = get_cutlass_sampling_experiment("warpgroup-fastlog-smem")
     combined = get_cutlass_sampling_experiment("warpgroup-fastmath-smem")
+    striped_warpgroups = get_cutlass_sampling_experiment(
+        "warpgroup-fastmath-smem-2wg-striped"
+    )
+    four_warpgroups = get_cutlass_sampling_experiment(
+        "warpgroup-fastmath-smem-4wg-striped"
+    )
+    partitioned_four_warpgroups = get_cutlass_sampling_experiment(
+        "warpgroup-fastmath-smem-4wg-partitioned"
+    )
+    unstaged_partitioned_four_warpgroups = get_cutlass_sampling_experiment(
+        "warpgroup-fastmath-4wg-partitioned"
+    )
+    accurate_partitioned_four_warpgroups = get_cutlass_sampling_experiment(
+        "warpgroup-4wg-partitioned"
+    )
+    fragment4 = get_cutlass_sampling_experiment(
+        "warpgroup-fastmath-smem-fragment4"
+    )
     fastmath = get_cutlass_sampling_experiment("warpgroup-fastmath")
     shared_flags = {
         "-DFMMS_WARPGROUP_REDUCTION",
@@ -134,11 +163,43 @@ def test_sampling_experiment_registry_is_bounded_and_compositional():
     }
     assert shared_flags.issubset(spill_free.cuda_flags)
     assert shared_flags.issubset(combined.cuda_flags)
+    assert shared_flags.issubset(striped_warpgroups.cuda_flags)
+    assert shared_flags.issubset(four_warpgroups.cuda_flags)
+    assert shared_flags.issubset(partitioned_four_warpgroups.cuda_flags)
+    assert shared_flags.issubset(fragment4.cuda_flags)
     assert shared_flags.issubset(fastmath.cuda_flags)
     assert "-DFMMS_WARPGROUP_SMEM_STAGE" in spill_free.cuda_flags
     assert "-DFMMS_WARPGROUP_SMEM_STAGE" in combined.cuda_flags
     assert "-DFMMS_FAST_DIV" in combined.cuda_flags
     assert "-DFMMS_FAST_DIV" in fastmath.cuda_flags
+    assert "-DFMMS_TWO_EPILOGUE_WARPGROUPS" in striped_warpgroups.cuda_flags
+    assert (
+        "-DFMMS_TWO_EPILOGUE_WARPGROUPS_STRIPED"
+        in striped_warpgroups.cuda_flags
+    )
+    assert "-DFMMS_FOUR_EPILOGUE_WARPGROUPS" in four_warpgroups.cuda_flags
+    assert (
+        "-DFMMS_PARTITIONED_TMEM_LOAD"
+        in partitioned_four_warpgroups.cuda_flags
+    )
+    assert (
+        "-DFMMS_PARTITIONED_TMEM_LOAD"
+        in unstaged_partitioned_four_warpgroups.cuda_flags
+    )
+    assert (
+        "-DFMMS_WARPGROUP_SMEM_STAGE"
+        not in unstaged_partitioned_four_warpgroups.cuda_flags
+    )
+    assert (
+        "-DFMMS_FAST_LOG"
+        not in accurate_partitioned_four_warpgroups.cuda_flags
+    )
+    assert (
+        "-DFMMS_FAST_DIV"
+        not in accurate_partitioned_four_warpgroups.cuda_flags
+    )
+    assert "-DFMMS_FRAGMENT_SIZE_4" in fragment4.cuda_flags
+    assert "-DFMMS_FOUR_EPILOGUE_WARPGROUPS" not in fragment4.cuda_flags
 
 
 def test_sampling_experiment_registry_rejects_unknown_variant():

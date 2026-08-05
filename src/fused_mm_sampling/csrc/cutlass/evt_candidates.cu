@@ -30,6 +30,46 @@ using namespace cute;
 
 namespace fmms_evt_candidates {
 
+CUTLASS_DEVICE int consumer_thread_index() {
+  int consumer_thread = int(threadIdx.x) - 128;
+#if defined(FMMS_TWO_EPILOGUE_WARPGROUPS) || \
+    defined(FMMS_FOUR_EPILOGUE_WARPGROUPS) || \
+    defined(FMMS_FIVE_EPILOGUE_WARPGROUPS)
+  return consumer_thread % 128;
+#else
+  return consumer_thread;
+#endif
+}
+
+CUTLASS_DEVICE int consumer_warpgroup_index() {
+#if defined(FMMS_TWO_EPILOGUE_WARPGROUPS) || \
+    defined(FMMS_FOUR_EPILOGUE_WARPGROUPS) || \
+    defined(FMMS_FIVE_EPILOGUE_WARPGROUPS)
+  return (int(threadIdx.x) - 128) / 128;
+#else
+  return 0;
+#endif
+}
+
+template <int FragmentSize>
+CUTLASS_DEVICE bool consumer_owns_fragment(int fragment) {
+#if defined(FMMS_FIVE_EPILOGUE_WARPGROUPS)
+  return fragment % 5 == consumer_warpgroup_index();
+#elif defined(FMMS_FOUR_EPILOGUE_WARPGROUPS) && \
+    defined(FMMS_PARTITIONED_TMEM_LOAD)
+  return fragment / 4 == consumer_warpgroup_index();
+#elif defined(FMMS_FOUR_EPILOGUE_WARPGROUPS)
+  return fragment % 4 == consumer_warpgroup_index();
+#elif defined(FMMS_TWO_EPILOGUE_WARPGROUPS) && \
+    defined(FMMS_PARTITIONED_TMEM_LOAD)
+  return fragment / 8 == consumer_warpgroup_index();
+#elif defined(FMMS_TWO_EPILOGUE_WARPGROUPS_STRIPED)
+  return fragment % 2 == consumer_warpgroup_index();
+#else
+  return true;
+#endif
+}
+
 #if defined(FMMS_GUMBEL)
 #if defined(FMMS_INLINE_GUMBEL)
 __device__ __forceinline__
@@ -85,7 +125,15 @@ using EpilogueSchedule = cutlass::epilogue::TmaWarpSpecialized2Sm;
 using MainloopSchedule = cutlass::gemm::KernelTmaWarpSpecialized1SmSm100;
 using EpilogueSchedule = cutlass::epilogue::TmaWarpSpecialized1Sm;
 #endif
+#if defined(FMMS_FRAGMENT_SIZE_4) && \
+    defined(FMMS_USE_WARPGROUP_REDUCTION)
+using EpilogueTile = Shape<_64, _8>;
+#elif defined(FMMS_FRAGMENT_SIZE_8) && \
+    defined(FMMS_USE_WARPGROUP_REDUCTION)
+using EpilogueTile = Shape<_128, _8>;
+#else
 using EpilogueTile = cutlass::epilogue::collective::EpilogueTileAuto;
+#endif
 #else
 #error "Compile with FMMS_ARCH_SM90 or FMMS_ARCH_SM100"
 #endif
@@ -334,14 +382,14 @@ struct PackCandidate {
         int epi_m,
         int epi_n) {
 #if defined(FMMS_ARCH_SM90)
-        int consumer_thread = int(threadIdx.x) - 128;
+        int consumer_thread = consumer_thread_index();
         int warp = consumer_thread / 32;
         int lane = consumer_thread % 32;
         int local_m =
             warp * 16 + lane / 4 + epi_m * 64 + ((i % 4) / 2) * 8;
 #else
 #if defined(FMMS_SM100_2SM)
-        int consumer_thread = int(threadIdx.x) - 128;
+        int consumer_thread = consumer_thread_index();
         // SM100 2-SM schedules expose an M tile coordinate per cooperating
         // CTA. A CTA owns half of the cluster's M tile, so tile_m already
         // incorporates the cluster rank. Adding the rank here would
@@ -351,7 +399,7 @@ struct PackCandidate {
         // 256-row families.
         int local_m = kTileM == 128 ? consumer_thread % 64 : consumer_thread;
 #else
-        int local_m = int(threadIdx.x) - 128;
+        int local_m = consumer_thread_index();
 #endif
 #endif
 #if defined(FMMS_SM100_2SM)
@@ -363,7 +411,7 @@ struct PackCandidate {
           return pack_candidate(-INFINITY, INT_MAX);
         }
 #if defined(FMMS_GUMBEL)
-        int global_n = global_n_for<FragmentSize>(i, epi_n);
+        int global_n = global_n_for<FragmentSize>(i, epi_v, epi_n);
         int hidden_idx = global_n % params.original_n;
         int sample_idx = params.sample_base + global_n / params.original_n;
         float gumbel = gumbel_noise(
@@ -382,11 +430,15 @@ struct PackCandidate {
     }
 
     template <int FragmentSize>
-    CUTLASS_DEVICE int global_n_for(int i, int epi_n) const {
+    CUTLASS_DEVICE int global_n_for(int i, int epi_v, int epi_n) const {
 #if defined(FMMS_SM100_2SM)
-      int consumer_thread = int(threadIdx.x) - 128;
+      int consumer_thread = consumer_thread_index();
       int local_n;
-      if constexpr (kTileM == 128) {
+      if constexpr (FragmentSize == 4) {
+        local_n =
+            2 * FragmentSize * epi_n +
+            FragmentSize * epi_v + i;
+      } else if constexpr (kTileM == 128) {
         local_n =
             2 * FragmentSize * (consumer_thread / 64) +
             FragmentSize * epi_n + i;
@@ -730,17 +782,35 @@ struct WarpGroupCandidateEVTImpl
         int epi_v,
         int epi_m,
         int epi_n) {
-      static_assert(FragmentSize == 16);
+      static_assert(
+          FragmentSize == 4 || FragmentSize == 8 || FragmentSize == 16);
       auto& pack_callbacks = get<0>(callbacks_tuple);
       auto& output_callbacks = get<1>(callbacks_tuple);
-      int consumer_thread = int(threadIdx.x) - 128;
+      int consumer_thread = consumer_thread_index();
+      int consumer_warpgroup = consumer_warpgroup_index();
       int warp = consumer_thread / 32;
       int lane = consumer_thread % 32;
+#if defined(FMMS_FOUR_EPILOGUE_WARPGROUPS) && \
+    defined(FMMS_PARTITIONED_TMEM_LOAD)
+      constexpr int LocalFragmentCount = 4;
+      int fragment_base = LocalFragmentCount * consumer_warpgroup;
+#elif defined(FMMS_TWO_EPILOGUE_WARPGROUPS) && \
+    defined(FMMS_PARTITIONED_TMEM_LOAD)
+      constexpr int LocalFragmentCount = 8;
+      int fragment_base = LocalFragmentCount * consumer_warpgroup;
+#else
+      constexpr int LocalFragmentCount = FragmentSize;
+      int fragment_base = 0;
+#endif
       if constexpr (StageAccumulators) {
         CUTLASS_PRAGMA_UNROLL
-        for (int i = 0; i < FragmentSize; ++i) {
-          output_callbacks.accumulator_fragments[
-              consumer_thread * FragmentSize + i] = float(accumulators[i]);
+        for (int local_i = 0; local_i < LocalFragmentCount; ++local_i) {
+          int i = fragment_base + local_i;
+          if (consumer_owns_fragment<FragmentSize>(i)) {
+            output_callbacks.accumulator_fragments[
+                consumer_thread * FragmentSize + i] =
+                    float(accumulators[local_i]);
+          }
         }
       }
 #if defined(FMMS_GUMBEL_PARTIAL_UNROLL)
@@ -756,7 +826,11 @@ struct WarpGroupCandidateEVTImpl
 #else
       CUTLASS_PRAGMA_UNROLL
 #endif
-      for (int i = 0; i < FragmentSize; ++i) {
+      for (int local_i = 0; local_i < LocalFragmentCount; ++local_i) {
+        int i = fragment_base + local_i;
+        if (!consumer_owns_fragment<FragmentSize>(i)) {
+          continue;
+        }
         ElementAccumulator accumulator;
         if constexpr (StageAccumulators) {
           accumulator = ElementAccumulator(
@@ -764,7 +838,7 @@ struct WarpGroupCandidateEVTImpl
                   consumer_thread * FragmentSize + i]);
         }
         else {
-          accumulator = accumulators[i];
+          accumulator = accumulators[local_i];
         }
         PackedCandidate candidate =
             pack_callbacks.template visit_one<ElementAccumulator, FragmentSize>(
@@ -784,24 +858,26 @@ struct WarpGroupCandidateEVTImpl
               candidate;
         }
       }
-      cutlass::arch::NamedBarrier::sync(128, 0);
-      if (warp == 0 && lane < FragmentSize) {
+      cutlass::arch::NamedBarrier::sync(128, consumer_warpgroup);
+      int i = fragment_base + lane;
+      if (warp == 0 && lane < LocalFragmentCount &&
+          consumer_owns_fragment<FragmentSize>(i)) {
         PackedCandidate candidate =
-            output_callbacks.warp_candidates[lane];
+            output_callbacks.warp_candidates[i];
         CUTLASS_PRAGMA_UNROLL
         for (int source_warp = 1; source_warp < 4; ++source_warp) {
           candidate = choose_candidate(
               candidate,
               output_callbacks.warp_candidates[
-                  source_warp * FragmentSize + lane]);
+                  source_warp * FragmentSize + i]);
         }
-        int global_n =
-            pack_callbacks.template global_n_for<FragmentSize>(lane, epi_n);
+        int global_n = pack_callbacks.template global_n_for<FragmentSize>(
+            i, epi_v, epi_n);
         output_callbacks.output[
             output_callbacks.tile_m * output_callbacks.rounded_n + global_n] =
                 candidate;
       }
-      cutlass::arch::NamedBarrier::sync(128, 0);
+      cutlass::arch::NamedBarrier::sync(128, consumer_warpgroup);
       return get<2>(callbacks_tuple).visit(
           accumulators, epi_v, epi_m, epi_n);
     }
