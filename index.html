@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>FlashSampling: Fast and Memory-Efficient Exact Sampling</title>
 
-  <meta name="description" content="FlashSampling is an exact sampling primitive that fuses sampling into the LM-head matmul and never materializes the logits tensor in HBM, reducing decoding time by up to 19%.">
+  <meta name="description" content="FlashSampling is an exact sampling primitive that fuses sampling into the LM-head matmul and never materializes the logits tensor in HBM, reducing time per output token in vLLM by up to 10%.">
   <meta name="keywords" content="FlashSampling, Exact Sampling, LM Head, Gumbel-Max, Categorical Sampling, Triton, CUDA, LLM Decoding, Memory Efficient">
   <meta name="citation_title" content="FlashSampling: Fast and Memory-Efficient Exact Sampling">
   <meta name="citation_author" content="Tomas Ruiz">
@@ -17,7 +17,7 @@
   <meta name="citation_publication_date" content="2026/02/28">
   <meta name="citation_pdf_url" content="FlashSampling.pdf">
   <meta property="og:title" content="FlashSampling: Fast and Memory-Efficient Exact Sampling"/>
-  <meta property="og:description" content="Fusing exact categorical sampling into the LM-head matmul — no logits materialized in HBM, up to 19% faster decoding."/>
+  <meta property="og:description" content="Exact categorical sampling fused into the LM-head matmul: no logits tensor in HBM, up to 2.23x faster sampling kernels, and up to 10% lower time per output token in vLLM."/>
   <meta property="og:type" content="website"/>
   <meta property="og:url" content="https://flashsampling.github.io/FlashSampling/"/>
   <link rel="canonical" href="https://flashsampling.github.io/FlashSampling/">
@@ -173,6 +173,7 @@
         <div class="navbar-end">
           <a href="#abstract" class="navbar-item">Abstract</a>
           <a href="#method" class="navbar-item">How It Works</a>
+          <a href="#results" class="navbar-item">Results</a>
           <a href="#citation" class="navbar-item">Citation</a>
           <a href="https://yfz.ai/blog" class="navbar-item">Blog</a>
         </div>
@@ -192,7 +193,7 @@
           <a href="https://tomasruizt.github.io/about.html" target="_blank" rel="noopener">Tomas Ruiz</a>*, Zhen Qin*,
           <a href="https://yifzhang.com" target="_blank" rel="noopener">Yifan Zhang</a>&dagger;, Xuyang Shen, Yiran Zhong, Mengdi Wang&dagger;
         </div>
-        <div class="affiliations">February 28, 2026 &nbsp;&middot;&nbsp; arXiv:2603.15854</div>
+        <div class="affiliations">February 28, 2026 &nbsp;&middot;&nbsp; Revised May 6, 2026 &nbsp;&middot;&nbsp; arXiv:2603.15854</div>
         <div class="project-links">
           <a href="FlashSampling.pdf" target="_blank" rel="noopener" aria-label="Paper PDF"><i class="fas fa-file-pdf"></i></a>
           <a href="https://arxiv.org/abs/2603.15854" target="_blank" rel="noopener" aria-label="arXiv"><i class="fas fa-graduation-cap"></i></a>
@@ -216,10 +217,13 @@
         <h2 class="section-title">Abstract</h2>
         <div class="content">
           <p>
-            We present <strong>FlashSampling</strong>, an exact sampling primitive that fuses sampling into the LM-head matmul and <strong>never materializes the logits tensor in HBM</strong>. The method is simple: compute logits tile-by-tile on chip, add Gumbel noise, keep only one maximizer per row and per vocabulary tile, and finish with a small reduction over tiles.
+            Sampling from a categorical distribution is mathematically simple, but in large-vocabulary decoding, it often triggers extra memory traffic and extra kernels after the LM head. We present <strong>FlashSampling</strong>, an exact sampling primitive that fuses sampling into the LM-head matmul and <strong>never materializes the logits tensor in HBM</strong>. The method is simple: compute logits tile-by-tile on chip, add Gumbel noise, keep only one maximizer per row and per vocabulary tile, and finish with a small reduction over tiles.
           </p>
           <p>
-            FlashSampling enables efficient categorical sampling by fusing the operation into the language model head matmul, eliminating memory overhead and <strong>reducing decoding time by up to 19%</strong>.
+            In tensor-parallel decoding, FlashSampling replaces the all-gather of logits with streaming peer-to-peer writes: This overlaps GPU-to-GPU communication with computation and HBM loads across up to 8 GPUs, with near-ideal scaling at large batch sizes. Our kernel is exact because $\arg\max$ decomposes over partitions; grouped variants for online and tensor-parallel settings are exact by hierarchical factorization of the categorical distribution.
+          </p>
+          <p>
+            FlashSampling demonstrates kernel-level speedups on decode workloads across 4 different datacenter GPUs (H100, H200, B200, B300), and in end-to-end vLLM experiments, it <strong>reduces time per output token by up to 10%</strong> on the models we test. These results show that exact sampling, with no approximation, can be integrated into the matmul itself, consolidating the bandwidth-bound sampling step in an efficient epilogue.
           </p>
           <div class="btnrow">
             <a class="button is-primary" href="FlashSampling.pdf" target="_blank" rel="noopener"><span class="icon"><i class="fas fa-file-pdf"></i></span><span>Read the Paper</span></a>
@@ -235,23 +239,48 @@
         <h2 class="section-title">How It Works</h2>
         <div class="content">
           <p>
-            Standard categorical sampling first computes the full logits tensor over the vocabulary, writes it to HBM, and then samples from it &mdash; an expensive memory round-trip that dominates decode latency at scale. FlashSampling collapses this into a single fused kernel built on the Gumbel-Max trick.
+            Standard categorical sampling computes the full $[B,V]$ logits tensor with a matmul, writes it to HBM, and then launches separate kernels that read it back to normalize and sample. During decoding, these extra kernels and the logits round-trip add HBM traffic but no useful computation. FlashSampling instead samples inside the matmul epilogue using the Gumbel-Max trick: exact sampling needs only the index of the largest perturbed logit, so no softmax, prefix sum, or normalized probabilities are required.
           </p>
 
-          <img src="FlashSampling.png" alt="FlashSampling vs. the baseline sampling pipeline.">
-          <span class="mini-caption">FlashSampling fuses sampling into the LM-head matmul, avoiding any logits materialization in HBM.</span>
+          <img src="FlashSampling.png" alt="Multinomial sampling vs. FlashSampling.">
+          <span class="mini-caption">Multinomial sampling (top) materializes the $[B,V]$ logits in HBM; FlashSampling (bottom) keeps logits tiles on chip and writes only one candidate per row and per vocabulary tile. Red arrows denote HBM traffic; green arrows denote on-chip data movement.</span>
 
           <h3>The fused primitive</h3>
           <ol>
-            <li><strong>Tile-by-tile logits on chip.</strong> Compute logits over the vocabulary one tile at a time, keeping them in fast on-chip memory &mdash; never writing the full tensor to HBM.</li>
-            <li><strong>Add Gumbel noise.</strong> Perturb each on-chip logit with i.i.d. Gumbel noise, so that the per-row argmax is an exact draw from the softmax distribution (the Gumbel-Max trick).</li>
-            <li><strong>Keep one maximizer per tile.</strong> For each row and each vocabulary tile, retain only the single maximizing index and its value.</li>
-            <li><strong>Reduce over tiles.</strong> A small final reduction across tiles selects the global maximizer per row &mdash; the sampled token.</li>
+            <li><strong>Tile-by-tile logits on chip.</strong> Compute logits over the vocabulary one tile at a time in on-chip memory, never writing the full tensor to HBM.</li>
+            <li><strong>Add Gumbel noise.</strong> Perturb each logit with i.i.d. Gumbel noise, so that the per-row argmax is an exact draw from the softmax distribution (the Gumbel-Max trick).</li>
+            <li><strong>Keep one maximizer per tile.</strong> For each row and each vocabulary tile, retain only the maximizing index and its value.</li>
+            <li><strong>Reduce over tiles.</strong> A small final reduction across tiles selects the global maximizer per row, which is the sampled token.</li>
           </ol>
+          <p>
+            The result is exact, not approximate: the maximum over the whole vocabulary equals the maximum over the tile-local maxima.
+          </p>
+
+          <h3>Tensor-parallel decoding</h3>
+          <p>
+            When the LM head is sharded across GPUs along the vocabulary, a conventional sampler must all-gather the logits after the matmul. FlashSampling writes each tile-local candidate to the other GPUs with peer-to-peer writes from inside the matmul epilogue, so communication overlaps with the matmul's compute and HBM loads. Grouped variants that pass a local sample and a log-mass per shard are exact by hierarchical factorization of the categorical distribution.
+          </p>
 
           <div class="callout">
-            <strong>Key result:</strong> exact categorical sampling with <strong>zero logits materialization in HBM</strong> and up to <strong>19% faster decoding</strong>, as a drop-in replacement for the standard sample step.
+            <strong>Key result:</strong> exact categorical sampling with <strong>no logits tensor in HBM</strong>, up to <strong>2.23&times; faster</strong> than compiled PyTorch multinomial sampling at the kernel level, and up to <strong>10% lower time per output token</strong> in vLLM.
           </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="results" class="section content-section">
+      <div class="container">
+        <h2 class="section-title">Results</h2>
+        <div class="content">
+          <ul>
+            <li><strong>Kernel speedups.</strong> For batch sizes $B \le 64$, FlashSampling is faster than all three baselines (compiled PyTorch multinomial sampling, FlashInfer top-k/top-p sampling (FI1), and FlashInfer Gumbel-Max sampling (FI2)) on H100, H200, B200, and B300. Its peak speedups are 2.23&times; over multinomial sampling (B300) and 1.74&times; over FI1 (B200).</li>
+            <li><strong>Tensor parallelism.</strong> FlashSampling is the fastest method at every tensor-parallel size for batch sizes 16 and 64, and it follows the ideal $1/\mathrm{TP}$ scaling closely at batch size 256.</li>
+            <li><strong>End-to-end vLLM.</strong> On B200, time per output token drops by up to 10.2% (Qwen3-1.7B), 8.7% (Qwen3-8B), 2.9% (Qwen3-32B, TP2), and 2.7% (Llama-3.3-70B, TP2).</li>
+            <li><strong>Exactness.</strong> A chi-squared goodness-of-fit test finds no significant difference from the PyTorch reference sampler, and Qwen3-1.7B reaches 89.4% on GSM8K with FlashSampling versus 89.6% with the baseline ($p = 0.776$).</li>
+          </ul>
+
+          <img src="imgs/tp-scaling/tp-scaling.png" alt="Kernel runtime of FlashSampling and three baselines at tensor-parallel sizes 1, 2, 4, and 8.">
+          <span class="mini-caption">Kernel runtime (lower is better) at tensor-parallel sizes 1, 2, 4, and 8 ($D = 8192$, $V = 128\text{k}$). The dotted line is the ideal $1/\mathrm{TP}$ scaling of FlashSampling.</span>
         </div>
       </div>
     </section>
@@ -282,6 +311,7 @@
         <p>
           <a href="#abstract">Abstract</a> &nbsp;&bull;&nbsp;
           <a href="#method">How It Works</a> &nbsp;&bull;&nbsp;
+          <a href="#results">Results</a> &nbsp;&bull;&nbsp;
           <a href="#citation">Citation</a> &nbsp;&bull;&nbsp;
           <a href="https://github.com/FlashSampling/FlashSampling">GitHub</a> &nbsp;&bull;&nbsp;
           <a href="https://yfz.ai/blog">Yifan's Blog</a>
